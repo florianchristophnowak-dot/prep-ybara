@@ -1,0 +1,63 @@
+name: Build App
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:  # Ermöglicht manuellen Start
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Build app
+        run: npm run build
+      
+      - name: Package for Windows
+        run: npm run dist
+      
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Prepybara-Windows
+          path: dist/*.exe
+
+  build-mac:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Build app
+        run: npm run build
+      
+      - name: Package for macOS
+        run: npm run dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false  # Kein Code Signing nötig
+      
+      - name: Upload macOS build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Prepybara-macOS
+          path: |
+            dist/*.dmg
+            dist/*.zip

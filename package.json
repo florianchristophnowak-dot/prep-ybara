@@ -1,0 +1,86 @@
+{
+  "name": "prepybara-desktop",
+  "private": true,
+  "version": "1.0.9",
+  "description": "Prép-ybara – Unterrichtsplanung & Sequenz-/Kompetenz-Übersicht als Desktop-App",
+  "author": "Florian Nowak",
+  "main": "electron/main.cjs",
+  "license": "MIT",
+  "scripts": {
+    "dev": "concurrently -k \"vite --config vite.config.mjs\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "build": "vite build --config vite.config.mjs",
+    "start": "electron .",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win",
+    "dist:mac": "npm run build && electron-builder --mac",
+    "dist:portable": "npm run build && electron-builder --win portable",
+    "dist:dir": "npm run build && electron-builder --dir",
+    "start:electron": "electron ."
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "html-to-docx": "1.8.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^9.0.1",
+    "electron": "^32.2.0",
+    "electron-builder": "^24.13.3",
+    "vite": "^5.4.8",
+    "wait-on": "^8.0.2"
+  },
+  "build": {
+    "appId": "com.prepybara.desktop",
+    "productName": "Prép-ybara",
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build"
+    },
+    "win": {
+      "publisherName": "Florian Nowak",
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.ico"
+    },
+    "mac": {
+      "category": "public.app-category.education",
+      "icon": "build/icon.png",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "artifactName": "Prepybara-${version}-${os}-${arch}.${ext}",
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Prép-ybara"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- Document base -->
+  <path d="M6 2C4.89543 2 4 2.89543 4 4V20C4 21.1046 4.89543 22 6 22H18C19.1046 22 20 21.1046 20 20V8L14 2H6Z" fill="#8b1538" stroke="#8b1538" stroke-width="0.5"/>
+  <!-- Folded corner -->
+  <path d="M14 2V8H20" fill="#a62145" stroke="#8b1538" stroke-width="0.5"/>
+  <!-- Lines on document -->
+  <line x1="7" y1="13" x2="13" y2="13" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+  <line x1="7" y1="16" x2="15" y2="16" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+  <line x1="7" y1="19" x2="12" y2="19" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- PDF text -->
+  <text x="12" y="10" font-family="Arial, sans-serif" font-size="5" font-weight="bold" fill="white" text-anchor="middle">PDF</text>
+</svg>

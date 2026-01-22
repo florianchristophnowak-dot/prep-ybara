@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- Document base -->
+  <path d="M6 2C4.89543 2 4 2.89543 4 4V20C4 21.1046 4.89543 22 6 22H18C19.1046 22 20 21.1046 20 20V8L14 2H6Z" fill="#1e3a5f" stroke="#1e3a5f" stroke-width="0.5"/>
+  <!-- Folded corner -->
+  <path d="M14 2V8H20" fill="#2d4a6f" stroke="#1e3a5f" stroke-width="0.5"/>
+  <!-- Lines on document -->
+  <line x1="7" y1="12" x2="13" y2="12" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+  <line x1="7" y1="15" x2="15" y2="15" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+  <line x1="7" y1="18" x2="12" y2="18" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- W letter -->
+  <text x="11" y="9" font-family="Arial, sans-serif" font-size="6" font-weight="bold" fill="white" text-anchor="middle">W</text>
+</svg>

@@ -436,3 +436,62 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 ::-webkit-scrollbar-thumb:hover { background: #a8b0bc; }
 .btn:focus-visible, .input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 ::selection { background: var(--primary-light); color: var(--primary); }
+
+.phaseContentHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.phaseHelp {
+  position: relative;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.phaseHelpToggle {
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+
+.phaseHelpToggle:hover {
+  background: #dbeafe;
+}
+
+.phaseHelpCard {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  top: calc(100% + 6px);
+  width: min(420px, 72vw);
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius-lg);
+  background: #f8fbff;
+  color: var(--text);
+  padding: 12px 14px;
+  text-align: left;
+  box-shadow: var(--shadow-lg);
+}
+
+.phaseHelpTitle {
+  font-size: 13px;
+  font-weight: 800;
+  margin-bottom: 6px;
+  color: #1d4ed8;
+}
+
+.phaseHelpText {
+  font-size: 13px;
+  line-height: 1.45;
+  color: #1f2937;
+}

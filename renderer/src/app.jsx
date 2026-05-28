@@ -58,6 +58,61 @@ function computePhaseTimes(phases, lessonStartHHMM){
 const APP_VERSION = '1.0.9';
 
 
+const PHASE_HELP_QUESTIONS = {
+  Einstieg:
+    'Wie werden die Lernenden aktiviert? Woran knüpft die Stunde an? Welcher Impuls führt zum Thema?',
+  Erarbeitung:
+    'Was wird neu erschlossen? Wie gehen die Lernenden vor? Welche Hilfen stehen zur Verfügung?',
+  Anwendung:
+    'Wie wenden die Lernenden das Erarbeitete aktiv an? Ist die Aufgabe sprachlich/kommunikativ bedeutsam?',
+  Sicherung:
+    'Wie werden Ergebnisse sichtbar gemacht? Was muss für alle verfügbar sein?',
+  Vertiefung:
+    'Wie wird das Gelernte erweitert, differenziert oder genauer durchdrungen?',
+  Transfer:
+    'Wie wird das Gelernte auf eine neue Situation übertragen?',
+  Reflexion:
+    'Was haben die Lernenden gelernt? Wie schätzen sie ihr Vorgehen oder Ergebnis ein? Was bleibt offen?',
+};
+
+function getPhaseHelpEntry(phaseTitle){
+  const normalizedTitle = String(phaseTitle || '').trim().toLowerCase();
+  if (!normalizedTitle) return null;
+  return Object.entries(PHASE_HELP_QUESTIONS).find(([phase]) =>
+    normalizedTitle.includes(phase.toLowerCase())
+  ) || null;
+}
+
+function PhaseHelpCard({ phaseTitle }){
+  const [open, setOpen] = useState(false);
+  const helpEntry = getPhaseHelpEntry(phaseTitle);
+
+  if (!helpEntry) return null;
+
+  const [phase, questions] = helpEntry;
+  return (
+    <div className="phaseHelp">
+      <button
+        type="button"
+        className="phaseHelpToggle"
+        title="Optionale Hilfekarte zu Inhalt / Ablauf"
+        aria-expanded={open}
+        onClick={() => setOpen(value => !value)}
+      >
+        {open ? 'Hilfekarte ausblenden' : 'Hilfekarte'}
+      </button>
+
+      {open ? (
+        <div className="phaseHelpCard" role="note">
+          <div className="phaseHelpTitle">Leitfragen – {phase}</div>
+          <div className="phaseHelpText">{questions}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+
 const SEQ_COLORS = [
   '#2563eb', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#d97706',
   '#059669', '#0f766e', '#0891b2', '#4f46e5', '#9333ea', '#be123c'
@@ -4087,7 +4142,10 @@ const exportDocx = () => {
                 </div>
 
                 <div style={{height:10}} />
-                <label className="small muted">Inhalt / Ablauf</label>
+                <div className="phaseContentHead">
+                  <label className="small muted">Inhalt / Ablauf</label>
+                  <PhaseHelpCard phaseTitle={ph.title} />
+                </div>
                 <RichTextEditor
                   value={ph.content}
                   onChange={(v)=>{

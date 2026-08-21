@@ -16,6 +16,10 @@
 import { createElectronPlatform } from './electron.js';
 import { createWebPlatform } from './web.js';
 
+/* Die Version braucht der Browser-Export für die Fusszeile, die der
+   Desktop über footerTemplate setzt. */
+import { APP_VERSION } from '../version.js';
+
 function hasElectronBridge(){
   return typeof window !== 'undefined' && !!window.api;
 }
@@ -23,7 +27,7 @@ function hasElectronBridge(){
 /* Zur Laufzeit anhand der Preload-Brücke auswählen. */
 export const platform = hasElectronBridge()
   ? createElectronPlatform(window.api)
-  : createWebPlatform();
+  : createWebPlatform({ appVersion: APP_VERSION });
 
 /* Was diese Umgebung kann. Die Oberfläche liest hier ab, statt zu raten. */
 export const capabilities = platform.capabilities;

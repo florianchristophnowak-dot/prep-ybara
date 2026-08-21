@@ -4,11 +4,13 @@ import eastereggImg from './assets/easteregg.webp';
 import wordIcon from './assets/word-icon.svg';
 import pdfIcon from './assets/pdf-icon.svg';
 import helpMd from './assets/HELP.md?raw';
-import platform, { capabilities } from './platform/index.js';
+import platform, { capabilities, platformName } from './platform/index.js';
+import { APP_VERSION } from './version.js';
+import { setupServiceWorker } from './pwa.js';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronLeft, ChevronRight,
-  ClipboardPaste, Copy, NotebookPen, Palmtree, Pencil, Play, Scissors, Search, Square, Star, Trash2, X,
+  ClipboardPaste, Copy, NotebookPen, Palmtree, Pencil, Play, Scissors, Search, Settings, Square, Star, Trash2, X,
 } from 'lucide-react';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
@@ -61,7 +63,7 @@ function computePhaseTimes(phases, lessonStartHHMM){
 }
 
 // Keep in sync with package.json
-const APP_VERSION = '1.0.9';
+
 
 
 const PHASE_HELP_QUESTIONS = {
@@ -1277,6 +1279,90 @@ function CommandPalette({ open, commands, onClose }){
   );
 }
 
+
+/* ============================================================
+   Einstellungen
+
+   Bis hierher hatte die App keinen eigenen Bereich dafür. Speicherstatus,
+   Datenschutzhinweis und die Trennung zwischen Desktop und Browser
+   brauchen aber einen sichtbaren Platz – Lehrkräfte müssen gegenüber
+   Schulleitung und Datenschutzbeauftragten belegen können, wo die Daten
+   liegen. Ein Satz in der Dokumentation reicht dafür nicht.
+   ============================================================ */
+function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onImportBackup }){
+  const istBrowser = platformName === 'browser';
+  return (
+    <div className="card" style={{display:'flex', flexDirection:'column', gap:18}}>
+      <div>
+        <h2 className="dialogTitle">Einstellungen</h2>
+        <p className="muted small" style={{margin:0}}>
+          Darstellung, Datenablage und Datenschutz.
+        </p>
+      </div>
+
+      <section>
+        <h3 className="settingsHeading">Darstellung</h3>
+        <div className="settingsRow">
+          <span>Hell, dunkel oder wie das Betriebssystem</span>
+          <ThemeSwitch value={theme} onChange={onChangeTheme} />
+        </div>
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Wo deine Daten liegen</h3>
+        <p className="settingsText">
+          {istBrowser
+            ? 'Diese Planung liegt in der Datenbank deines Browsers, auf diesem Gerät. Sie wird nicht an einen Server übertragen – die App hat keinen.'
+            : 'Diese Planung liegt als Datei auf diesem Rechner, im Benutzerordner der App. Sie wird nicht an einen Server übertragen – die App hat keinen.'}
+        </p>
+        <p className="settingsText">
+          Es gibt keine Anmeldung, keine Nutzerkonten, keine Statistik und keine
+          Verbindung nach aussen. Schriften und Symbole sind mitgeliefert und
+          werden nicht nachgeladen.
+        </p>
+
+        {istBrowser ? (
+          storageState?.granted ? (
+            <div className="inlineNotice">
+              Der Browser hat die Ablage als dauerhaft zugesagt. Deine Planung
+              bleibt auch dann erhalten, wenn Speicherplatz knapp wird.
+            </div>
+          ) : (
+            <div className="inlineNotice inlineNotice--warning">
+              Der Browser hat die Ablage <b>nicht</b> als dauerhaft zugesagt. Bei
+              Platzmangel oder beim Löschen der Browserdaten kann deine Planung
+              verschwinden. Lege regelmässig ein Backup an – am besten nach jeder
+              Planungssitzung.
+            </div>
+          )
+        ) : null}
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Desktop-App und Browser-Version</h3>
+        <div className="inlineNotice inlineNotice--warning">
+          Beide Fassungen teilen ihre Daten <b>nicht</b>. Wer beides nutzt, hat
+          zwei getrennte Planungen auf demselben Gerät. Die Brücke dazwischen ist
+          der Backup-Export: hier ausgeben, dort einlesen.
+        </div>
+        {capabilities.backupFiles ? (
+          <div className="row" style={{gap:8, marginTop:10}}>
+            <button className="btn primary" onClick={onExportBackup}>Backup exportieren</button>
+            <button className="btn" onClick={onImportBackup}>Backup importieren</button>
+          </div>
+        ) : null}
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Version</h3>
+        <p className="settingsText">
+          Prép-ybara {APP_VERSION} · {istBrowser ? 'Browser-Version' : 'Desktop-App'} · © Florian Nowak
+        </p>
+      </section>
+    </div>
+  );
+}
+
 const THEME_CHOICES = ['light', 'dark', 'system'];
 const THEME_LABELS = { light: 'Hell', dark: 'Dunkel', system: 'System' };
 
@@ -1926,6 +2012,7 @@ const classGroupSuggestions = useMemo(()=>{
       { id:'v-library',  group:'Ansicht', label:'Bibliothek',          run: go({ name:'library', weekStart: ws }) },
       { id:'v-calendar', group:'Ansicht', label:'Schulkalender',       run: go({ name:'calendar', weekStart: ws }) },
       { id:'v-todos',    group:'Ansicht', label:'To-dos',              run: go({ name:'todos', weekStart: ws }) },
+      { id:'v-settings', group:'Ansicht', label:'Einstellungen',       run: go({ name:'settings', weekStart: ws }) },
       { id:'v-help',     group:'Ansicht', label:'Hilfe',               run: go({ name:'help', weekStart: ws }) },
 
       { id:'w-prev',  group:'Woche', label:'Vorherige Woche', run: ()=>goWeekDelta(-1) },
@@ -1974,9 +2061,47 @@ const classGroupSuggestions = useMemo(()=>{
     showToast(`Speichern fehlgeschlagen: ${saveError}`, { tone: 'danger', ttl: 0 });
   }, [saveError, showToast]);
 
+  /* ---- Web-App: Service Worker und Speicherzusage --------------------- */
+  const [storageState, setStorageState] = useState(null);
+  useEffect(()=>{
+    let abgemeldet = false;
+    setupServiceWorker({
+      onUpdateAvailable: (anwenden)=>{
+        if (abgemeldet) return;
+        showToast('Neue Version verfügbar.', {
+          ttl: 0,
+          action: { label: 'Neu laden', onAct: ()=> anwenden() },
+        });
+      },
+    });
+    // Dauerhafte Ablage anfragen. Ohne Zusage darf der Browser die Daten
+    // bei Platzmangel verwerfen – das muss sichtbar sein, nicht geraten.
+    (async ()=>{
+      if (typeof platform.requestPersistence !== 'function') return;
+      const res = await platform.requestPersistence();
+      if (!abgemeldet) setStorageState(res);
+    })();
+    return ()=>{ abgemeldet = true; };
+  }, [showToast]);
+
   const uiApi = useMemo(()=>({
     toast: showToast, dismissToast, askConfirm, askInput: askPrompt,
   }), [showToast, dismissToast, askConfirm, askPrompt]);
+
+  /* Beschriftung der Kopfleiste. Vorher eine fünffach verschachtelte
+     Ternärkette – als Zuordnung ist sie erweiterbar, ohne Klammern zu zählen. */
+  const viewBadgeLabel = useMemo(()=>{
+    switch (view.name) {
+      case 'macro':
+        return `${formatDateDE(view.startISO)} – ${formatDateDE(toISODate(addDays(fromISODate(view.startISO), (view.rangeDays || 28) - 1)))}`;
+      case 'year':     return 'Jahresgrobplanung';
+      case 'library':  return 'Bibliothek';
+      case 'settings': return 'Einstellungen';
+      case 'help':     return 'Hilfe';
+      case 'week':     return '';
+      default:         return formatWeekLabel(view.weekStart);
+    }
+  }, [view]);
 
   const themeChoice = THEME_CHOICES.includes(appSettings?.theme) ? appSettings.theme : 'system';
   const darkActive = themeChoice === 'dark' || (themeChoice === 'system' && systemPrefersDark);
@@ -2436,6 +2561,9 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
   };
 
   const exportBackup = async () => {
+    // Der Hinweis gehört an die Stelle, wo er zählt: Wer exportiert, will
+    // die Planung oft in die jeweils andere Fassung übertragen.
+    showToast('Backup ist die Brücke zwischen Desktop-App und Browser-Version – beide teilen ihre Daten nicht.', { ttl: 8000 });
     if (!capabilities.backupFiles) {
       showToast('Backup-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
@@ -2933,7 +3061,10 @@ const deleteTodo = (id) => {
       return;
     }
     const saved = await platform.exportPdf({ html, suggestedFileName: suggestedName });
-    if (saved) toastSavedPath('PDF gespeichert.', saved);
+    // Der Desktop liefert einen Pfad, der Browser öffnet den Druckdialog –
+    // dort entsteht die Datei erst durch die Wahl des Nutzers.
+    if (typeof saved === 'string') toastSavedPath('PDF gespeichert.', saved);
+    else if (saved?.printed) showToast('Druckdialog geöffnet – dort „Als PDF speichern“ wählen.');
   };
 
 
@@ -2946,7 +3077,8 @@ const doExportDocx = async (html, suggestedName) => {
   }
   const safe = String(suggestedName || 'Unterrichtsstunde.doc').replace(/\.docx$/i, '.doc');
   const saved = await platform.exportDocx({ html, suggestedFileName: safe });
-  if (saved) toastSavedPath('Word-Datei gespeichert.', saved);
+  if (typeof saved === 'string') toastSavedPath('Word-Datei gespeichert.', saved);
+  else if (saved) showToast('Word-Datei gespeichert.', { tone: 'success' });
 };
 
   // Render main content in a readable way (avoids a very long nested ternary inside JSX,
@@ -3106,6 +3238,17 @@ const doExportDocx = async (html, suggestedName) => {
         />
       );
     }
+    if (view.name === 'settings') {
+      return (
+        <SettingsView
+          theme={themeChoice}
+          onChangeTheme={(next)=>updateAppSettings({ theme: next })}
+          storageState={storageState}
+          onExportBackup={exportBackup}
+          onImportBackup={importBackup}
+        />
+      );
+    }
     if (view.name === 'help') {
       return <HelpView version={APP_VERSION} />;
     }
@@ -3224,23 +3367,7 @@ const doExportDocx = async (html, suggestedName) => {
           ) : null}
           <img className="logo" src={logo} alt="Prép-ybara Logo" />
           <h1>Prép-ybara</h1>
-          <span className="badge">{
-            view.name === 'macro'
-              ? `${formatDateDE(view.startISO)} – ${formatDateDE(toISODate(addDays(fromISODate(view.startISO), (view.rangeDays||28)-1)))}`
-              : (view.name === 'year'
-                ? 'Jahresgrobplanung'
-              : (view.name === 'library'
-                ? 'Bibliothek'
-                : (view.name === 'help'
-                  ? 'Hilfe'
-                  : (view.name === 'week'
-                    ? ''
-                    : formatWeekLabel(view.weekStart)
-                  )
-                )
-              )
-              )
-          }</span>
+          <span className="badge">{viewBadgeLabel}</span>
         </div>
 
         <div className="right">
@@ -3266,6 +3393,14 @@ const doExportDocx = async (html, suggestedName) => {
                 </>
               ) : null}
             </>
+          )}
+          {!isExecutionOnlyWindow && (
+            <button
+              className="btn"
+              title="Einstellungen"
+              aria-label="Einstellungen"
+              onClick={()=>setView({ name:'settings', weekStart: view.weekStart })}
+            ><Settings {...ICON} /></button>
           )}
           {!isExecutionOnlyWindow && (
             <ThemeSwitch

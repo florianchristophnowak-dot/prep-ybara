@@ -407,19 +407,6 @@ async function getHtmlToDocx() {
   return _htmlToDocx;
 }
 
-function buildFullHtmlDocument(html) {
-  const src = String(html || '');
-  const headMatch = src.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
-  const bodyMatch = src.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-  const styleTags = src.match(/<style[^>]*>[\s\S]*?<\/style>/ig) || [];
-
-  const headInner = headMatch ? headMatch[1] : '';
-  const bodyInner = bodyMatch ? bodyMatch[1] : src;
-
-  // Many converters expect a full HTML document. Keep styles from <head> or inline.
-  return `<!doctype html><html><head><meta charset="utf-8" />\n${headInner}\n${styleTags.join('\n')}\n</head><body>${bodyInner}</body></html>`;
-}
-
 function ensureDocxBuffer(docx) {
   let buf = docx;
   // Common return types: Buffer, ArrayBuffer, Uint8Array, etc.
@@ -435,11 +422,16 @@ function ensureDocxBuffer(docx) {
   throw new Error(`Unsupported DOCX export type: ${typeof buf}`);
 }
 
+// Gemeinsames Modul, damit Haupt- und Renderer-Prozess dieselbe Datei erzeugen.
+let _wordExport = null;
+async function getWordExport() {
+  if (!_wordExport) _wordExport = await import('./word-export.mjs');
+  return _wordExport;
+}
+
 async function exportDocxFromHtml({ html, suggestedFileName }) {
   const src = String(html || '');
-  const contentHtml = buildFullHtmlDocument(src);
-
-  const isLandscape = /name=["']page-orientation["']\s+content=["']landscape["']/.test(src);
+  const { buildWordDocument } = await getWordExport();
   const defaultName = String(suggestedFileName || 'Unterrichtsstunde.doc')
     .replace(/\.docx$/i, '.doc');
 
@@ -452,47 +444,11 @@ async function exportDocxFromHtml({ html, suggestedFileName }) {
   const outPath = filePath.toLowerCase().endsWith('.doc') ? filePath : `${filePath}.doc`;
 
   // Word kann HTML in einer .doc-Datei sehr zuverlässig öffnen.
-  // Wir fügen einige mso-/@page-Hinweise hinzu (Querformat, Ränder), damit der Ausdruck passt.
-  const wrapped = wrapHtmlForWord(contentHtml, { landscape: isLandscape });
-  fs.writeFileSync(outPath, wrapped, { encoding: 'utf8' });
+  // Die mso-/@page-Hinweise (Querformat, Ränder) setzt das gemeinsame Modul.
+  fs.writeFileSync(outPath, buildWordDocument(src), { encoding: 'utf8' });
   return outPath;
 }
 
-function wrapHtmlForWord(fullHtml, { landscape }) {
-  const html = String(fullHtml || '');
-  const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
-  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-  const headInner = headMatch ? headMatch[1] : '';
-  const bodyInner = bodyMatch ? bodyMatch[1] : html;
-
-  // A4 in pt (Word versteht pt zuverlässig):
-  // portrait: 595.28pt × 841.89pt, landscape: swap.
-  const w = landscape ? 841.89 : 595.28;
-  const h = landscape ? 595.28 : 841.89;
-
-  const wordPageCss = `
-    <style>
-      @page Section1 { size: ${w.toFixed(2)}pt ${h.toFixed(2)}pt; margin: 12mm; mso-page-orientation: ${landscape ? 'landscape' : 'portrait'}; }
-      div.Section1 { page: Section1; }
-    </style>
-  `;
-
-  return `<!doctype html>
-<html xmlns:o="urn:schemas-microsoft-com:office:office"
-      xmlns:w="urn:schemas-microsoft-com:office:word"
-      xmlns="http://www.w3.org/TR/REC-html40">
-<head>
-  <meta charset="utf-8" />
-  ${headInner}
-  ${wordPageCss}
-</head>
-<body>
-  <div class="Section1">
-    ${bodyInner}
-  </div>
-</body>
-</html>`;
-}
 
 app.whenReady().then(() => {
   const mainWin = createMainWindow();

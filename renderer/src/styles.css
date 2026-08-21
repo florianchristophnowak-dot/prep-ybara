@@ -1056,3 +1056,14 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .paletteGroup { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0; }
 .paletteEmpty { padding: 18px 14px; color: var(--muted); font-size: var(--fs-md); }
 @media (prefers-reduced-motion: reduce) { .paletteCard { animation: none !important; } }
+
+/* Einstellungen */
+.settingsHeading { margin: 0 0 6px; font-size: var(--fs-md); font-weight: var(--fw-bold); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.settingsText { margin: 0 0 8px; font-size: var(--fs-base); line-height: 1.55; max-width: 78ch; }
+.settingsRow { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+/* In den Einstellungen steht der Schalter auf Papier, nicht auf der Tafel. */
+.settingsRow .themeSwitch { border-color: var(--border); }
+.settingsRow .themeSwitchBtn { color: var(--text-secondary); }
+.settingsRow .themeSwitchBtn + .themeSwitchBtn { border-left-color: var(--border); }
+.settingsRow .themeSwitchBtn:hover { background: var(--bg-subtle); }
+.settingsRow .themeSwitchBtn.is-active { background: var(--primary); color: var(--on-primary); }

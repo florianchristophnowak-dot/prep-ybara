@@ -11,12 +11,16 @@
    Hier wird pro Woche ein eigener Eintrag geschrieben, und nur der
    geänderte. IndexedDB arbeitet asynchron, die Eingabe bleibt frei.
 
-   Die dateibezogenen Fähigkeiten sind hier bewusst noch nicht belegt –
-   sie gehören zum PWA-Umbau. Die Oberfläche liest das an `capabilities`
-   ab und bietet sie gar nicht erst an, statt nach dem Klick zu melden.
+   Dateiausgabe über die File System Access API, wo vorhanden, sonst über
+   Download und einen Dateiwähler. Was die Umgebung nicht kann, steht in
+   `capabilities` auf false – die Oberfläche bietet es dann gar nicht erst
+   an, statt nach dem Klick zu melden.
    ============================================================ */
 
 import { createStore, get, set, del, keys, getMany, setMany } from 'idb-keyval';
+import {
+  exportDocxInBrowser, printHtmlAsPdf, readTextFile, saveBlob, hasFileSystemAccess,
+} from './web-files.js';
 
 const LEGACY_KEY = 'lehrerplan_db';
 const META_KEY = 'meta';
@@ -29,7 +33,7 @@ function splitDb(db){
   return { weeks: weeks || {}, meta };
 }
 
-export function createWebPlatform(){
+export function createWebPlatform({ appVersion = '' } = {}){
   let lastWeeks = new Map();
   let lastMeta = null;
 
@@ -118,32 +122,90 @@ export function createWebPlatform(){
 
   const notAvailable = async () => null;
 
+  const BACKUP_TYPE = { description: 'Prép-ybara Backup', accept: { 'application/json': ['.json'] } };
+
+  /* Backup und Vorlagen sind JSON-Dateien – im Browser genügt derselbe
+     Inhalt wie auf dem Desktop. */
+  const exportBackup = async () => {
+    const db = await loadDB();
+    if (!db) return null;
+    const stamp = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
+    return saveBlob(blob, `prepybara-backup-${stamp}.json`, BACKUP_TYPE);
+  };
+
+  const importBackup = async () => {
+    const text = await readTextFile({ ...BACKUP_TYPE, extensions: ['.json'] });
+    if (!text) return null;
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch { throw new Error('Die Datei ist kein gültiges Backup.'); }
+    if (!parsed || typeof parsed !== 'object') throw new Error('Die Datei ist kein gültiges Backup.');
+    // Vollständig übernehmen: erst leeren, dann neu schreiben.
+    const existing = await keys(store);
+    for (const k of existing) await del(k, store);
+    lastWeeks = new Map();
+    lastMeta = null;
+    await saveDB(parsed);
+    return parsed;
+  };
+
+  const exportTemplates = async () => {
+    const db = await loadDB();
+    const templates = db?.sequenceTemplates || {};
+    const blob = new Blob([JSON.stringify({ sequenceTemplates: templates }, null, 2)], { type: 'application/json' });
+    return saveBlob(blob, 'prepybara-vorlagen.json', BACKUP_TYPE);
+  };
+
+  const importTemplates = async () => {
+    const text = await readTextFile({ ...BACKUP_TYPE, extensions: ['.json'] });
+    if (!text) return null;
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch { throw new Error('Die Datei enthält keine gültigen Vorlagen.'); }
+    const incoming = parsed?.sequenceTemplates || parsed || {};
+    const db = (await loadDB()) || {};
+    const merged = { ...db, sequenceTemplates: { ...(db.sequenceTemplates || {}) } };
+    for (const [id, tpl] of Object.entries(incoming)) {
+      if (!tpl || typeof tpl !== 'object') continue;
+      let nextId = tpl.id || id;
+      while (merged.sequenceTemplates[nextId]) nextId = `${nextId}_${Math.random().toString(36).slice(2, 6)}`;
+      merged.sequenceTemplates[nextId] = { ...tpl, id: nextId, importedAt: new Date().toISOString() };
+    }
+    await saveDB(merged);
+    return merged;
+  };
+
   return {
     name: 'browser',
     capabilities: {
       persistentStorage: true,
       // Alles Dateibezogene folgt mit dem PWA-Umbau.
-      backupFiles: false,
-      templateFiles: false,
-      pdfExport: false,
-      docxExport: false,
-      fileAttachments: false,
+      backupFiles: true,
+      templateFiles: true,
+      pdfExport: true,
+      docxExport: true,
+      // Dateianhänge brauchen dauerhafte Zugriffsrechte auf Dateien;
+      // ohne File System Access API gibt es die nicht.
+      fileAttachments: hasFileSystemAccess(),
       fileLibrary: false,
       revealInFolder: false,
       openExternally: true,
+      // Das eigene Durchführungsfenster folgt in Phase 5.
       executionWindow: false,
+      // Nur der Browser kann den Speicherplatz zusichern.
+      storagePersistence: true,
+      installable: true,
     },
 
     loadDB,
     saveDB,
     requestPersistence,
 
-    exportBackup: notAvailable,
-    importBackup: notAvailable,
-    exportTemplates: notAvailable,
-    importTemplates: notAvailable,
-    exportPdf: notAvailable,
-    exportDocx: notAvailable,
+    exportBackup,
+    importBackup,
+    exportTemplates,
+    importTemplates,
+    exportPdf: ({ html }) => printHtmlAsPdf({ html, appVersion }),
+    exportDocx: (payload) => exportDocxInBrowser(payload),
     pickFiles: notAvailable,
     openPath: async (p) => { try { window.open(p, '_blank', 'noopener'); return { ok: true }; } catch (e) { return { ok: false, error: String(e?.message || e) }; } },
     revealPath: notAvailable,

@@ -113,21 +113,106 @@ function PhaseHelpCard({ phaseTitle }){
 }
 
 
-const SEQ_COLORS = [
-  '#2563eb', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#d97706',
-  '#059669', '#0f766e', '#0891b2', '#4f46e5', '#9333ea', '#be123c'
-];
+/* ============================================================
+   Farbsystem – eine Palette, aus der beide Modi abgeleitet werden
 
+   Früher lagen hier zwei getrennte Paletten: 18 Pastelltöne für
+   Lerngruppen und 12 kräftige Farben für Sequenzen. Jetzt gibt es
+   eine Palette. Gespeichert wird je Lerngruppe bzw. Sequenz ein
+   einziger Basiswert; Flächen- und Linienfarbe für hell und dunkel
+   werden daraus berechnet.
 
-const GROUP_PASTELS = [
-  '#fde68a', '#fef3c7',
-  '#fecaca', '#ffe4e6',
-  '#fbcfe8', '#fce7f3',
-  '#f5d0fe', '#e9d5ff', '#ddd6fe',
-  '#c7d2fe', '#bfdbfe', '#bae6fd', '#a5f3fc', '#99f6e4',
-  '#a7f3d0', '#bbf7d0', '#d9f99d',
-  '#e5e7eb'
+   Berechnet statt nachgeschlagen, weil die App drei freie Farbwähler
+   anbietet (input type="color"). Eine Zuordnungstabelle könnte selbst
+   gewählte Werte grundsätzlich nicht abdecken. Nebeneffekt: alle
+   bereits gespeicherten Farben bleiben unverändert gültig, eine
+   Datenmigration ist nicht nötig.
+   ============================================================ */
+
+// --- OKLab: perzeptuell gleichmäßige Ableitung ---------------------------
+function _srgbToLinear(c){ return c <= 0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
+function _linearToSrgb(c){ return c <= 0.0031308 ? c*12.92 : 1.055*Math.pow(c, 1/2.4)-0.055; }
+function _cbrt(v){ return Math.sign(v) * Math.pow(Math.abs(v), 1/3); }
+
+function parseHex(hex){
+  let h = String(hex || '').trim().replace('#','');
+  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  return [0,2,4].map(i => parseInt(h.slice(i,i+2),16)/255);
+}
+function toHex(rgb){
+  return '#' + rgb.map(c => {
+    const v = Math.max(0, Math.min(255, Math.round(c*255)));
+    return v.toString(16).padStart(2,'0');
+  }).join('');
+}
+function hexToLch(hex){
+  const rgb = parseHex(hex);
+  if (!rgb) return null;
+  const [r,g,b] = rgb.map(_srgbToLinear);
+  const l = _cbrt(0.4122214708*r + 0.5363325363*g + 0.0514459929*b);
+  const m = _cbrt(0.2119034982*r + 0.6806995451*g + 0.1073969566*b);
+  const s = _cbrt(0.0883024619*r + 0.2817188376*g + 0.6299787005*b);
+  const L = 0.2104542553*l + 0.7936177850*m - 0.0040720468*s;
+  const A = 1.9779984951*l - 2.4285922050*m + 0.4505937099*s;
+  const B = 0.0259040371*l + 0.7827717662*m - 0.8086757660*s;
+  return { L, C: Math.hypot(A,B), H: Math.atan2(B,A) };
+}
+function lchToHex(L, C, H){
+  const a = C*Math.cos(H), b = C*Math.sin(H);
+  const l = Math.pow(L + 0.3963377774*a + 0.2158037573*b, 3);
+  const m = Math.pow(L - 0.1055613458*a - 0.0638541728*b, 3);
+  const s = Math.pow(L - 0.0894841775*a - 1.2914855480*b, 3);
+  return toHex([
+     4.0767416621*l - 3.3077115913*m + 0.2309699292*s,
+    -1.2684380046*l + 2.6097574011*m - 0.3413193965*s,
+    -0.0041960863*l - 0.7034186147*m + 1.7076147010*s,
+  ].map(v => _linearToSrgb(Math.max(0, Math.min(1, v)))));
+}
+
+/* Ob gerade dunkel dargestellt wird. Wird von App beim Rendern gesetzt,
+   bevor Kinder rendern, und von den Ableitungen unten gelesen. */
+let __prefersDark = false;
+function setDarkMode(v){ __prefersDark = Boolean(v); }
+function isDarkMode(){ return __prefersDark; }
+
+/* Textragende Fläche: Helligkeit in ein Band geklemmt, das gegen
+   var(--text) im jeweiligen Modus sicher über 4.5:1 liegt. */
+const NEUTRAL_HUE = 74 * Math.PI / 180;   // warme Papierachse
+const ACHROMATIC = 0.012;                 // darunter gilt eine Farbe als unbunt
+
+function surfaceColor(hex, dark = isDarkMode()){
+  const c = hexToLch(hex);
+  if (!c) return '';
+  // Unbunte Vorlagen (Grau, Schwarz, Weiß) haben keinen definierten Farbton.
+  // Ohne Sonderfall würde das Mindest-Chroma ihnen einen aufzwingen und aus
+  // einem grauen Lerngruppen-Ton z. B. einen blauen machen.
+  const flat = c.C < ACHROMATIC;
+  const H = flat ? NEUTRAL_HUE : c.H;
+  const C = flat ? 0.008
+                 : (dark ? Math.min(Math.max(c.C*0.62, 0.030), 0.075)
+                         : Math.min(Math.max(c.C*0.55, 0.030), 0.065));
+  return lchToHex(dark ? 0.430 : 0.885, C, H);
+}
+/* Linien und Balken: Sättigung bleibt, nur modusgerecht aufgehellt. */
+function lineColor(hex, dark = isDarkMode()){
+  const c = hexToLch(hex);
+  if (!c) return '';
+  const flat = c.C < ACHROMATIC;
+  return lchToHex(dark ? 0.700 : 0.520,
+                  flat ? 0.010 : Math.max(c.C, 0.060),
+                  flat ? NEUTRAL_HUE : c.H);
+}
+
+/* Die eine Palette. Mittlere Helligkeit, damit sich daraus sowohl
+   Pastellflächen als auch kräftige Linien ableiten lassen. */
+const PALETTE = [
+  '#9a8532', '#b07939', '#bd6e5b', '#bc6a75', '#b56b8f', '#a171af',
+  '#857bc1', '#6386c5', '#408fbe', '#0698a4', '#369a7a', '#6e934f'
 ];
+// Beide Altnamen zeigen auf dieselbe Palette – die Trennung ist aufgehoben.
+const SEQ_COLORS = PALETTE;
+const GROUP_PASTELS = PALETTE;
 
 function groupKey(classGroup, subject){
   const g = (classGroup || '').trim();
@@ -215,11 +300,23 @@ function formatMMSS(totalSeconds){
   return `${mm}:${ss}`;
 }
 
+/* Vorgabe des Schriftfarbwählers im Rich-Text-Editor.
+
+   Bewusst ein fester Wert und kein Token: Die Farbe wird in den
+   Stundeninhalt geschrieben und landet unverändert im PDF- und
+   Word-Export. Dort ist der Grund immer weiß, unabhängig davon, wie
+   die App gerade dargestellt wird. Ein mitschwenkender Wert würde in
+   dunkler Darstellung helle Schrift auf weißes Papier exportieren.
+   input[type=color] akzeptiert ausserdem kein var(). */
+const RTE_DEFAULT_INK = '#26201c';
+
 function bgFromProgress(progress){
   const p = clamp01(progress);
   // hue 120 (green) -> 0 (red). Light + low saturation to keep it subtle.
   const hue = 120 * (1 - p);
-  return `hsla(${hue}, 55%, 93%, 1)`;
+  // Nur die Helligkeit folgt der Darstellung – im Dunkelmodus wäre eine Fläche
+  // mit 93 % Helligkeit ein Blendkörper. Die Farblogik selbst bleibt unberührt.
+  return isDarkMode() ? `hsla(${hue}, 22%, 21%, 1)` : `hsla(${hue}, 55%, 93%, 1)`;
 }
 
 function ExecutionWindow({ api }){
@@ -249,7 +346,7 @@ function ExecutionWindow({ api }){
   const phase = (!isHomeworkView) ? (phases[idx] || null) : null;
   const durationSec = Math.max(0, Math.round((Number(phase?.duration) || 0) * 60));
   const progress = durationSec > 0 ? (1 - (remainingSec / durationSec)) : 0;
-  const bg = (!isHomeworkView && isCountdownOn && !isPaused) ? bgFromProgress(progress) : '#ffffff';
+  const bg = (!isHomeworkView && isCountdownOn && !isPaused) ? bgFromProgress(progress) : 'var(--card)';
 
   const resetPhaseTime = (nextIdx) => {
     // Homework view sits AFTER the last phase
@@ -941,6 +1038,29 @@ function deepClone(obj){
 // SCHEMA_VERSION in electron/main.cjs übereinstimmen.
 const SCHEMA_VERSION = 8;
 
+const THEME_CHOICES = ['light', 'dark', 'system'];
+const THEME_LABELS = { light: 'Hell', dark: 'Dunkel', system: 'System' };
+
+/* Drei Zustände, als Radiogruppe – damit Tastatur und Screenreader die
+   Auswahl als das lesen, was sie ist. */
+function ThemeSwitch({ value, onChange }){
+  return (
+    <div className="themeSwitch" role="radiogroup" aria-label="Darstellung">
+      {THEME_CHOICES.map((choice)=>(
+        <button
+          key={choice}
+          type="button"
+          role="radio"
+          aria-checked={value === choice}
+          className={`themeSwitchBtn${value === choice ? ' is-active' : ''}`}
+          onClick={()=>onChange(choice)}
+          title={`Darstellung: ${THEME_LABELS[choice]}`}
+        >{THEME_LABELS[choice]}</button>
+      ))}
+    </div>
+  );
+}
+
 function ensureDbShape(raw){
   const db = (raw && typeof raw === 'object') ? raw : {};
   if (!('schemaVersion' in db)) db.schemaVersion = 1;
@@ -1097,6 +1217,8 @@ db.todos = (Array.isArray(db.todos) ? db.todos : []).map(t => {
   if (!db.appSettings || typeof db.appSettings !== 'object') db.appSettings = {};
   // Opt-in: Dateien beim Anhängen in App-Ordner kopieren
   db.appSettings.fileCopyOptIn = Boolean(db.appSettings.fileCopyOptIn);
+  // Darstellung: hell | dunkel | system. Unbekanntes fällt auf System zurück.
+  if (!THEME_CHOICES.includes(db.appSettings.theme)) db.appSettings.theme = 'system';
 
 
   return db;
@@ -1124,8 +1246,11 @@ function useDB(){
         if (!cancelled) setDb(loaded);
       } else {
         // fallback for browser
+        // Auch hier die Form angleichen: bisher lief dieser Zweig als einziger
+        // Ladeweg ohne ensureDbShape, sodass neu hinzugekommene Felder (etwa
+        // die Darstellungswahl) unnormalisiert blieben.
         const raw = localStorage.getItem('lehrerplan_db');
-        setDb(raw ? JSON.parse(raw) : { schemaVersion:SCHEMA_VERSION, socialForms:{}, phaseNames:{}, hiddenSuggestions:{ socialForms:{}, phaseNames:{}, classGroups:{}, subjects:{}, competencies:{}, supervisionLabels:{} }, competencies:{}, classGroups:{}, subjects:{}, groupColors:{}, supervisionLabels:{}, todos:[], sequences:{}, sequenceTemplates:{}, yearBars:[], schoolCalendar:{ schoolYear:{startISO:'', endISO:''}, lessonTimesEnabled:false, lessonTimes:[], vacations:[], freeDays:[], events:[] }, weeks:{}, appSettings:{ fileCopyOptIn:false } });
+        setDb(raw ? ensureDbShape(JSON.parse(raw)) : { schemaVersion:SCHEMA_VERSION, socialForms:{}, phaseNames:{}, hiddenSuggestions:{ socialForms:{}, phaseNames:{}, classGroups:{}, subjects:{}, competencies:{}, supervisionLabels:{} }, competencies:{}, classGroups:{}, subjects:{}, groupColors:{}, supervisionLabels:{}, todos:[], sequences:{}, sequenceTemplates:{}, yearBars:[], schoolCalendar:{ schoolYear:{startISO:'', endISO:''}, lessonTimesEnabled:false, lessonTimes:[], vacations:[], freeDays:[], events:[] }, weeks:{}, appSettings:{ fileCopyOptIn:false } });
       }
     })();
     return ()=> { cancelled = true; };
@@ -1456,7 +1581,31 @@ const classGroupSuggestions = useMemo(()=>{
 
   const sequences = db?.sequences || {};
 
-  const appSettings = db?.appSettings || { fileCopyOptIn: false };
+  const appSettings = db?.appSettings || { fileCopyOptIn: false, theme: 'system' };
+
+  // Systemvorgabe beobachten, damit "System" ohne Neustart umschaltet.
+  const [systemPrefersDark, setSystemPrefersDark] = useState(()=>{
+    try { return window.matchMedia?.('(prefers-color-scheme: dark)').matches || false; }
+    catch { return false; }
+  });
+  useEffect(()=>{
+    let mq;
+    try { mq = window.matchMedia('(prefers-color-scheme: dark)'); } catch { return; }
+    const onChange = (e)=> setSystemPrefersDark(e.matches);
+    mq.addEventListener?.('change', onChange);
+    return ()=> mq.removeEventListener?.('change', onChange);
+  }, []);
+
+  const themeChoice = THEME_CHOICES.includes(appSettings?.theme) ? appSettings.theme : 'system';
+  const darkActive = themeChoice === 'dark' || (themeChoice === 'system' && systemPrefersDark);
+  // Vor dem Rendern der Kinder setzen: die Farbableitungen lesen diesen Wert.
+  setDarkMode(darkActive);
+
+  useEffect(()=>{
+    const root = document.documentElement;
+    if (themeChoice === 'system') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', themeChoice);
+  }, [themeChoice]);
   const updateAppSettings = (patch) => {
     try {
       const nextDb = deepClone(db);
@@ -2659,6 +2808,12 @@ const doExportDocx = async (html, suggestedName) => {
               <button className="btn" onClick={()=>importBackup()}>Backup importieren</button>
             </>
           )}
+          {!isExecutionOnlyWindow && (
+            <ThemeSwitch
+              value={themeChoice}
+              onChange={(next)=>updateAppSettings({ theme: next })}
+            />
+          )}
         </div>
       </div>
 
@@ -2976,7 +3131,10 @@ const exportWeekDocx = () => {
                 const seq = l?.sequenceId ? (sequences?.[l.sequenceId] || null) : null;
                 const gKey = l ? groupKey(l.classGroup, l.subject) : '';
                 const gColor = gKey ? (groupColors?.[gKey]?.color || defaultGroupColor(gKey)) : '';
-                const cellStyle = gColor ? { borderLeft: `7px solid ${gColor}`, background: hexToRgba(gColor, info.isOff ? 0.07 : 0.12) } : undefined;
+                const cellStyle = gColor ? {
+                  borderLeft: `7px solid ${lineColor(gColor)}`,
+                  background: hexToRgba(surfaceColor(gColor), info.isOff ? 0.07 : 0.12),
+                } : undefined;
                 return (
                   <div
                     key={k}
@@ -3061,7 +3219,7 @@ const exportWeekDocx = () => {
                     {gKey ? (
                       <button
                         className="groupColorChip groupColorChip--corner"
-                        style={{background: gColor}}
+                        style={{background: surfaceColor(gColor)}}
                         onClick={(e)=>{
                           e.stopPropagation();
                           onOpenGroupColorPalette?.(gKey, `${l?.classGroup || ''} · ${l?.subject || ''}`.trim());
@@ -3937,8 +4095,8 @@ const exportDocx = () => {
           <div className="muted small">{lessonTitle}</div>
           {(dayInfo.vac || dayInfo.fd || (dayInfo.evs && dayInfo.evs.length)) ? (
             <div className="row wrap" style={{gap:6, marginTop:6}}>
-              {dayInfo.vac ? <span className="badge" style={{borderColor:'#f59e0b', color:'#b45309'}}>🏖 Ferien: {dayInfo.vac.name || ''}</span> : null}
-              {dayInfo.fd ? <span className="badge" style={{borderColor:'#ef4444', color:'#b91c1c'}}>🚫 Schulfrei: {dayInfo.fd.name || ''}</span> : null}
+              {dayInfo.vac ? <span className="badge badge--vacation">🏖 Ferien: {dayInfo.vac.name || ''}</span> : null}
+              {dayInfo.fd ? <span className="badge badge--dayoff">🚫 Schulfrei: {dayInfo.fd.name || ''}</span> : null}
               {(dayInfo.evs || []).slice(0,2).map(ev => (
                 <span key={ev.id} className="badge">📌 {ev.name || ev.summary || 'Termin'}</span>
               ))}
@@ -3985,7 +4143,9 @@ const exportDocx = () => {
   <label className="small muted">Farbe</label>
   <button
     className="groupColorChip groupColorChip--field"
-    style={{background: gKey ? gColor : 'repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 6px, #ffffff 6px, #ffffff 12px)'}}
+    style={gKey
+      ? { background: surfaceColor(gColor) }
+      : { background: 'repeating-linear-gradient(45deg, var(--bg-subtle), var(--bg-subtle) 6px, var(--card) 6px, var(--card) 12px)' }}
     onClick={(e)=>{
       e.stopPropagation();
       if (!gKey) { alert('Bitte zuerst Fach + Klasse/Kurs setzen, um eine Lerngruppen-Farbe festzulegen.'); return; }
@@ -4053,7 +4213,7 @@ const exportDocx = () => {
           <div className="yearHintList">
             {matchingYearBars.slice(0,6).map(b=> (
               <div key={b.id} className="yearHintItem">
-                <span className="yearHintDot" style={{background: b.color || '#9ca3af'}} />
+                <span className="yearHintDot" style={{background: b.color ? lineColor(b.color) : 'var(--border-strong)'}} />
                 <div className="yearHintText">
                   <div style={{fontWeight:700}}>{b.title || 'Ohne Titel'}</div>
                   <div className="muted small">{formatDateDE(b.startISO)} – {formatDateDE(b.endISO)}{(b.classGroup||b.subject) ? ` · ${[b.classGroup,b.subject].filter(Boolean).join(' · ')}` : ''}</div>
@@ -4586,7 +4746,7 @@ const exportSequenceDocx = (sequenceId) => {
                     {label && items.length === 0 ? <span className="pill" style={{marginBottom:6}}>{label}</span> : null}
                     {items.map((o) => {
                       const seq = getSeq(o.lesson.sequenceId);
-                      const border = seq?.color || '#cbd5e1';
+                      const border = seq?.color ? lineColor(seq.color) : 'var(--border)';
                       const topic = (o.lesson.topic || '').trim() || (o.lesson.subject || '').trim() || 'Ohne Thema';
                       const comp = (o.primaryCompetency || '').trim();
                       return (
@@ -4951,7 +5111,7 @@ function YearPlanView({
                       <div
                         key={b.id}
                         className="yearPlanBar"
-                        style={{left, width, background: hexToRgba(b.color, bgAlpha), borderColor: b.color}}
+                        style={{left, width, background: hexToRgba(surfaceColor(b.color), bgAlpha), borderColor: lineColor(b.color)}}
                         onDoubleClick={()=>startEdit(b)}
                         onMouseDown={(e)=>onMouseDownBar(e, b, 'move')}
                         title={`${b.title || ''}\n${formatDateDE(b.startISO)} – ${formatDateDE(b.endISO)}\n(Doppelklick zum Bearbeiten)`}
@@ -5582,7 +5742,7 @@ function SequenceManager({
             <div key={s.id} className="seqRow">
               <input
                 type="color"
-                value={s.color || '#2563eb'}
+                value={s.color || PALETTE[0]}
                 onChange={(e)=>onUpdate(s.id, { color: e.target.value })}
                 title="Farbe"
               />
@@ -5986,7 +6146,7 @@ function RichTextEditor({ value, onChange, placeholder = '' }){
             <input
               className="rteColor"
               type="color"
-              defaultValue="#111827"
+              defaultValue={RTE_DEFAULT_INK}
               onChange={(e)=>cmd('foreColor', e.target.value)}
               onMouseDown={(e)=>e.stopPropagation()}
             />

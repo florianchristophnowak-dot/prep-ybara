@@ -14,9 +14,14 @@ app.setName('Prép-ybara');
 const store = new Store({ name: 'prepybara' });
 const legacyStore = new Store({ name: 'lehrerplan' });
 
+// Einzige Quelle für die Schema-Kennzeichnung. Muss mit SCHEMA_VERSION in
+// renderer/src/app.jsx übereinstimmen: ensureDbShape() dort hebt jede geladene
+// Datenbank auf genau diesen Wert an.
+const SCHEMA_VERSION = 8;
+
 function defaultDB() {
   return {
-    schemaVersion: 7,
+    schemaVersion: SCHEMA_VERSION,
     socialForms: {},
     competencies: {},
     sequences: {},
@@ -497,8 +502,8 @@ ipcMain.handle('backup:import', async () => {
       events: []
     };
   }
-  if (!('schemaVersion' in imported)) imported.schemaVersion = 4;
-  if (imported.schemaVersion < 4) imported.schemaVersion = 4;
+  if (!('schemaVersion' in imported)) imported.schemaVersion = SCHEMA_VERSION;
+  if (imported.schemaVersion < SCHEMA_VERSION) imported.schemaVersion = SCHEMA_VERSION;
   setDB(imported);
   return imported;
 });
@@ -555,7 +560,7 @@ ipcMain.handle('templates:import', async () => {
     while (db.sequenceTemplates[nextId]) nextId = nodeUid();
     db.sequenceTemplates[nextId] = { ...safeTpl, id: nextId, importedAt: new Date().toISOString() };
   }
-  db.schemaVersion = Math.max(Number(db.schemaVersion || 0), 4);
+  db.schemaVersion = Math.max(Number(db.schemaVersion || 0), SCHEMA_VERSION);
   setDB(db);
   return db;
 });

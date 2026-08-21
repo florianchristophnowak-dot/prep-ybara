@@ -35,12 +35,13 @@
     "appId": "com.prepybara.desktop",
     "productName": "Prép-ybara",
     "files": [
-      "dist/**",
+      "dist/renderer/**",
       "electron/**",
       "package.json"
     ],
     "directories": {
-      "buildResources": "build"
+      "buildResources": "build",
+      "output": "release"
     },
     "win": {
       "publisherName": "Florian Nowak",

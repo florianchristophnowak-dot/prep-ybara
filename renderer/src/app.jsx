@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import logo from './assets/logo.png';
-import eastereggImg from './assets/easteregg.png';
+import logo from './assets/logo.webp';
+import eastereggImg from './assets/easteregg.webp';
 import wordIcon from './assets/word-icon.svg';
 import pdfIcon from './assets/pdf-icon.svg';
 import helpMd from './assets/HELP.md?raw';
@@ -937,6 +937,10 @@ function deepClone(obj){
 }
 
 
+// Einzige Quelle für die Schema-Kennzeichnung im Renderer. Muss mit
+// SCHEMA_VERSION in electron/main.cjs übereinstimmen.
+const SCHEMA_VERSION = 8;
+
 function ensureDbShape(raw){
   const db = (raw && typeof raw === 'object') ? raw : {};
   if (!('schemaVersion' in db)) db.schemaVersion = 1;
@@ -992,14 +996,9 @@ function ensureDbShape(raw){
     if (!Array.isArray(db.schoolCalendar.events)) db.schoolCalendar.events = [];
   }
   if (!db.weeks || typeof db.weeks !== 'object') db.weeks = {};
-  if (db.schemaVersion < 2) db.schemaVersion = 2;
-  if (db.schemaVersion < 3) db.schemaVersion = 3;
-  if (db.schemaVersion < 4) db.schemaVersion = 4;
-  if (db.schemaVersion < 5) db.schemaVersion = 5;
-  if (db.schemaVersion < 6) db.schemaVersion = 6;
-  if (db.schemaVersion < 7) db.schemaVersion = 7;
-  if (db.schemaVersion < 8) db.schemaVersion = 8;
-  if (db.schemaVersion < 8) db.schemaVersion = 8;
+  // Die Formangleichung oben läuft unabhängig von der Version; versionsabhängige
+  // Migrationen gibt es bislang keine. Neue gehören vor diesen Clamp.
+  if (db.schemaVersion < SCHEMA_VERSION) db.schemaVersion = SCHEMA_VERSION;
 
   // Normalize Jahresgrobplanung-Balken
   db.yearBars = (Array.isArray(db.yearBars) ? db.yearBars : []).map(b => {
@@ -1126,7 +1125,7 @@ function useDB(){
       } else {
         // fallback for browser
         const raw = localStorage.getItem('lehrerplan_db');
-        setDb(raw ? JSON.parse(raw) : { schemaVersion:8, socialForms:{}, phaseNames:{}, hiddenSuggestions:{ socialForms:{}, phaseNames:{}, classGroups:{}, subjects:{}, competencies:{}, supervisionLabels:{} }, competencies:{}, classGroups:{}, subjects:{}, groupColors:{}, supervisionLabels:{}, todos:[], sequences:{}, sequenceTemplates:{}, yearBars:[], schoolCalendar:{ schoolYear:{startISO:'', endISO:''}, lessonTimesEnabled:false, lessonTimes:[], vacations:[], freeDays:[], events:[] }, weeks:{}, appSettings:{ fileCopyOptIn:false } });
+        setDb(raw ? JSON.parse(raw) : { schemaVersion:SCHEMA_VERSION, socialForms:{}, phaseNames:{}, hiddenSuggestions:{ socialForms:{}, phaseNames:{}, classGroups:{}, subjects:{}, competencies:{}, supervisionLabels:{} }, competencies:{}, classGroups:{}, subjects:{}, groupColors:{}, supervisionLabels:{}, todos:[], sequences:{}, sequenceTemplates:{}, yearBars:[], schoolCalendar:{ schoolYear:{startISO:'', endISO:''}, lessonTimesEnabled:false, lessonTimes:[], vacations:[], freeDays:[], events:[] }, weeks:{}, appSettings:{ fileCopyOptIn:false } });
       }
     })();
     return ()=> { cancelled = true; };
@@ -1863,7 +1862,7 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     }
     const imported = await api.importBackup();
     if (imported) {
-      persist(imported);
+      persist(ensureDbShape(imported));
       alert('Backup importiert.');
     }
   };

@@ -96,11 +96,19 @@
   --warning-light: var(--warning-soft);
   --word: var(--export-word);
 
-  /* Radien */
-  --radius: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 18px;
-  --radius-full: 9999px;
+  /* Kanten: spitz. Schulheft, Karteikarte und Formular haben keine
+     abgerundeten Ecken – das trägt die Lineatur-Entscheidung weiter.
+     Die Stufen bleiben als Token erhalten, damit bestehende Regeln
+     unverändert laufen und sich die Kantenführung an einer Stelle
+     wieder ändern liesse. */
+  --radius: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-full: 0;
+  /* Ausnahme: echte Punktmarken bleiben rund – ein Punkt ist kein Kästchen. */
+  --radius-dot: 9999px;
+  /* Abgeschnittene Ecke als Akzent. */
+  --chamfer: 12px;
 
   /* Schatten: bewusst zurückgenommen. Die Gliederung tragen Linien, nicht
      schwebende Karten. Echte Höhe bekommen nur Overlays, die den Inhalt
@@ -418,14 +426,14 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .yearPlanBar:hover { box-shadow: inset 0 0 0 2px var(--primary); }
 .yearPlanBar:active { cursor: grabbing; }
 .yearPlanBarTitle { font-weight: var(--fw-bold); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%; }
-.yearPlanDot { width: 10px; height: 10px; border-radius: var(--radius-full); display: inline-block; margin-right: 8px; }
+.yearPlanDot { width: 10px; height: 10px; border-radius: var(--radius-dot); display: inline-block; margin-right: 8px; }
 .yearPlanBarHandle { position: absolute; top: 0; bottom: 0; width: 10px; cursor: ew-resize; }
 .yearPlanBarHandle--left { left: 0; border-radius: var(--radius) 0 0 var(--radius); }
 .yearPlanBarHandle--right { right: 0; border-radius: 0 var(--radius) var(--radius) 0; }
 .yearPlanBarHandle:hover { background: var(--bg-subtle); }
 .yearHintList { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px; background: var(--bg-subtle); }
 .yearHintItem { display: flex; gap: 10px; align-items: flex-start; }
-.yearHintDot { width: 12px; height: 12px; border-radius: var(--radius-full); margin-top: 3px; flex: 0 0 12px; }
+.yearHintDot { width: 12px; height: 12px; border-radius: var(--radius-dot); margin-top: 3px; flex: 0 0 12px; }
 .yearHintText { flex: 1; }
 
 .typeaheadWrap { position: relative; }
@@ -529,7 +537,7 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .lessonCell:hover .cellDelete { opacity: 1; }
 .cellTools { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; opacity: 0; transition: opacity var(--transition-fast); }
 .lessonCell:hover .cellTools, .lessonCell:focus-within .cellTools { opacity: 1; }
-.cellTool { width: 26px; height: 26px; border-radius: 8px; font-size: var(--fs-sm); }
+.cellTool { width: 26px; height: 26px; border-radius: 0; font-size: var(--fs-sm); }
 .dropTarget { outline: 2px dashed var(--primary); outline-offset: 2px; background: var(--primary-light) !important; }
 
 .groupColorPicker { width: 28px; height: 20px; border: none; padding: 0; background: transparent; cursor: pointer; margin-left: 6px; }
@@ -575,16 +583,16 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 
 .rte { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--card); position: relative; transition: border-color var(--transition); }
 .rte:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
-.rteToggle { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); cursor: pointer; font-size: var(--fs-sm); display: flex; align-items: center; justify-content: center; color: var(--muted); z-index: 5; transition: all var(--transition-fast); }
+.rteToggle { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 0; border: 1px solid var(--border); background: var(--card); cursor: pointer; font-size: var(--fs-sm); display: flex; align-items: center; justify-content: center; color: var(--muted); z-index: 5; transition: all var(--transition-fast); }
 .rteToggle:hover { border-color: var(--primary); color: var(--primary); }
 .rteToggle.active { background: var(--primary-light); border-color: var(--primary); color: var(--primary); }
 .rteToolbar { display: flex; align-items: center; gap: 4px; padding: 8px; background: var(--bg-subtle); border-bottom: 1px solid var(--border); }
-.rteBtn { border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: var(--fs-sm); line-height: 1; transition: all var(--transition-fast); }
+.rteBtn { border: 1px solid var(--border); background: var(--card); border-radius: 0; padding: 6px 10px; cursor: pointer; font-size: var(--fs-sm); line-height: 1; transition: all var(--transition-fast); }
 .rteBtn:hover { border-color: var(--primary); background: var(--primary-light); color: var(--primary); }
 .rteSep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
-.rteColorWrap { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.rteColorWrap { width: 32px; height: 32px; border-radius: 0; border: 1px solid var(--border); background: var(--card); position: relative; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .rteColorWrap:hover { border-color: var(--primary); }
-.rteColorDot { width: 16px; height: 16px; border-radius: var(--radius-full); border: 1px solid var(--border-strong); background: var(--text); }
+.rteColorDot { width: 16px; height: 16px; border-radius: var(--radius-dot); border: 1px solid var(--border-strong); background: var(--text); }
 .rteColor { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .rteBody { padding: 10px 12px; min-height: 90px; font-size: var(--fs-base); line-height: 1.6; outline: none; white-space: normal; }
 .rteBody:empty:before { content: attr(data-placeholder); color: var(--muted); opacity: 0.6; }
@@ -656,7 +664,7 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 
 .phaseHelpToggle {
   border: 1px solid var(--parchment);
-  border-radius: 999px;
+  border-radius: 0;
   background: var(--parchment);
   color: var(--primary-ink);
   padding: 4px 10px;
@@ -824,3 +832,54 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 /* Ferien und schulfreie Tage: Statusfarbe aus dem System, nicht inline. */
 .badge--vacation { border-color: var(--warning); color: var(--warning); background: var(--warning-soft); }
 .badge--dayoff   { border-color: var(--danger);  color: var(--danger);  background: var(--danger-soft); }
+
+/* ============================================================
+   Abgeschnittene Ecke – sparsamer Akzent
+
+   Gesetzt wird sie nur an gefüllten Flächen: dort braucht der Schnitt
+   keine eigene Randlinie, weil Füllung und Rand dieselbe Farbe haben.
+   An umrandeten Kästchen würde clip-path die Linie entlang der Schräge
+   abschneiden und der Rand bräche sichtbar ab.
+
+   Sie markiert die Handlung, nicht die Fläche: den Primärknopf und die
+   aktive Wahl im Darstellungsschalter. Dazu die Splash-Karte als
+   eigene Visitenkarte der App.
+   ============================================================ */
+.chamfer,
+.btn.primary,
+.themeSwitchBtn.is-active {
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--chamfer)) 0,
+    100% var(--chamfer),
+    100% 100%,
+    0 100%
+  );
+}
+/* Der Schalter ist klein – dort ein kleinerer Schnitt. */
+.themeSwitchBtn.is-active { --chamfer: 8px; }
+
+/* clip-path beschneidet auch den Fokusring. Auf beschnittenen Flächen
+   liegt er deshalb innen, damit er sichtbar bleibt. */
+.chamfer:focus-visible,
+.btn.primary:focus-visible,
+.themeSwitchBtn.is-active:focus-visible {
+  outline: none;
+  box-shadow:
+    inset 0 0 0 2px var(--focus-halo),
+    inset 0 0 0 4px var(--focus-ring);
+}
+
+/* Die Splash-Karte trägt den Schnitt grösser und verzichtet dafür auf
+   den Rand – sie steht frei auf der Blende. */
+.splashCard {
+  --chamfer: 26px;
+  border: none;
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--chamfer)) 0,
+    100% var(--chamfer),
+    100% 100%,
+    0 100%
+  );
+}

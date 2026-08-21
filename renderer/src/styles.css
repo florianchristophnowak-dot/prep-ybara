@@ -883,3 +883,176 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
     0 100%
   );
 }
+
+/* ============================================================
+   Meldungen (Toasts)
+   ============================================================ */
+.toastHost {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  pointer-events: none;
+}
+.toastList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 260px;
+  max-width: min(460px, 90vw);
+  padding: 10px 10px 10px 14px;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  /* Der Statusstreifen links greift den Korrekturrand wieder auf. */
+  border-left: 4px solid var(--border-strong);
+  box-shadow: var(--shadow-md);
+  animation: toastIn 160ms ease-out;
+}
+@keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.toast--success { border-left-color: var(--success); }
+.toast--warning { border-left-color: var(--warning); }
+.toast--danger  { border-left-color: var(--danger); }
+.toastText { flex: 1; font-size: var(--fs-md); line-height: 1.45; }
+.toastAction {
+  flex-shrink: 0;
+  border: 1px solid var(--primary);
+  background: transparent;
+  color: var(--primary-ink);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.toastAction:hover { background: var(--primary-soft); }
+.toastClose {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 4px;
+}
+.toastClose:hover { color: var(--text); }
+
+/* ============================================================
+   Dialoge
+   ============================================================ */
+.dialogTitle {
+  margin: 0 0 6px;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.01em;
+}
+.dialogBody { margin: 0 0 4px; color: var(--text-secondary); font-size: var(--fs-base); line-height: 1.5; }
+.dialogActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.modalCard .input { margin-top: 4px; }
+
+/* Hinweis im Fluss, statt einer zusätzlichen Rückfrage. */
+.inlineNotice {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  background: var(--bg-subtle);
+  padding: 8px 10px;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.inlineNotice--warning { border-left-color: var(--warning); background: var(--warning-soft); }
+
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none !important; }
+}
+
+/* Symbole sitzen auf der Schriftlinie, nicht darüber. */
+.badge, .pill, .tag, .todoHint { display: inline-flex; align-items: center; gap: 6px; }
+.btn svg, .iconBtn svg, .tagBtn svg, .toastClose svg { flex-shrink: 0; }
+.tagBtn { display: inline-flex; align-items: center; }
+
+/* ============================================================
+   Leerzustände
+   ============================================================ */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px;
+  border: 1px dashed var(--border);
+  background: var(--bg-subtle);
+}
+.emptyStateText { margin: 0; color: var(--text-secondary); font-size: var(--fs-md); line-height: 1.5; max-width: 62ch; }
+.emptyState--art { align-items: center; text-align: center; padding: 28px 20px; }
+.emptyStateArt { width: 96px; height: 96px; opacity: 0.55; }
+
+/* ============================================================
+   Befehlspalette
+   ============================================================ */
+.paletteOverlay { align-items: flex-start; padding-top: 12vh; }
+.paletteCard {
+  width: min(640px, 92vw);
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  max-height: 64vh;
+  animation: modalIn 160ms ease-out;
+}
+.paletteSearch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.paletteInput {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: var(--fs-lg);
+  color: var(--text);
+  outline: none;
+}
+.paletteInput::placeholder { color: var(--muted); }
+.paletteHint {
+  font-size: var(--fs-2xs);
+  font-family: inherit;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 2px 6px;
+}
+.paletteList { list-style: none; margin: 0; padding: 4px; overflow-y: auto; }
+.paletteItem {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+.paletteItem.is-active {
+  background: var(--primary-soft);
+  border-left-color: var(--primary);
+}
+.paletteLabel { font-size: var(--fs-base); }
+.paletteGroup { font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0; }
+.paletteEmpty { padding: 18px 14px; color: var(--muted); font-size: var(--fs-md); }
+@media (prefers-reduced-motion: reduce) { .paletteCard { animation: none !important; } }

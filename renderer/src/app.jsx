@@ -1,9 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import logo from './assets/logo.webp';
 import eastereggImg from './assets/easteregg.webp';
 import wordIcon from './assets/word-icon.svg';
 import pdfIcon from './assets/pdf-icon.svg';
 import helpMd from './assets/HELP.md?raw';
+// Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
+import {
+  ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronLeft, ChevronRight,
+  ClipboardPaste, Copy, NotebookPen, Palmtree, Pencil, Scissors, Search, Square, Star, Trash2, X,
+} from 'lucide-react';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
 const PX_PER_MIN = 10;
@@ -559,8 +564,8 @@ function ExecutionWindow({ api }){
             </div>
 
             <div className="execNav">
-              <button className="btn" onClick={goPrev} disabled={idx<=0}>←</button>
-              <button className="btn" onClick={goNext} disabled={idx>=phases.length}>→</button>
+              <button className="btn" onClick={goPrev} disabled={idx<=0} aria-label="Vorherige Phase"><ArrowLeft {...ICON} /></button>
+              <button className="btn" onClick={goNext} disabled={idx>=phases.length} aria-label="Nächste Phase"><ArrowRight {...ICON} /></button>
             </div>
           </div>
         ) : (
@@ -613,8 +618,8 @@ function ExecutionWindow({ api }){
             ) : null}
 
             <div className="execNav">
-              <button className="btn" onClick={goPrev} disabled={idx<=0}>←</button>
-              <button className="btn" onClick={goNext} disabled={idx>=phases.length}>→</button>
+              <button className="btn" onClick={goPrev} disabled={idx<=0} aria-label="Vorherige Phase"><ArrowLeft {...ICON} /></button>
+              <button className="btn" onClick={goNext} disabled={idx>=phases.length} aria-label="Nächste Phase"><ArrowRight {...ICON} /></button>
             </div>
           </div>
         ))}
@@ -1038,6 +1043,239 @@ function deepClone(obj){
 // SCHEMA_VERSION in electron/main.cjs übereinstimmen.
 const SCHEMA_VERSION = 8;
 
+/* ============================================================
+   Interaktionsschicht: Meldungen, Bestätigung, Eingabe
+
+   Ersetzt die nativen Browserdialoge. Grundsatz: Bei umkehrbaren
+   Aktionen wird nicht gefragt, sondern ausgeführt und ein Toast mit
+   "Rückgängig" gezeigt. Ein echter Bestätigungsdialog bleibt nur dort,
+   wo etwas unwiederbringlich überschrieben wird.
+   ============================================================ */
+
+// Einheitliche Darstellung aller Symbole: eine Grösse, eine Strichstärke.
+const ICON = { size: 16, strokeWidth: 1.75, 'aria-hidden': true, focusable: 'false' };
+const ICON_SM = { size: 14, strokeWidth: 1.75, 'aria-hidden': true, focusable: 'false' };
+
+/* Ein Kontext für die gesamte Interaktionsschicht. Die Meldungen und
+   Dialoge werden aus tief verschachtelten Komponenten heraus gebraucht;
+   sie durch zehn Ebenen als Eigenschaften zu reichen wäre die schlechtere
+   Lösung. React-Bordmittel, kein Zustandsframework. */
+const UiContext = React.createContext(null);
+const NOOP_UI = {
+  toast: ()=>{},
+  dismissToast: ()=>{},
+  // Ausserhalb des Providers (Durchführungsfenster) nicht blockieren:
+  // die Rückgabe entspricht "abgebrochen".
+  askConfirm: async ()=>false,
+  askInput: async ()=>null,
+};
+function useUi(){ return useContext(UiContext) || NOOP_UI; }
+
+function ToastHost({ toasts, onDismiss }){
+  if (!toasts.length) return null;
+  return (
+    <div className="toastHost">
+      {/* Screenreader lesen Änderungen hier vor, ohne den Fokus zu stehlen. */}
+      <ol className="toastList" aria-live="polite" aria-relevant="additions" aria-label="Meldungen">
+        {toasts.map((t)=>(
+          <li key={t.id} className={`toast toast--${t.tone || 'info'}`}>
+            <span className="toastText">{t.text}</span>
+            {t.action ? (
+              <button
+                type="button"
+                className="toastAction"
+                onClick={()=>{ try { t.action.onAct?.(); } finally { onDismiss(t.id); } }}
+              >{t.action.label}</button>
+            ) : null}
+            <button
+              type="button"
+              className="toastClose"
+              aria-label="Meldung schließen"
+              onClick={()=>onDismiss(t.id)}
+            ><X {...ICON_SM} /></button>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/* Bestätigung nur für Unwiederbringliches. Der Knopf benennt die
+   Handlung, nicht "OK" – man soll lesen können, was gleich passiert. */
+function ConfirmDialog({ open, title, body, confirmLabel, tone = 'primary', onConfirm, onCancel }){
+  const confirmRef = useRef(null);
+  useEffect(()=>{ if (open) confirmRef.current?.focus(); }, [open]);
+  if (!open) return null;
+  return (
+    <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onCancel?.(); }}>
+      <div className="modalCard" role="alertdialog" aria-modal="true" aria-label={title}
+           onKeyDown={(e)=>{ if (e.key === 'Escape') onCancel?.(); }}>
+        <h3 className="dialogTitle">{title}</h3>
+        {body ? <p className="dialogBody">{body}</p> : null}
+        <div className="dialogActions">
+          <button type="button" className="btn" onClick={onCancel}>Abbrechen</button>
+          <button ref={confirmRef} type="button" className={`btn ${tone}`} onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Eingabe an Ort und Stelle ist nicht überall möglich (etwa beim Anlegen
+   aus einem Menü heraus) – dann dieses Feld statt window.prompt. */
+function PromptDialog({ open, title, label, placeholder, initialValue = '', confirmLabel = 'Übernehmen', onConfirm, onCancel }){
+  const [value, setValue] = useState(initialValue);
+  const inputRef = useRef(null);
+  useEffect(()=>{ if (open){ setValue(initialValue); setTimeout(()=>{ inputRef.current?.focus(); inputRef.current?.select(); }, 0);} }, [open, initialValue]);
+  if (!open) return null;
+  const submit = (e)=>{ e?.preventDefault?.(); const v = value.trim(); if (!v) return; onConfirm?.(v); };
+  return (
+    <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onCancel?.(); }}>
+      <form className="modalCard" onSubmit={submit} role="dialog" aria-modal="true" aria-label={title}
+            onKeyDown={(e)=>{ if (e.key === 'Escape') onCancel?.(); }}>
+        <h3 className="dialogTitle">{title}</h3>
+        <label className="small muted" htmlFor="promptDialogInput">{label}</label>
+        <input id="promptDialogInput" ref={inputRef} className="input" value={value}
+               placeholder={placeholder || ''} onChange={(e)=>setValue(e.target.value)} />
+        <div className="dialogActions">
+          <button type="button" className="btn" onClick={onCancel}>Abbrechen</button>
+          <button type="submit" className="btn primary" disabled={!value.trim()}>{confirmLabel}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* Leerzustand: eine Zeile, was hierhin gehört, und ein Knopf, der genau
+   das beginnt. Die Illustration gibt es bewusst nur an einer einzigen
+   Stelle (Bibliothek) – sonst wird aus dem Muster Dekoration. */
+function EmptyState({ text, actionLabel, onAction, illustration = false }){
+  return (
+    <div className={`emptyState${illustration ? ' emptyState--art' : ''}`}>
+      {illustration ? <img className="emptyStateArt" src={logo} alt="" aria-hidden="true" /> : null}
+      <p className="emptyStateText">{text}</p>
+      {actionLabel && onAction ? (
+        <button type="button" className="btn primary" onClick={onAction}>{actionLabel}</button>
+      ) : null}
+    </div>
+  );
+}
+
+/* Suchvergleich ohne Akzente: In einer App für den Französischunterricht
+   heissen Sequenzen "Le passé composé". Wer "passe" tippt, muss sie finden –
+   sonst ist die Palette für genau die Inhalte unbrauchbar, um die es geht. */
+function foldForSearch(str){
+  return String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/ß/g, 'ss')
+    .toLowerCase()
+    .trim();
+}
+
+/* ============================================================
+   Befehlspalette (Strg+K)
+
+   Vollständig über die Tastatur bedienbar: tippen filtert, Pfeiltasten
+   wählen, Eingabe führt aus, Escape schliesst. Die Liste bekommt sie
+   von aussen, damit sie nichts über den Aufbau der App wissen muss.
+   ============================================================ */
+function CommandPalette({ open, commands, onClose }){
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const inputRef = useRef(null);
+  const listRef = useRef(null);
+
+  useEffect(()=>{
+    if (!open) return;
+    setQuery('');
+    setActive(0);
+    const t = setTimeout(()=>inputRef.current?.focus(), 0);
+    return ()=> clearTimeout(t);
+  }, [open]);
+
+  const filtered = useMemo(()=>{
+    const q = foldForSearch(query);
+    if (!q) return commands.slice(0, 60);
+    const words = q.split(/\s+/);
+    return commands
+      .map((c)=>{
+        const hay = foldForSearch(`${c.label} ${c.group || ''} ${c.hint || ''}`);
+        if (!words.every(w => hay.includes(w))) return null;
+        // Treffer am Wortanfang zählen mehr als irgendwo mittendrin.
+        return { c, score: hay.startsWith(q) ? 0 : (foldForSearch(c.label).includes(q) ? 1 : 2) };
+      })
+      .filter(Boolean)
+      .sort((a,b)=> a.score - b.score)
+      .map(x => x.c)
+      .slice(0, 60);
+  }, [commands, query]);
+
+  useEffect(()=>{ setActive(0); }, [query]);
+  useEffect(()=>{
+    if (!open) return;
+    const el = listRef.current?.querySelector('[data-active="true"]');
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [active, open, filtered.length]);
+
+  if (!open) return null;
+
+  const run = (cmd)=>{ onClose(); setTimeout(()=>cmd?.run?.(), 0); };
+
+  const onKeyDown = (e)=>{
+    if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(i => Math.min(i + 1, filtered.length - 1)); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); setActive(i => Math.max(i - 1, 0)); return; }
+    if (e.key === 'Home') { e.preventDefault(); setActive(0); return; }
+    if (e.key === 'End') { e.preventDefault(); setActive(Math.max(0, filtered.length - 1)); return; }
+    if (e.key === 'Enter') { e.preventDefault(); run(filtered[active]); return; }
+  };
+
+  return (
+    <div className="modalOverlay paletteOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onClose(); }}>
+      <div className="paletteCard" role="dialog" aria-modal="true" aria-label="Befehlspalette">
+        <div className="paletteSearch">
+          <Search {...ICON} />
+          <input
+            ref={inputRef}
+            className="paletteInput"
+            value={query}
+            onChange={(e)=>setQuery(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Springen oder ausführen…"
+            aria-label="Befehl suchen"
+            aria-controls="paletteList"
+            aria-activedescendant={filtered[active] ? `paletteItem-${active}` : undefined}
+            role="combobox"
+            aria-expanded="true"
+            autoComplete="off"
+          />
+          <kbd className="paletteHint">Esc</kbd>
+        </div>
+        <ul className="paletteList" id="paletteList" role="listbox" ref={listRef}>
+          {filtered.length === 0 ? (
+            <li className="paletteEmpty">Kein Treffer für „{query}“.</li>
+          ) : filtered.map((c, i)=>(
+            <li
+              key={c.id}
+              id={`paletteItem-${i}`}
+              role="option"
+              aria-selected={i === active}
+              data-active={i === active ? 'true' : 'false'}
+              className={`paletteItem${i === active ? ' is-active' : ''}`}
+              onMouseEnter={()=>setActive(i)}
+              onMouseDown={(e)=>{ e.preventDefault(); run(c); }}
+            >
+              <span className="paletteLabel">{c.label}</span>
+              {c.group ? <span className="paletteGroup">{c.group}</span> : null}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 const THEME_CHOICES = ['light', 'dark', 'system'];
 const THEME_LABELS = { light: 'Hell', dark: 'Dunkel', system: 'System' };
 
@@ -1382,8 +1620,8 @@ export default function App(){
     if (!db) return;
     const ns = (newStartISO || '').trim();
     const ne = (newEndISO || '').trim();
-    if (!ns || !ne) { alert('Bitte Start- und Enddatum des neuen Schuljahres angeben.'); return; }
-    if (ne < ns) { alert('Das Enddatum muss nach dem Startdatum liegen.'); return; }
+    if (!ns || !ne) { showToast('Bitte Start- und Enddatum des neuen Schuljahres angeben.', { tone: 'warning' }); return; }
+    if (ne < ns) { showToast('Das Enddatum muss nach dem Startdatum liegen.', { tone: 'warning' }); return; }
 
     const nextDb = deepClone(db);
 
@@ -1596,6 +1834,143 @@ const classGroupSuggestions = useMemo(()=>{
     return ()=> mq.removeEventListener?.('change', onChange);
   }, []);
 
+  /* ---- Meldungen ------------------------------------------------------ */
+  const [toasts, setToasts] = useState([]);
+  const toastTimers = useRef(new Map());
+  const dismissToast = useCallback((id)=>{
+    const t = toastTimers.current.get(id);
+    if (t) { clearTimeout(t); toastTimers.current.delete(id); }
+    setToasts(prev => prev.filter(x => x.id !== id));
+  }, []);
+  const showToast = useCallback((text, opts = {})=>{
+    const id = uid();
+    const ttl = Number.isFinite(opts.ttl) ? opts.ttl : (opts.action ? 9000 : 5000);
+    setToasts(prev => [...prev.slice(-3), { id, text, tone: opts.tone, action: opts.action }]);
+    if (ttl > 0) toastTimers.current.set(id, setTimeout(()=>dismissToast(id), ttl));
+    return id;
+  }, [dismissToast]);
+  useEffect(()=>()=>{ toastTimers.current.forEach(clearTimeout); toastTimers.current.clear(); }, []);
+
+
+  /* ---- Rückgängig -----------------------------------------------------
+     Bewusst an diskrete Aktionen gebunden, nicht an persist(): persist
+     läuft bei jedem Tastenanschlag, ein Stapel daraus wäre wertlos.
+     Nur im Speicher, nicht persistiert.                                  */
+  const UNDO_LIMIT = 10;
+  const undoStack = useRef([]);
+  const captureUndo = useCallback((label, snapshot)=>{
+    undoStack.current = [...undoStack.current.slice(-(UNDO_LIMIT - 1)), { label, db: deepClone(snapshot) }];
+  }, []);
+  const undoLast = useCallback(()=>{
+    const entry = undoStack.current[undoStack.current.length - 1];
+    if (!entry) { showToast('Nichts zum Rückgängigmachen.'); return; }
+    undoStack.current = undoStack.current.slice(0, -1);
+    persist(entry.db);
+    showToast(`${entry.label} rückgängig gemacht.`);
+  }, [showToast, persist]);
+
+  /* Umkehrbare Aktion: ausführen, dann Rückgängig anbieten. */
+  const runUndoable = useCallback((label, snapshot, mutate)=>{
+    captureUndo(label, snapshot);
+    mutate();
+    showToast(label, { action: { label: 'Rückgängig', onAct: undoLast } });
+  }, [captureUndo, showToast, undoLast]);
+
+  /* ---- Dialoge -------------------------------------------------------- */
+  const [confirmState, setConfirmState] = useState(null);
+  // Versprechensbasiert, damit die Aufrufstellen so knapp bleiben wie mit
+  // window.confirm: const ok = await askConfirm({...}); if (!ok) return;
+  const askConfirm = useCallback((cfg)=> new Promise((resolve)=>{
+    setConfirmState({ ...cfg, onConfirm: ()=>resolve(true), onCancel: ()=>resolve(false) });
+  }), []);
+  const [promptState, setPromptState] = useState(null);
+  const askPrompt = useCallback((cfg)=> new Promise((resolve)=>{
+    setPromptState({ ...cfg, onConfirm: (v)=>resolve(v), onCancel: ()=>resolve(null) });
+  }), []);
+
+  // Strg+Z global. In Eingabefeldern hat die native Rücknahme Vorrang.
+  useEffect(()=>{
+    const onKey = (e)=>{
+      const z = (e.key === 'z' || e.key === 'Z');
+      if (!z || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      const el = e.target;
+      const tag = (el?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || el?.isContentEditable) return;
+      e.preventDefault();
+      undoLast();
+    };
+    window.addEventListener('keydown', onKey);
+    return ()=> window.removeEventListener('keydown', onKey);
+  }, [undoLast]);
+
+  /* ---- Befehlspalette ------------------------------------------------- */
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(()=>{
+    const onKey = (e)=>{
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen(v => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return ()=> window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const paletteCommands = useMemo(()=>{
+    const ws = view.weekStart || toISODate(startOfWeekMonday(new Date()));
+    const go = (v)=>()=> setView(v);
+    const cmds = [
+      { id:'v-week',     group:'Ansicht', label:'Wochenraster',        run: go({ name:'week', weekStart: ws }) },
+      { id:'v-macro',    group:'Ansicht', label:'Makro-Plan',          run: go({ name:'macro', weekStart: ws, startISO: ws, rangeDays: 28 }) },
+      { id:'v-year',     group:'Ansicht', label:'Jahresgrobplanung',   run: go({ name:'year', weekStart: ws, focusISO: ws }) },
+      { id:'v-library',  group:'Ansicht', label:'Bibliothek',          run: go({ name:'library', weekStart: ws }) },
+      { id:'v-calendar', group:'Ansicht', label:'Schulkalender',       run: go({ name:'calendar', weekStart: ws }) },
+      { id:'v-todos',    group:'Ansicht', label:'To-dos',              run: go({ name:'todos', weekStart: ws }) },
+      { id:'v-help',     group:'Ansicht', label:'Hilfe',               run: go({ name:'help', weekStart: ws }) },
+
+      { id:'w-prev',  group:'Woche', label:'Vorherige Woche', run: ()=>goWeekDelta(-1) },
+      { id:'w-next',  group:'Woche', label:'Nächste Woche',   run: ()=>goWeekDelta(1) },
+      { id:'w-today', group:'Woche', label:'Aktuelle Woche',  run: ()=>{
+          const t = toISODate(startOfWeekMonday(new Date()));
+          setView({ name:'week', weekStart: t }); setSelectedDate(toISODate(new Date()));
+        } },
+
+      { id:'a-undo',    group:'Aktion', label:'Rückgängig',            hint:'Strg+Z', run: undoLast },
+      { id:'a-seq',     group:'Aktion', label:'Sequenzen verwalten',   run: ()=>openSequenceManagerModal() },
+      { id:'a-copy',    group:'Aktion', label:'In nächste Woche übernehmen', run: ()=>setShowWeekCopyDialog(true) },
+      { id:'a-expback', group:'Aktion', label:'Backup exportieren',    run: ()=>exportBackup() },
+      { id:'a-impback', group:'Aktion', label:'Backup importieren',    run: ()=>importBackup() },
+
+      { id:'t-light',  group:'Darstellung', label:'Hell',   run: ()=>updateAppSettings({ theme:'light' }) },
+      { id:'t-dark',   group:'Darstellung', label:'Dunkel', run: ()=>updateAppSettings({ theme:'dark' }) },
+      { id:'t-system', group:'Darstellung', label:'System', run: ()=>updateAppSettings({ theme:'system' }) },
+    ];
+
+    // Sequenzen: direkt in den Makro-Plan springen und dort filtern.
+    for (const seq of Object.values(sequences || {})) {
+      if (!seq?.id) continue;
+      cmds.push({
+        id:`seq-${seq.id}`, group:'Sequenz', label: seq.name || 'Sequenz',
+        run: ()=> setView({ name:'macro', weekStart: ws, startISO: ws, rangeDays: 28, sequenceId: seq.id }),
+      });
+    }
+    // Lerngruppen aus den gespeicherten Farben ableiten – dort steht jede
+    // tatsächlich verwendete Kombination aus Klasse und Fach.
+    for (const key of Object.keys(db?.groupColors || {})) {
+      const [cls, subj] = String(key).split('||');
+      if (!cls || !subj) continue;
+      cmds.push({
+        id:`grp-${key}`, group:'Lerngruppe', label:`${cls} · ${subj}`,
+        run: ()=> setView({ name:'macro', weekStart: ws, startISO: ws, rangeDays: 28, groupQuery: `${cls} · ${subj}` }),
+      });
+    }
+    return cmds;
+  }, [view.weekStart, sequences, db?.groupColors, undoLast]);
+
+  const uiApi = useMemo(()=>({
+    toast: showToast, dismissToast, askConfirm, askInput: askPrompt,
+  }), [showToast, dismissToast, askConfirm, askPrompt]);
+
   const themeChoice = THEME_CHOICES.includes(appSettings?.theme) ? appSettings.theme : 'system';
   const darkActive = themeChoice === 'dark' || (themeChoice === 'system' && systemPrefersDark);
   // Vor dem Rendern der Kinder setzen: die Farbableitungen lesen diesen Wert.
@@ -1728,16 +2103,19 @@ useEffect(()=>{
     persist(nextDb);
   };
 
-  const deleteLessonAt = (weekStart, dayIndex, slotIndex) => {
+  // opts.silent: beim Ausschneiden wird die Stunde nur verschoben – dort
+  // wäre eine Lösch-Meldung mit "Rückgängig" irreführend.
+  const deleteLessonAt = (weekStart, dayIndex, slotIndex, opts = {}) => {
     const k = keyOf(dayIndex, slotIndex);
     try { draftLessonCacheRef.current.delete(`${weekStart}|${dayIndex}|${slotIndex}`); } catch {}
+    const before = db;
     const nextDb = deepClone(db);
     const w = nextDb.weeks?.[weekStart];
     if (!w || !w.lessons) return;
-    if (k in w.lessons) {
-      delete w.lessons[k];
-      persist(nextDb);
-    }
+    if (!(k in w.lessons)) return;
+    delete w.lessons[k];
+    if (opts.silent) { persist(nextDb); return; }
+    runUndoable('Stunde gelöscht', before, ()=>persist(nextDb));
   };
 
   // --- Stunden: Copy/Cut/Paste + Drag&Drop ---
@@ -1761,14 +2139,19 @@ useEffect(()=>{
     const l = normalizeLesson(deepClone(persisted));
     l.phases = normalizePhases((l.phases || []).map(p => ({ ...p, id: uid() })));
     setLessonClipboard({ lesson: l, source: { weekStart, dayIndex, slotIndex }, cut: true, copiedAt: Date.now() });
-    deleteLessonAt(weekStart, dayIndex, slotIndex);
+    deleteLessonAt(weekStart, dayIndex, slotIndex, { silent: true });
   };
 
-  const pasteLessonFromClipboard = (weekStart, dayIndex, slotIndex) => {
+  const pasteLessonFromClipboard = async (weekStart, dayIndex, slotIndex) => {
     if (!lessonClipboard?.lesson) return;
     const targetHas = !!(db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, slotIndex)]);
     if (targetHas) {
-      const ok = window.confirm('Zielstunde ist bereits belegt. Überschreiben?');
+      const ok = await askConfirm({
+        title: 'Zielstunde ist bereits belegt',
+        body: 'Die dort geplante Stunde wird durch den Inhalt der Zwischenablage ersetzt. Das lässt sich nicht rückgängig machen.',
+        confirmLabel: 'Überschreiben',
+        tone: 'danger',
+      });
       if (!ok) return;
     }
     const l = normalizeLesson(deepClone(lessonClipboard.lesson));
@@ -1777,7 +2160,7 @@ useEffect(()=>{
     if (lessonClipboard.cut) setLessonClipboard(null);
   };
 
-  const moveOrCopyLessonByDnd = ({ from, to, mode = 'move' }) => {
+  const moveOrCopyLessonByDnd = async ({ from, to, mode = 'move' }) => {
     const f = from || {};
     const t = to || {};
     if (!f.weekStart || !t.weekStart) return;
@@ -1817,7 +2200,12 @@ useEffect(()=>{
 
     if (mode === 'copy') {
       if (toW.lessons?.[toKey]) {
-        const ok = window.confirm('Zielstunde ist bereits belegt. Überschreiben?');
+        const ok = await askConfirm({
+          title: 'Zielstunde ist bereits belegt',
+          body: 'Die dort geplante Stunde wird durch die kopierte ersetzt. Das lässt sich nicht rückgängig machen.',
+          confirmLabel: 'Überschreiben',
+          tone: 'danger',
+        });
         if (!ok) return;
       }
       const cloned = normalizeLesson(deepClone(src));
@@ -1864,13 +2252,14 @@ useEffect(()=>{
   };
 
   const deleteDutyAt = (weekStart, dayIndex, pos) => {
+    const before = db;
     const key = `${dayIndex}-${pos}`;
     const nextDb = deepClone(db);
     const w = nextDb.weeks?.[weekStart];
     if (!w || !w.duties) return;
     if (key in w.duties) {
       delete w.duties[key];
-      persist(nextDb);
+      runUndoable('Aufsicht gelöscht', before, ()=>persist(nextDb));
     }
   };
 
@@ -1995,24 +2384,39 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
   setView({ name:'week', weekStart: nextStart });
 };
 
+  /* Bei Pfadangaben gehört ein Weg zur Datei an die Meldung – sonst muss
+     man sich den Pfad merken und ihn im Dateimanager nachbauen. */
+  const toastSavedPath = (text, pathStr) => {
+    showToast(text, {
+      tone: 'success',
+      action: api?.revealPath ? {
+        label: 'Ordner öffnen',
+        onAct: async ()=>{
+          const res = await api.revealPath(pathStr);
+          if (res && res.ok === false && res.error) showToast(`Konnte Ordner nicht öffnen: ${res.error}`, { tone: 'danger' });
+        },
+      } : null,
+    });
+  };
+
   const exportBackup = async () => {
     if (!api) {
-      alert('Backup-Export ist nur in der Desktop-App verfügbar.');
+      showToast('Backup-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
     const path = await api.exportBackup();
-    if (path) alert(`Backup gespeichert:\n${path}`);
+    if (path) toastSavedPath('Backup gespeichert.', path);
   };
 
   const importBackup = async () => {
     if (!api) {
-      alert('Backup-Import ist nur in der Desktop-App verfügbar.');
+      showToast('Backup-Import ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
     const imported = await api.importBackup();
     if (imported) {
       persist(ensureDbShape(imported));
-      alert('Backup importiert.');
+      showToast('Backup importiert.', { tone: 'success' });
     }
   };
 
@@ -2022,7 +2426,7 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     const n = String(name || '').trim();
     if (!n) {
       // Previously this failed silently and felt like "not allowed".
-      alert('Bitte einen Sequenznamen eingeben.');
+      showToast('Bitte einen Sequenznamen eingeben.', { tone: 'warning' });
       return null;
     }
     const nextDb = deepClone(db);
@@ -2042,6 +2446,7 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
   };
 
   const deleteSequence = (id) => {
+    const before = db;
     const nextDb = deepClone(db);
     if (!nextDb.sequences?.[id]) return;
     delete nextDb.sequences[id];
@@ -2054,7 +2459,7 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
         if (l?.sequenceId === id) w.lessons[k] = { ...l, sequenceId: '' };
       }
     }
-    persist(nextDb);
+    runUndoable('Sequenz gelöscht', before, ()=>persist(nextDb));
   };
 
   // --- Jahresgrobplanung (Orientierungs-Balken) ---
@@ -2062,17 +2467,17 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     const p = (payload && typeof payload === 'object') ? payload : {};
     const title = String(p.title || '').trim();
     if (!title) {
-      alert('Bitte einen Titel für den Balken eingeben.');
+      showToast('Bitte einen Titel für den Balken eingeben.', { tone: 'warning' });
       return null;
     }
     const startISO = String(p.startISO || '').trim();
     const endISO = String(p.endISO || '').trim();
     if (!startISO || !endISO) {
-      alert('Bitte Start- und Enddatum wählen.');
+      showToast('Bitte Start- und Enddatum wählen.', { tone: 'warning' });
       return null;
     }
     if (endISO < startISO) {
-      alert('Enddatum muss nach dem Startdatum liegen.');
+      showToast('Enddatum muss nach dem Startdatum liegen.', { tone: 'warning' });
       return null;
     }
 
@@ -2112,9 +2517,10 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
   };
 
   const deleteYearBar = (id) => {
+    const before = db;
     const nextDb = deepClone(db);
     nextDb.yearBars = (Array.isArray(nextDb.yearBars) ? nextDb.yearBars : []).filter(b => b?.id !== id);
-    persist(nextDb);
+    runUndoable('Balken gelöscht', before, ()=>persist(nextDb));
   };
 
   const rememberCompetency = (label) => {
@@ -2295,10 +2701,12 @@ const updateTodo = (id, patch) => {
 };
 
 const deleteTodo = (id) => {
+  const before = db;
   const nextDb = deepClone(db);
   const arr = Array.isArray(nextDb.todos) ? nextDb.todos : [];
+  if (!arr.some(t => t?.id === id)) return;
   nextDb.todos = arr.filter(t => t?.id !== id);
-  persist(nextDb);
+  runUndoable('To-do gelöscht', before, ()=>persist(nextDb));
 };
 
 
@@ -2324,7 +2732,7 @@ const deleteTodo = (id) => {
     }
     items.sort((a,b)=> (a.dateISO.localeCompare(b.dateISO) || (a.slotIndex-b.slotIndex)));
     if (items.length === 0) {
-      alert('In dieser Sequenz sind noch keine Stunden zugeordnet.');
+      showToast('In dieser Sequenz sind noch keine Stunden zugeordnet.', { tone: 'warning' });
       return null;
     }
 
@@ -2368,24 +2776,25 @@ const deleteTodo = (id) => {
   };
 
   const deleteTemplate = (templateId) => {
+    const before = db;
     const nextDb = deepClone(db);
     if (!nextDb.sequenceTemplates?.[templateId]) return;
     delete nextDb.sequenceTemplates[templateId];
-    persist(nextDb);
+    runUndoable('Vorlage gelöscht', before, ()=>persist(nextDb));
   };
 
   const exportTemplates = async () => {
-    if (!api) { alert('Export ist nur in der Desktop-App verfügbar.'); return; }
+    if (!api) { showToast('Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' }); return; }
     const path = await api.exportTemplates();
-    if (path) alert(`Sequenz-Vorlagen exportiert:\n${path}`);
+    if (path) toastSavedPath('Sequenz-Vorlagen exportiert.', path);
   };
 
   const importTemplates = async () => {
-    if (!api) { alert('Import ist nur in der Desktop-App verfügbar.'); return; }
+    if (!api) { showToast('Import ist nur in der Desktop-App verfügbar.', { tone: 'warning' }); return; }
     const importedDb = await api.importTemplates();
     if (importedDb) {
       persist(ensureDbShape(importedDb));
-      alert('Sequenz-Vorlagen importiert.');
+      showToast('Sequenz-Vorlagen importiert.', { tone: 'success' });
     }
   };
 
@@ -2403,12 +2812,12 @@ const deleteTodo = (id) => {
     const tpl = templates?.[templateId];
     if (!tpl) return { inserted: 0, missing: 0 };
     const group = (targetGroup || '').trim();
-    if (!group) { alert('Bitte Lerngruppe wählen.'); return { inserted: 0, missing: 0 }; }
+    if (!group) { showToast('Bitte Lerngruppe wählen.', { tone: 'warning' }); return { inserted: 0, missing: 0 }; }
     const subj = (subject || tpl.subject || '').trim();
-    if (!subj) { alert('Bitte Fach angeben.'); return { inserted: 0, missing: 0 }; }
+    if (!subj) { showToast('Bitte Fach angeben.', { tone: 'warning' }); return { inserted: 0, missing: 0 }; }
 
     const blueprints = Array.isArray(tpl.lessons) ? tpl.lessons : [];
-    if (blueprints.length === 0) { alert('Diese Vorlage enthält keine Stunden.'); return { inserted: 0, missing: 0 }; }
+    if (blueprints.length === 0) { showToast('Diese Vorlage enthält keine Stunden.', { tone: 'warning' }); return { inserted: 0, missing: 0 }; }
 
     const nextDb = deepClone(db);
     if (!nextDb.sequences) nextDb.sequences = {};
@@ -2484,11 +2893,11 @@ const deleteTodo = (id) => {
 
   const doExportPdf = async (html, suggestedName) => {
     if (!api) {
-      alert('PDF-Export ist nur in der Desktop-App verfügbar.');
+      showToast('PDF-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
     const saved = await api.exportPdf({ html, suggestedFileName: suggestedName });
-    if (saved) alert(`PDF gespeichert:\n${saved}`);
+    if (saved) toastSavedPath('PDF gespeichert.', saved);
   };
 
 
@@ -2496,12 +2905,12 @@ const doExportDocx = async (html, suggestedName) => {
   // Wir exportieren bewusst als .doc (HTML), weil das auf allen Word-Versionen
   // zuverlässig öffnet. ("echtes" .docx hatte bei manchen Systemen Probleme.)
   if (!api) {
-    alert('Word-Export ist nur in der Desktop-App verfügbar.');
+    showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
   const safe = String(suggestedName || 'Unterrichtsstunde.doc').replace(/\.docx$/i, '.doc');
   const saved = await api.exportDocx({ html, suggestedFileName: safe });
-  if (saved) alert(`Word-Datei gespeichert:\n${saved}`);
+  if (saved) toastSavedPath('Word-Datei gespeichert.', saved);
 };
 
   // Render main content in a readable way (avoids a very long nested ternary inside JSX,
@@ -2563,13 +2972,17 @@ const doExportDocx = async (html, suggestedName) => {
           onDeleteSequence={deleteSequence}
           onSaveSequenceAsTemplate={(sequenceId)=>{
             const seq = sequences?.[sequenceId];
-            const def = seq?.name || '';
-            const name = window.prompt('Name der Sequenz-Vorlage:', def);
-            if (!name) return;
-            const tid = createTemplateFromSequence(sequenceId, name);
-            if (tid) {
-              alert('Vorlage gespeichert. Du findest sie in der Bibliothek.');
-            }
+            askPrompt({
+              title: 'Sequenz als Vorlage speichern',
+              label: 'Name der Vorlage',
+              placeholder: 'z. B. Einführung Perfekt',
+              initialValue: seq?.name || '',
+              confirmLabel: 'Vorlage speichern',
+            }).then((name)=>{
+              if (!name) return;
+              const tid = createTemplateFromSequence(sequenceId, name);
+              if (tid) showToast('Vorlage gespeichert – du findest sie in der Bibliothek.');
+            });
           }}
           onRememberCompetency={rememberCompetency}
           onOpenLesson={(weekStart, dayIndex, slotIndex)=>{
@@ -2614,25 +3027,32 @@ const doExportDocx = async (html, suggestedName) => {
           onHideSubjectSuggestion={(label)=>hideSuggestion('subject', label)}
           onCreateTemplateFromSequence={(sequenceId)=>{
             const seq = sequences?.[sequenceId];
-            const name = window.prompt('Name der Sequenz-Vorlage:', seq?.name || '');
-            if (!name) return;
-            const tid = createTemplateFromSequence(sequenceId, name);
-            if (tid) alert('Vorlage gespeichert.');
+            askPrompt({
+              title: 'Sequenz als Vorlage speichern',
+              label: 'Name der Vorlage',
+              placeholder: 'z. B. Einführung Perfekt',
+              initialValue: seq?.name || '',
+              confirmLabel: 'Vorlage speichern',
+            }).then((name)=>{
+              if (!name) return;
+              const tid = createTemplateFromSequence(sequenceId, name);
+              if (tid) showToast('Vorlage gespeichert – du findest sie in der Bibliothek.');
+            });
           }}
           onDeleteTemplate={(id)=>{
             const t = templates?.[id];
-            if (window.confirm(`Vorlage "${t?.name || ''}" löschen?`)) deleteTemplate(id);
+            deleteTemplate(id);
           }}
           onExportTemplates={exportTemplates}
           onImportTemplates={importTemplates}
           onInsert={(payload)=>{
             const res = insertTemplateIntoPlan(payload);
             if (res.inserted > 0) {
-              alert(`Eingefügt: ${res.inserted} Stunde(n)${res.missing ? `\nNicht platziert: ${res.missing}` : ''}`);
+              showToast(`Eingefügt: ${res.inserted} Stunde(n)` + (res.missing ? ` · nicht platziert: ${res.missing}` : ''), { tone: 'success' });
               // Jump to macro plan around start
               setView({ name:'macro', weekStart: toISODate(startOfWeekMonday(fromISODate(payload.startISO))), startISO: payload.startISO, rangeDays: 28 });
             } else {
-              alert('Keine passenden Stundenplätze gefunden. Tipp: Stelle sicher, dass der Stundenplan (Klasse/Fach/Raum) in den Zielwochen bereits angelegt ist.');
+              showToast('Keine passenden Stundenplätze gefunden. Stelle sicher, dass der Stundenplan (Klasse/Fach/Raum) in den Zielwochen schon angelegt ist.', { tone: 'warning', ttl: 9000 });
             }
           }}
         />
@@ -2718,7 +3138,7 @@ const doExportDocx = async (html, suggestedName) => {
           if (api?.openExecutionWindow) {
             api.openExecutionWindow(snapshot);
           } else {
-            alert('Durchführungsansicht ist nur in der Desktop-App verfügbar.');
+            showToast('Durchführungsansicht ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
           }
         }}
         onDraftTopicChange={(t)=>{ lessonDraftTopicRef.current = String(t || ''); }}
@@ -2727,10 +3147,8 @@ const doExportDocx = async (html, suggestedName) => {
           setView({ name:'year', weekStart: view.weekStart, focusISO: String(focusISO || view.weekStart) });
         }}
         onDeleteLesson={() => {
-          if (window.confirm('Diese Stunde wirklich löschen?')) {
-            deleteLessonAt(view.weekStart, view.dayIndex, view.slotIndex);
-            setView({ ...lastMainView.current });
-          }
+          deleteLessonAt(view.weekStart, view.dayIndex, view.slotIndex);
+          setView({ ...lastMainView.current });
         }}
       />
     );
@@ -2743,6 +3161,7 @@ const doExportDocx = async (html, suggestedName) => {
   }
 
   return (
+    <UiContext.Provider value={uiApi}>
     <div className="app">
       <div className="topbar">
         <div className="row" style={{gap:10}}>
@@ -2765,7 +3184,7 @@ const doExportDocx = async (html, suggestedName) => {
 	
 	                setView(target);
               }}
-            >← Zurück</button>
+            ><ArrowLeft {...ICON} /> Zurück</button>
           ) : null}
           <img className="logo" src={logo} alt="Prép-ybara Logo" />
           <h1>Prép-ybara</h1>
@@ -2799,9 +3218,9 @@ const doExportDocx = async (html, suggestedName) => {
               <button className="btn" onClick={()=>setView({ name:'library', weekStart: view.weekStart })}>Bibliothek</button>
               <button className="btn" onClick={()=>setView({ name:'calendar', weekStart: view.weekStart })}>Schulkalender</button>
               <div className="weeknav" style={{display:'flex', gap:6, alignItems:'center'}}>
-                <button className="btn" title="Vorherige Woche" onClick={()=>goWeekDelta(-1)}>←</button>
+                <button className="btn" title="Vorherige Woche" aria-label="Vorherige Woche" onClick={()=>goWeekDelta(-1)}><ChevronLeft {...ICON} /></button>
                 <input className="input" style={{width:170}} type="date" min={minDate} max={maxDate} value={selectedDate} onChange={(e)=>onSelectWeekDate(e.target.value)} />
-                <button className="btn" title="Nächste Woche" onClick={()=>goWeekDelta(1)}>→</button>
+                <button className="btn" title="Nächste Woche" aria-label="Nächste Woche" onClick={()=>goWeekDelta(1)}><ChevronRight {...ICON} /></button>
               </div>
               <button className="btn" onClick={()=>setShowWeekCopyDialog(true)}>In nächste Woche übernehmen</button>
               <button className="btn" onClick={()=>exportBackup()}>Backup exportieren</button>
@@ -2828,6 +3247,31 @@ const doExportDocx = async (html, suggestedName) => {
 
       <SplashOverlay visible={splashVisible} />
       <EasterEggOverlay visible={easterEggVisible} />
+      <ToastHost toasts={toasts} onDismiss={dismissToast} />
+      <CommandPalette
+        open={paletteOpen}
+        commands={paletteCommands}
+        onClose={()=>setPaletteOpen(false)}
+      />
+      <ConfirmDialog
+        open={!!confirmState}
+        title={confirmState?.title || ''}
+        body={confirmState?.body || ''}
+        confirmLabel={confirmState?.confirmLabel || 'Fortfahren'}
+        tone={confirmState?.tone || 'primary'}
+        onCancel={()=>{ confirmState?.onCancel?.(); setConfirmState(null); }}
+        onConfirm={()=>{ const c = confirmState; setConfirmState(null); c?.onConfirm?.(); }}
+      />
+      <PromptDialog
+        open={!!promptState}
+        title={promptState?.title || ''}
+        label={promptState?.label || ''}
+        placeholder={promptState?.placeholder || ''}
+        initialValue={promptState?.initialValue || ''}
+        confirmLabel={promptState?.confirmLabel || 'Übernehmen'}
+        onCancel={()=>{ promptState?.onCancel?.(); setPromptState(null); }}
+        onConfirm={(v)=>{ const c = promptState; setPromptState(null); c?.onConfirm?.(v); }}
+      />
       <TodoReminderOverlay
         visible={todoReminderVisible}
         count={todosDueTodayCount}
@@ -2890,13 +3334,17 @@ const doExportDocx = async (html, suggestedName) => {
           autoCloseOnCreate={seqManagerModal.autoCloseOnCreate}
           onSaveAsTemplate={(id)=>{
             const seq = sequences?.[id];
-            const def = seq?.name || '';
-            const name = window.prompt('Name der Sequenz-Vorlage:', def);
-            if (!name) return;
-            const tid = createTemplateFromSequence(id, name);
-            if (tid) {
-              alert('Vorlage gespeichert. Du findest sie in der Bibliothek.');
-            }
+            askPrompt({
+              title: 'Sequenz als Vorlage speichern',
+              label: 'Name der Vorlage',
+              placeholder: 'z. B. Einführung Perfekt',
+              initialValue: seq?.name || '',
+              confirmLabel: 'Vorlage speichern',
+            }).then((name)=>{
+              if (!name) return;
+              const tid = createTemplateFromSequence(id, name);
+              if (tid) showToast('Vorlage gespeichert – du findest sie in der Bibliothek.');
+            });
           }}
           onExportPdfSequence={(id)=>{
             // re-use the same export logic as in Makro-Plan
@@ -2904,7 +3352,7 @@ const doExportDocx = async (html, suggestedName) => {
               const seq = sequences?.[id];
               if (!seq) return;
               if (typeof doExportPdf !== 'function') {
-                alert('PDF-Export ist nur in der Desktop-App verfügbar.');
+                showToast('PDF-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
                 return;
               }
 
@@ -2941,7 +3389,7 @@ const doExportDocx = async (html, suggestedName) => {
               const seq = sequences?.[id];
               if (!seq) return;
               if (typeof doExportDocx !== 'function') {
-                alert('Word-Export ist nur in der Desktop-App verfügbar.');
+                showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
                 return;
               }
 
@@ -2976,6 +3424,7 @@ const doExportDocx = async (html, suggestedName) => {
         />
       )}
     </div>
+    </UiContext.Provider>
   );
 }
 
@@ -3056,7 +3505,7 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
 
   const exportWeekPdf = () => {
     if (typeof onExportPdf !== 'function') {
-      alert('PDF-Export ist nur in der Desktop-App verfügbar.');
+      showToast('PDF-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
     const html = buildWeekPdfHtml({ weekStart, week, sequences, groupColors, schoolCalendar, duties: dutyMap });
@@ -3067,7 +3516,7 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
 
 const exportWeekDocx = () => {
   if (typeof onExportDocx !== 'function') {
-    alert('Word-Export ist nur in der Desktop-App verfügbar.');
+    showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
   const html = buildWeekPdfHtml({ weekStart, week, sequences, groupColors, schoolCalendar, duties: dutyMap });
@@ -3107,7 +3556,7 @@ const exportWeekDocx = () => {
               <div style={{fontWeight:700}}>{d}</div>
               <div className="muted small">{formatDateDE(dateISO)}</div>
               {tc ? (
-                <button className="todoHint" onClick={(e)=>{ e.stopPropagation(); if (onOpenTodos) onOpenTodos(); }} title="To-dos ansehen (Inhalt wird erst nach Klick gezeigt)">📝 {tc}</button>
+                <button className="todoHint" onClick={(e)=>{ e.stopPropagation(); if (onOpenTodos) onOpenTodos(); }} title="To-dos ansehen (Inhalt wird erst nach Klick gezeigt)"><NotebookPen {...ICON_SM} /> {tc}</button>
               ) : null}
               {label ? <span className="badge" style={{marginTop:4}}>{label}</span> : null}
             </div>
@@ -3185,13 +3634,13 @@ const exportWeekDocx = () => {
                               onClick={()=>onCopyLesson?.(dayIndex, slotIndex)}
                               title="Stunde kopieren (interne Zwischenablage)"
                               aria-label="Stunde kopieren"
-                            >📋</button>
+                            ><Copy {...ICON_SM} /></button>
                             <button
                               className="iconBtn cellTool"
                               onClick={()=>onCutLesson?.(dayIndex, slotIndex)}
                               title="Stunde ausschneiden (interne Zwischenablage)"
                               aria-label="Stunde ausschneiden"
-                            >✂️</button>
+                            ><Scissors {...ICON_SM} /></button>
                           </>
                         ) : null}
                         {lessonClipboard ? (
@@ -3200,7 +3649,7 @@ const exportWeekDocx = () => {
                             onClick={()=>onPasteLesson?.(dayIndex, slotIndex)}
                             title="Stunde einfügen"
                             aria-label="Stunde einfügen"
-                          >📌</button>
+                          ><ClipboardPaste {...ICON_SM} /></button>
                         ) : null}
 
                         {l ? (
@@ -3208,11 +3657,11 @@ const exportWeekDocx = () => {
                             className="iconBtn danger cellTool"
                             onClick={(e)=>{
                               e.stopPropagation();
-                              if (window.confirm('Stunde löschen?')) onDeleteLesson(dayIndex, slotIndex);
+                              onDeleteLesson(dayIndex, slotIndex);
                             }}
                             title="Stunde löschen"
                             aria-label="Stunde löschen"
-                          >🗑</button>
+                          ><Trash2 {...ICON_SM} /></button>
                         ) : null}
                       </div>
                     ) : null}
@@ -3259,7 +3708,7 @@ const exportWeekDocx = () => {
         }}
         onDelete={()=>{
           if (!dutyEditor) return;
-          if (window.confirm('Aufsicht löschen?')) onDeleteDuty?.(dutyEditor.dayIndex, dutyEditor.pos);
+          onDeleteDuty?.(dutyEditor.dayIndex, dutyEditor.pos);
           setDutyEditor(null);
         }}
       />
@@ -3304,6 +3753,10 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
   const setSchoolYear = (patch) => {
     onUpdate((prev)=>({ ...prev, schoolYear: { ...(prev.schoolYear||{startISO:'', endISO:''}), ...patch } }));
   };
+
+  const vacNameRef = useRef(null);
+  const freeNameRef = useRef(null);
+  const evNameRef = useRef(null);
 
   const addVacation = () => {
     const name = (newVac.name || '').trim() || 'Ferien';
@@ -3525,7 +3978,13 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
         </div>
         <div style={{height:10}} />
         <div className="calendarList">
-          {vacations.length === 0 ? <div className="muted small">Noch keine Ferien eingetragen.</div> : vacations.map(v => (
+          {vacations.length === 0 ? (
+            <EmptyState
+              text="Hier stehen die Ferienzeiten deines Bundeslandes. Eingetragene Ferien werden im Wochenraster und im Makro-Plan gekennzeichnet."
+              actionLabel="Ferien eintragen"
+              onAction={()=>vacNameRef.current?.focus()}
+            />
+          ) : vacations.map(v => (
             <div key={v.id} className="calendarRow">
               <input className="input" value={v.name || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, vacations: (prev.vacations||[]).map(x=>x.id===v.id?{...x, name:e.target.value}:x) }))} />
               <input className="input" type="date" value={v.startISO || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, vacations: (prev.vacations||[]).map(x=>x.id===v.id?{...x, startISO:e.target.value}:x) }))} />
@@ -3549,7 +4008,13 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
         </div>
         <div style={{height:10}} />
         <div className="calendarList">
-          {freeDays.length === 0 ? <div className="muted small">Noch keine schulfreien Tage eingetragen.</div> : freeDays.map(f => (
+          {freeDays.length === 0 ? (
+            <EmptyState
+              text="Einzelne unterrichtsfreie Tage – bewegliche Ferientage, Feiertage, pädagogische Tage."
+              actionLabel="Schulfreien Tag eintragen"
+              onAction={()=>freeNameRef.current?.focus()}
+            />
+          ) : freeDays.map(f => (
             <div key={f.id} className="calendarRow2">
               <input className="input" value={f.name || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, freeDays: (prev.freeDays||[]).map(x=>x.id===f.id?{...x, name:e.target.value}:x) }))} />
               <input className="input" type="date" value={f.dateISO || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, freeDays: (prev.freeDays||[]).map(x=>x.id===f.id?{...x, dateISO:e.target.value}:x) }))} />
@@ -3574,7 +4039,13 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
         </div>
         <div style={{height:10}} />
         <div className="calendarList">
-          {events.length === 0 ? <div className="muted small">Noch keine Termine eingetragen.</div> : events.map(ev => (
+          {events.length === 0 ? (
+            <EmptyState
+              text="Termine wie Elternabende, Konferenzen oder Klassenfahrten. Sie erscheinen als Hinweis im Wochenraster."
+              actionLabel="Termin eintragen"
+              onAction={()=>evNameRef.current?.focus()}
+            />
+          ) : events.map(ev => (
             <div key={ev.id} className="calendarRow3">
               <input className="input" value={ev.name || ev.summary || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, events: (prev.events||[]).map(x=>x.id===ev.id?{...x, name:e.target.value}:x) }))} />
               <input className="input" type="date" value={ev.dateISO || ev.startISO || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, events: (prev.events||[]).map(x=>x.id===ev.id?{...x, dateISO:e.target.value}:x) }))} />
@@ -3701,6 +4172,7 @@ function LessonView({
   yearBars,
   onOpenYearPlan,
 }){
+  const ui = useUi();
   const normalizeForLocal = (l) => ({
     ...l,
     sequenceId: l.sequenceId || '',
@@ -3919,7 +4391,7 @@ const gColor = useMemo(()=>{
 
   const addLessonFiles = async () => {
     if (!api) {
-      alert('Dateien anhängen ist nur in der Desktop-App verfügbar.');
+      ui.toast('Dateien anhängen ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
     const picked = await api.pickFiles({ multi: true });
@@ -3945,7 +4417,7 @@ const gColor = useMemo(()=>{
           mode = 'copy';
         }
         if (res?.errors?.length) {
-          alert(`Achtung: ${res.errors.length} Datei(en) konnten nicht kopiert werden.`);
+          ui.toast(`${res.errors.length} Datei(en) konnten nicht kopiert werden.`, { tone: 'danger' });
         }
       } catch {}
     }
@@ -3983,13 +4455,13 @@ const gColor = useMemo(()=>{
   const openFile = async (pathStr) => {
     if (!api) return;
     const res = await api.openPath(pathStr);
-    if (res && res.ok === false && res.error) alert(`Konnte Datei nicht öffnen: ${res.error}`);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Datei nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const revealFile = async (pathStr) => {
     if (!api) return;
     const res = await api.revealPath(pathStr);
-    if (res && res.ok === false && res.error) alert(`Konnte Ordner nicht öffnen: ${res.error}`);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Ordner nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const openLibraryRoot = async () => {
@@ -3997,7 +4469,7 @@ const gColor = useMemo(()=>{
     const root = await api.getLibraryRoot();
     if (!root) return;
     const res = await api.openPath(root);
-    if (res && res.ok === false && res.error) alert(`Konnte Ablage nicht öffnen: ${res.error}`);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Ablage nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const setPhases = (nextPhases) => {
@@ -4043,7 +4515,7 @@ const gColor = useMemo(()=>{
 
 const exportDocx = () => {
   if (typeof onExportDocx !== 'function') {
-    alert('Word-Export ist nur in der Desktop-App verfügbar.');
+    showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
   const html = buildLessonPdfHtml({ title: lessonTitle, dateISO, dayIndex, slotIndex, schoolCalendar, lesson: local });
@@ -4053,7 +4525,7 @@ const exportDocx = () => {
 
   const startExecution = () => {
     if (typeof onOpenExecution !== 'function') {
-      alert('Durchführungsansicht ist nur in der Desktop-App verfügbar.');
+      showToast('Durchführungsansicht ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
 
@@ -4095,10 +4567,10 @@ const exportDocx = () => {
           <div className="muted small">{lessonTitle}</div>
           {(dayInfo.vac || dayInfo.fd || (dayInfo.evs && dayInfo.evs.length)) ? (
             <div className="row wrap" style={{gap:6, marginTop:6}}>
-              {dayInfo.vac ? <span className="badge badge--vacation">🏖 Ferien: {dayInfo.vac.name || ''}</span> : null}
-              {dayInfo.fd ? <span className="badge badge--dayoff">🚫 Schulfrei: {dayInfo.fd.name || ''}</span> : null}
+              {dayInfo.vac ? <span className="badge badge--vacation"><Palmtree {...ICON_SM} /> Ferien: {dayInfo.vac.name || ''}</span> : null}
+              {dayInfo.fd ? <span className="badge badge--dayoff"><Ban {...ICON_SM} /> Schulfrei: {dayInfo.fd.name || ''}</span> : null}
               {(dayInfo.evs || []).slice(0,2).map(ev => (
-                <span key={ev.id} className="badge">📌 {ev.name || ev.summary || 'Termin'}</span>
+                <span key={ev.id} className="badge"><CalendarDays {...ICON_SM} /> {ev.name || ev.summary || 'Termin'}</span>
               ))}
               {(dayInfo.evs && dayInfo.evs.length > 2) ? <span className="badge">+{dayInfo.evs.length-2} Termine</span> : null}
             </div>
@@ -4148,7 +4620,7 @@ const exportDocx = () => {
       : { background: 'repeating-linear-gradient(45deg, var(--bg-subtle), var(--bg-subtle) 6px, var(--card) 6px, var(--card) 12px)' }}
     onClick={(e)=>{
       e.stopPropagation();
-      if (!gKey) { alert('Bitte zuerst Fach + Klasse/Kurs setzen, um eine Lerngruppen-Farbe festzulegen.'); return; }
+      if (!gKey) { ui.toast('Bitte zuerst Fach + Klasse/Kurs setzen, um eine Lerngruppen-Farbe festzulegen.', { tone: 'warning' }); return; }
       onOpenGroupColorPalette?.(gKey, `${local.classGroup} · ${local.subject}`.trim());
     }}
     title={gKey ? 'Lerngruppen-Farbe ändern (gilt für das ganze Schuljahr)' : 'Bitte zuerst Fach + Klasse/Kurs setzen'}
@@ -4365,7 +4837,11 @@ const exportDocx = () => {
               <div style={{height:10}} />
 
               {lessonLinks.length === 0 ? (
-                <div className="muted small">Noch keine Links hinterlegt.</div>
+                <EmptyState
+                  text="Verweise auf Material im Netz oder auf Ablagen – sie bleiben an dieser Stunde gespeichert."
+                  actionLabel="Link hinzufügen"
+                  onAction={addLink}
+                />
               ) : (
                 <div style={{display:'flex', flexDirection:'column', gap:8}}>
                   {lessonLinks.map(l => (
@@ -4446,7 +4922,11 @@ const exportDocx = () => {
             )}
 
             {lessonFiles.length === 0 ? (
-              <div className="muted small">Noch keine Dateien an dieser Einzelstunde.</div>
+              <EmptyState
+                text="Arbeitsblätter, Folien oder Hörtexte, die zu dieser Stunde gehören."
+                actionLabel="Datei hinzufügen"
+                onAction={addLessonFiles}
+              />
             ) : (
               <div style={{display:'flex', flexDirection:'column', gap:8}}>
                 {lessonFiles.map(f => (
@@ -4600,7 +5080,7 @@ function MacroView({
     const seq = sequences?.[sequenceId];
     if (!seq) return;
     if (typeof onExportPdf !== 'function') {
-      alert('PDF-Export ist nur in der Desktop-App verfügbar.');
+      showToast('PDF-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
 
@@ -4637,7 +5117,7 @@ const exportSequenceDocx = (sequenceId) => {
   const seq = sequences?.[sequenceId];
   if (!seq) return;
   if (typeof onExportDocx !== 'function') {
-    alert('Word-Export ist nur in der Desktop-App verfügbar.');
+    showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
 
@@ -4789,17 +5269,17 @@ const exportSequenceDocx = (sequenceId) => {
                               className="iconBtn danger"
                               onClick={(e)=>{
                                 e.stopPropagation();
-                                if (window.confirm('Stunde löschen?')) onDeleteLessonAt(o.weekStart, o.dayIndex, o.slotIndex);
+                                onDeleteLessonAt(o.weekStart, o.dayIndex, o.slotIndex);
                               }}
                               title="Stunde löschen"
                               aria-label="Stunde löschen"
-                            >🗑</button>
+                            ><Trash2 {...ICON_SM} /></button>
                           </div>
 
                           <div className="macroTopic">{topic}</div>
 
                           <div className="row wrap" style={{gap:6}}>
-                            {seq ? <span className="pill" style={{borderColor: seq.color, color: seq.color}}>🟦 {seq.name}</span> : <span className="pill">Ohne Sequenz</span>}
+                            {seq ? <span className="pill" style={{borderColor: lineColor(seq.color), color: lineColor(seq.color)}}><Square {...ICON_SM} fill="currentColor" /> {seq.name}</span> : <span className="pill">Ohne Sequenz</span>}
                             {comp ? <span className="pill">Kompetenz: {comp}</span> : <span className="pill">Kompetenz: —</span>}
                           </div>
                         </div>
@@ -4938,7 +5418,7 @@ function YearPlanView({
 
   const startCreate = () => {
     if (!syStart || !syEnd) {
-      alert('Bitte zuerst im Schulkalender das Schuljahr (Start/Ende) setzen.');
+      showToast('Bitte zuerst im Schulkalender das Schuljahr (Start/Ende) setzen.', { tone: 'warning' });
       return;
     }
     const startISO = normalizeToWeek(view?.focusISO || syStart);
@@ -5154,10 +5634,8 @@ function YearPlanView({
           }}
           onDelete={()=>{
             if (modal.mode !== 'edit') return;
-            if (window.confirm('Diesen Balken löschen?')) {
-              onDeleteBar?.(modal.bar.id);
-              setModal({ open:false, mode:'create', bar:null });
-            }
+            onDeleteBar?.(modal.bar.id);
+            setModal({ open:false, mode:'create', bar:null });
           }}
         />
       )}
@@ -5358,7 +5836,10 @@ function SequenceLibraryView({
 
       <div className="templateGrid">
         {list.length === 0 ? (
-          <div className="muted small">Noch keine Vorlagen gespeichert. Tipp: Lege im Makro‑Plan eine Sequenz an und speichere sie als Vorlage.</div>
+          <EmptyState
+            illustration
+            text="Vorlagen sind Sequenzen, die du wiederverwenden kannst – einmal geplant, in jedem Jahrgang wieder einsetzbar. Lege im Makro-Plan eine Sequenz an und speichere sie als Vorlage."
+          />
         ) : list.map(t => (
           <div key={t.id} className="templateCard">
             <div className="row" style={{justifyContent:'space-between', alignItems:'flex-start', gap:10}}>
@@ -5503,6 +5984,7 @@ function SequenceManager({
   afterCreate,
   autoCloseOnCreate = false,
 }){
+  const ui = useUi();
   const [newName, setNewName] = useState('');
   const newNameRef = useRef(null);
   const canAdd = (newName || '').trim().length > 0;
@@ -5522,7 +6004,7 @@ function SequenceManager({
     const root = await api.getLibraryRoot();
     if (!root) return;
     const res = await api.openPath(root);
-    if (res && res.ok === false && res.error) alert(`Konnte Ablage nicht öffnen: ${res.error}`);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Ablage nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const fileCopyOptIn = Boolean(appSettings?.fileCopyOptIn);
@@ -5557,7 +6039,7 @@ function SequenceManager({
   const addSeqFiles = async () => {
     if (!filesSeqId) return;
     if (!api) {
-      alert('Dateien anhängen ist nur in der Desktop-App verfügbar.');
+      ui.toast('Dateien anhängen ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
     const picked = await api.pickFiles({ multi: true });
@@ -5581,7 +6063,7 @@ function SequenceManager({
         }
         if (res?.errors?.length) {
           // Zeige nur eine knappe Meldung; Details bleiben in res.
-          alert(`Achtung: ${res.errors.length} Datei(en) konnten nicht kopiert werden.`);
+          ui.toast(`${res.errors.length} Datei(en) konnten nicht kopiert werden.`, { tone: 'danger' });
         }
       } catch {}
     }
@@ -5620,13 +6102,13 @@ function SequenceManager({
   const openFile = async (pathStr) => {
     if (!api) return;
     const res = await api.openPath(pathStr);
-    if (res && res.ok === false && res.error) alert(`Konnte Datei nicht öffnen: ${res.error}`);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Datei nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const revealFile = async (pathStr) => {
     if (!api) return;
     const res = await api.revealPath(pathStr);
-    if (res && res.ok === false && res.error) alert(`Konnte Ordner nicht öffnen: ${res.error}`);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Ordner nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   return (
@@ -5707,7 +6189,11 @@ function SequenceManager({
               <div style={{height:12}} />
 
               {seqFiles.length === 0 ? (
-                <div className="muted small">Noch keine Dateien hinterlegt.</div>
+                <EmptyState
+                  text="Material, das für die ganze Sequenz gilt – nicht nur für eine einzelne Stunde."
+                  actionLabel="Dateien hinzufügen"
+                  onAction={addSeqFiles}
+                />
               ) : (
                 <div style={{display:'flex', flexDirection:'column', gap:8}}>
                   {seqFiles.map(f => (
@@ -5737,7 +6223,11 @@ function SequenceManager({
 
         <div className="seqList">
           {list.length === 0 ? (
-            <div className="muted small">Noch keine Sequenzen angelegt.</div>
+            <EmptyState
+              text="Eine Sequenz fasst die Stunden zu einem Thema zusammen und zeigt dir, wo du darin stehst."
+              actionLabel="Sequenz anlegen"
+              onAction={()=>newNameRef.current?.focus()}
+            />
           ) : list.map(s => (
             <div key={s.id} className="seqRow">
               <input
@@ -5763,7 +6253,7 @@ function SequenceManager({
               }} title="Sequenz als Word speichern"><img src={wordIcon} alt="" className="btnIcon" />Word</button>
               <button className="btn" onClick={()=>openSeqFiles(s.id)} title="Dateien für diese Sequenz hinterlegen (nur Verweise, nicht exportiert)">Dateien</button>
               <button className="btn danger" onClick={()=>{
-                if (window.confirm(`Sequenz "${s.name}" löschen? (Zuordnungen werden entfernt)`)) onDelete(s.id);
+                onDelete(s.id);
               }}>Löschen</button>
             </div>
           ))}
@@ -5951,7 +6441,8 @@ function TypeaheadInput({
   placeholder,
   autoFocus,
   wrapStyle,
-  inputStyle
+  inputStyle,
+  inputRef
 }){
   const closeTimer = useRef(null);
   const [open, setOpen] = useState(false);
@@ -5994,6 +6485,7 @@ function TypeaheadInput({
   return (
     <div className="typeaheadWrap" style={wrapStyle}>
       <input
+        ref={inputRef}
         className="input"
         style={inputStyle}
         autoFocus={autoFocus}
@@ -6038,7 +6530,7 @@ function TypeaheadInput({
                     onHideSuggestion?.(label);
                   }}
                 >
-                  ✕
+                  <X {...ICON_SM} />
                 </button>
               </div>
             );
@@ -6132,7 +6624,7 @@ function RichTextEditor({ value, onChange, placeholder = '' }){
           try { ref.current?.focus(); } catch {}
         }}
       >
-        ✎
+        <Pencil {...ICON_SM} />
       </button>
 
       {showTools ? (
@@ -6200,6 +6692,7 @@ function ClassGroupInput({ value, suggestions, onChange, onCommit, onHideSuggest
 }
 
 function SequenceSelect({ sequences, value, onChange, onCreate, onRequestCreateSequence }){
+  const ui = useUi();
   const list = Object.values(sequences || {}).sort((a,b)=> (a.name||'').localeCompare(b.name||''));
   return (
     <select
@@ -6215,12 +6708,17 @@ function SequenceSelect({ sequences, value, onChange, onCreate, onRequestCreateS
             }, { autoCloseOnCreate: true });
             return;
           }
-          // Fallback (should rarely happen): prompt-based creation
-          const name = window.prompt('Name der neuen Unterrichtssequenz:');
-          if (name && onCreate) {
+          // Rückfallweg, falls kein Sequenz-Manager gereicht wurde.
+          ui.askInput({
+            title: 'Neue Unterrichtssequenz',
+            label: 'Name der Sequenz',
+            placeholder: 'z. B. Le passé composé',
+            confirmLabel: 'Sequenz anlegen',
+          }).then((name)=>{
+            if (!name || !onCreate) return;
             const createdId = onCreate(name);
             if (createdId) onChange?.(createdId);
-          }
+          });
           return;
         }
         onChange?.(v);
@@ -6251,6 +6749,7 @@ function CompetencyPrimaryInput({ value, suggestions, onChange, onCommit, onHide
 
 
 function CompetencyEditor({ competencies, primary, suggestions, onChange, onRemember, onHideSuggestion }){
+  const competencyInputRef = useRef(null);
   const [draft, setDraft] = useState('');
   const id = useMemo(()=> `ct-${Math.random().toString(16).slice(2)}`, []);
 
@@ -6291,6 +6790,7 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
       <div className="row wrap" style={{gap:8}}>
         <div style={{flex:1}}>
           <TypeaheadInput
+            inputRef={competencyInputRef}
             value={draft}
             suggestions={suggestions}
             onChange={setDraft}
@@ -6308,13 +6808,17 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
 
       <div className="tagRow">
         {(competencies || []).length === 0 ? (
-          <span className="muted small">Noch keine Kompetenzen eingetragen.</span>
+          <EmptyState
+            text="Welche Kompetenzen diese Stunde bedient. Eine davon lässt sich als primär markieren – das taucht später in der Jahresübersicht auf."
+            actionLabel="Kompetenz hinzufügen"
+            onAction={()=>competencyInputRef.current?.focus()}
+          />
         ) : (
           (competencies || []).map((c)=>(
             <span key={c} className={c === primary ? 'tag tagPrimary' : 'tag'}>
-              <button className="tagBtn" onClick={()=>setAsPrimary(c)} title="Als primär markieren">★</button>
+              <button className="tagBtn" onClick={()=>setAsPrimary(c)} title="Als primär markieren"><Star {...ICON_SM} /></button>
               <span className="tagText">{c}</span>
-              <button className="tagBtn" onClick={()=>remove(c)} title="Entfernen">✕</button>
+              <button className="tagBtn" onClick={()=>remove(c)} title="Entfernen"><X {...ICON_SM} /></button>
             </span>
           ))
         )}
@@ -6468,7 +6972,7 @@ function SchoolYearRolloverDialog({
               }
             </div>
           </div>
-          <button className="btn" onClick={onClose} title="Schließen">✕</button>
+          <button className="btn" onClick={onClose} title="Schließen" aria-label="Schließen"><X {...ICON} /></button>
         </div>
 
         <div className="box" style={{marginTop:12}}>
@@ -6541,22 +7045,15 @@ function WeekCopyDialog({ visible, onClose, onConfirm, weekTodosCount = 0, futur
 
   if (!visible) return null;
 
-  const submit = () => {
-    if (!copyTodos && futureWeekTodosCount > 0){
-      const ok = window.confirm(
-        `Du hast ${futureWeekTodosCount} To-do(s) in dieser Woche mit Datum/Deadline NACH dieser Woche.
-
-Sollen sie wirklich NICHT in die nächste Woche übernommen werden?`
-      );
-      if (!ok) return;
-    }
-    onConfirm?.({ copyTodos, shiftTodoDates, copyDuties });
-  };
+  // Der Hinweis zu späteren To-dos steht unten im Dialog und wird deutlicher,
+  // sobald sie tatsächlich wegfallen. Eine zusätzliche Rückfrage würde dieselbe
+  // Information ein zweites Mal stellen – und das aus einem offenen Dialog heraus.
+  const submit = () => onConfirm?.({ copyTodos, shiftTodoDates, copyDuties });
 
   return (
     <div className="modalOverlay" role="dialog" aria-modal="true">
       <div className="modalCard">
-        <div style={{fontWeight:900, fontSize:16}}>In nächste Woche übernehmen</div>
+        <h3 className="dialogTitle">In nächste Woche übernehmen</h3>
         <div className="muted small" style={{marginTop:6}}>
           Es werden nur <b>Klasse/Kurs, Fach und Raum</b> übernommen – keine Themen, Ziele, Phasen, Notizen oder Sequenz-Zuordnung.
         </div>
@@ -6576,9 +7073,15 @@ Sollen sie wirklich NICHT in die nächste Woche übernommen werden?`
         </label>
 
         {futureWeekTodosCount ? (
-          <div className="muted small" style={{marginLeft:24, marginTop:6}}>
-            Hinweis: {futureWeekTodosCount} To-do(s) haben ein Datum/Deadline <b>nach</b> dieser Woche. Diese werden beim Kopieren nicht automatisch „mit verschoben“.
-          </div>
+          copyTodos ? (
+            <div className="muted small" style={{marginLeft:24, marginTop:6}}>
+              Hinweis: {futureWeekTodosCount} To-do(s) haben ein Datum/Deadline <b>nach</b> dieser Woche. Diese werden beim Kopieren nicht automatisch „mit verschoben“.
+            </div>
+          ) : (
+            <div className="inlineNotice inlineNotice--warning" style={{marginLeft:24, marginTop:6}}>
+              {futureWeekTodosCount} To-do(s) haben ein Datum/Deadline <b>nach</b> dieser Woche und werden <b>nicht</b> übernommen. Setze den Haken darüber, wenn du sie mitnehmen willst.
+            </div>
+          )
         ) : null}
 
         {copyTodos ? (
@@ -6710,7 +7213,7 @@ function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onB
               />
               <span className="muted">Woche</span>
             </label>
-            <button className="iconBtn danger" onClick={()=>onDeleteTodo?.(t.id)} title="To-do löschen">🗑</button>
+            <button className="iconBtn danger" onClick={()=>onDeleteTodo?.(t.id)} title="To-do löschen"><Trash2 {...ICON_SM} /></button>
           </div>
         ))}
       </div>

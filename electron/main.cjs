@@ -48,7 +48,19 @@ function defaultDB() {
   };
 }
 
-function getDB() {
+/* Zwischenspeicher mit verzögertem Schreiben.
+
+   Ohne ihn kostete jede Änderung ein vollständiges Neuschreiben der
+   Store-Datei (bei 40 Wochen à 50 Stunden rund 4,3 MB), und der Renderer
+   wartete darauf. Jetzt gilt die Änderung sofort im Speicher; auf die
+   Platte geht sie gebündelt kurz danach. Beim Beenden wird in jedem Fall
+   noch geschrieben, damit nichts verloren geht. */
+const FLUSH_DELAY_MS = 600;
+let cachedDb = null;
+let flushTimer = null;
+let dirty = false;
+
+function readStoredDb() {
   if (store.has('db')) return store.get('db');
   if (legacyStore.has('db')) {
     const legacy = legacyStore.get('db');
@@ -58,9 +70,34 @@ function getDB() {
   return defaultDB();
 }
 
-function setDB(db) {
-  store.set('db', db);
+function getDB() {
+  if (cachedDb === null) cachedDb = readStoredDb();
+  return cachedDb;
 }
+
+function flushDB() {
+  if (!dirty || cachedDb === null) return;
+  dirty = false;
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  try { store.set('db', cachedDb); }
+  catch (e) { console.error('[store] Schreiben fehlgeschlagen:', e?.message || e); dirty = true; throw e; }
+}
+
+function scheduleFlush() {
+  dirty = true;
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = setTimeout(()=>{ flushTimer = null; try { flushDB(); } catch {} }, FLUSH_DELAY_MS);
+}
+
+function setDB(db) {
+  cachedDb = db;
+  scheduleFlush();
+}
+
+// Beim Beenden auf jeden Fall schreiben.
+app.on('before-quit', ()=>{ try { flushDB(); } catch {} });
+app.on('will-quit', ()=>{ try { flushDB(); } catch {} });
+process.on('exit', ()=>{ try { flushDB(); } catch {} });
 
 function attachDebugLogging(win) {
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
@@ -478,7 +515,33 @@ ipcMain.handle('db:set', async (_evt, db) => {
   return true;
 });
 
+/* Teilschreibvorgang: nur geänderte Wochen und, falls nötig, der Rest.
+   Der Renderer schickt damit nicht mehr die vollständige Datenbank über
+   die Prozessgrenze, sobald irgendwo ein Zeichen getippt wird. Die Ablage
+   selbst bleibt unverändert – es wird derselbe 'db'-Eintrag gepflegt, nur
+   gezielt statt als Ganzes ersetzt. */
+ipcMain.handle('db:patch', async (_evt, patch) => {
+  const p = (patch && typeof patch === 'object') ? patch : {};
+  const db = getDB() || defaultDB();
+  if (!db.weeks || typeof db.weeks !== 'object') db.weeks = {};
+
+  if (p.meta && typeof p.meta === 'object') {
+    // Wochen bleiben unberührt; alles andere wird ersetzt.
+    const { weeks: _ignored, ...rest } = p.meta;
+    for (const key of Object.keys(rest)) db[key] = rest[key];
+  }
+  if (p.weeks && typeof p.weeks === 'object') {
+    for (const [key, value] of Object.entries(p.weeks)) db.weeks[key] = value;
+  }
+  if (Array.isArray(p.removedWeeks)) {
+    for (const key of p.removedWeeks) delete db.weeks[key];
+  }
+  setDB(db);
+  return { ok: true };
+});
+
 ipcMain.handle('backup:export', async () => {
+  try { flushDB(); } catch {}
   const db = getDB();
   const stamp = new Date().toISOString().slice(0, 10);
   const content = JSON.stringify(db, null, 2);

@@ -4,10 +4,11 @@ import eastereggImg from './assets/easteregg.webp';
 import wordIcon from './assets/word-icon.svg';
 import pdfIcon from './assets/pdf-icon.svg';
 import helpMd from './assets/HELP.md?raw';
+import platform, { capabilities } from './platform/index.js';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronLeft, ChevronRight,
-  ClipboardPaste, Copy, NotebookPen, Palmtree, Pencil, Scissors, Search, Square, Star, Trash2, X,
+  ClipboardPaste, Copy, NotebookPen, Palmtree, Pencil, Play, Scissors, Search, Square, Star, Trash2, X,
 } from 'lucide-react';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
@@ -324,7 +325,7 @@ function bgFromProgress(progress){
   return isDarkMode() ? `hsla(${hue}, 22%, 21%, 1)` : `hsla(${hue}, 55%, 93%, 1)`;
 }
 
-function ExecutionWindow({ api }){
+function ExecutionWindow(){
   const [snapshot, setSnapshot] = useState(null);
   const [idx, setIdx] = useState(0);
   const [remainingSec, setRemainingSec] = useState(0);
@@ -413,19 +414,19 @@ function ExecutionWindow({ api }){
     // Preferred: fetch payload on demand (prevents race with early IPC send)
     (async () => {
       try {
-        if (api?.getExecutionSnapshot) {
-          const p = await api.getExecutionSnapshot();
+        if (capabilities.executionWindow) {
+          const p = await platform.getExecutionSnapshot();
           if (p) applySnapshot(p);
         }
       } catch {}
     })();
 
     // Backwards/fallback: listen for push init
-    if (api?.onExecutionInit) {
-      off = api.onExecutionInit((payload)=>applySnapshot(payload));
+    if (capabilities.executionWindow) {
+      off = platform.onExecutionInit((payload)=>applySnapshot(payload));
     }
     return () => off && off();
-  }, [api]);
+  }, []);
 
   // Main ticker loop (drift-free)
   useEffect(()=>{
@@ -1472,24 +1473,18 @@ function hashCode(str){
 
 function useDB(){
   const [db, setDb] = useState(null);
+  const [saveError, setSaveError] = useState(null);
   const saveTimer = useRef(null);
 
-  const api = (typeof window !== 'undefined' && window.api) ? window.api : null;
 
   useEffect(()=> {
     let cancelled = false;
     (async ()=>{
-      if (api) {
-        const loaded = ensureDbShape(await api.getDB());
-        if (!cancelled) setDb(loaded);
-      } else {
-        // fallback for browser
-        // Auch hier die Form angleichen: bisher lief dieser Zweig als einziger
-        // Ladeweg ohne ensureDbShape, sodass neu hinzugekommene Felder (etwa
-        // die Darstellungswahl) unnormalisiert blieben.
-        const raw = localStorage.getItem('lehrerplan_db');
-        setDb(raw ? ensureDbShape(JSON.parse(raw)) : { schemaVersion:SCHEMA_VERSION, socialForms:{}, phaseNames:{}, hiddenSuggestions:{ socialForms:{}, phaseNames:{}, classGroups:{}, subjects:{}, competencies:{}, supervisionLabels:{} }, competencies:{}, classGroups:{}, subjects:{}, groupColors:{}, supervisionLabels:{}, todos:[], sequences:{}, sequenceTemplates:{}, yearBars:[], schoolCalendar:{ schoolYear:{startISO:'', endISO:''}, lessonTimesEnabled:false, lessonTimes:[], vacations:[], freeDays:[], events:[] }, weeks:{}, appSettings:{ fileCopyOptIn:false } });
-      }
+      // Ein Ladeweg für beide Plattformen. Liefert die Ablage nichts
+      // (Erststart), erzeugt ensureDbShape die vollständige Grundform –
+      // dieselbe Normalisierung, die auch Bestandsdaten durchlaufen.
+      const loaded = await platform.loadDB();
+      if (!cancelled) setDb(ensureDbShape(loaded || {}));
     })();
     return ()=> { cancelled = true; };
   }, []);
@@ -1497,17 +1492,22 @@ function useDB(){
   const persist = (nextDb) => {
     setDb(nextDb);
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async ()=>{
-      if (api) await api.setDB(nextDb);
-      else localStorage.setItem('lehrerplan_db', JSON.stringify(nextDb));
+    saveTimer.current = setTimeout(()=>{
+      // Bewusst nicht erwartet: der Schreibvorgang läuft asynchron weiter
+      // und darf die Eingabe nicht aufhalten. Ein Fehlschlag wird als
+      // Zustand nach oben gereicht – die Meldung gehört in die App, hier
+      // ist sie nicht im Gültigkeitsbereich.
+      platform.saveDB(nextDb)
+        .then(()=> setSaveError(null))
+        .catch((err)=> setSaveError(String(err?.message || err)));
     }, 250);
   };
 
-  return { db, persist, api };
+  return { db, persist, saveError };
 }
 
 export default function App(){
-  const { db, persist, api } = useDB();
+  const { db, persist, saveError } = useDB();
   // Show a large logo once when the app starts (helps users recognize the app).
   const [splashVisible, setSplashVisible] = useState(true);
   const [easterEggVisible, setEasterEggVisible] = useState(false);
@@ -1967,6 +1967,13 @@ const classGroupSuggestions = useMemo(()=>{
     return cmds;
   }, [view.weekStart, sequences, db?.groupColors, undoLast]);
 
+  // Ein fehlgeschlagenes Speichern darf nicht still bleiben. Die Meldung
+  // bleibt stehen (ttl 0), bis der Nutzer sie schliesst.
+  useEffect(()=>{
+    if (!saveError) return;
+    showToast(`Speichern fehlgeschlagen: ${saveError}`, { tone: 'danger', ttl: 0 });
+  }, [saveError, showToast]);
+
   const uiApi = useMemo(()=>({
     toast: showToast, dismissToast, askConfirm, askInput: askPrompt,
   }), [showToast, dismissToast, askConfirm, askPrompt]);
@@ -2264,14 +2271,43 @@ useEffect(()=>{
   };
 
 
+/* Heisser Pfad: läuft bei jeder Eingabe in der Einzelstunde.
+
+   Früher wurde hier die vollständige Datenbank geklont. Bei 40 Wochen à
+   50 Stunden kostet dieser Klon rund 55 ms – bei jedem Tastenanschlag,
+   synchron, vor dem eigentlichen Speichern. Das ist derselbe Fehler wie
+   beim Gesamtblob, nur im Arbeitsspeicher.
+
+   Jetzt wird nur der geänderte Pfad kopiert. Alle übrigen Wochen behalten
+   ihre Identität – dadurch erkennt der Plattform-Adapter unveränderte
+   Wochen an der Referenz und muss sie nicht einmal serialisieren. */
 const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
-  const nextDb = deepClone(db);
-  if (!nextDb.weeks) nextDb.weeks = {};
-  const w = nextDb.weeks[weekStart] || { slotsPerDay: 6, lessons: {}, duties: {} };
-  if (!nextDb.weeks[weekStart]) nextDb.weeks[weekStart] = w;
-  if (!w.lessons) w.lessons = {};
   const l = normalizeLesson(nextLesson);
-  w.lessons[keyOf(dayIndex, slotIndex)] = { ...l, updatedAt: new Date().toISOString() };
+  const prevWeeks = db?.weeks || {};
+  const prevWeek = prevWeeks[weekStart] || { slotsPerDay: 6, lessons: {}, duties: {} };
+  const prevHidden = db?.hiddenSuggestions || {};
+
+  const nextDb = {
+    ...db,
+    classGroups: { ...(db?.classGroups || {}) },
+    subjects: { ...(db?.subjects || {}) },
+    groupColors: { ...(db?.groupColors || {}) },
+    hiddenSuggestions: {
+      ...prevHidden,
+      classGroups: { ...(prevHidden.classGroups || {}) },
+      subjects: { ...(prevHidden.subjects || {}) },
+    },
+    weeks: {
+      ...prevWeeks,
+      [weekStart]: {
+        ...prevWeek,
+        lessons: {
+          ...(prevWeek.lessons || {}),
+          [keyOf(dayIndex, slotIndex)]: { ...l, updatedAt: new Date().toISOString() },
+        },
+      },
+    },
+  };
   rememberClassGroupIn(nextDb, l.classGroup);
   rememberSubjectIn(nextDb, l.subject);
   ensureGroupColorIn(nextDb, l.classGroup, l.subject);
@@ -2389,10 +2425,10 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
   const toastSavedPath = (text, pathStr) => {
     showToast(text, {
       tone: 'success',
-      action: api?.revealPath ? {
+      action: capabilities.revealInFolder ? {
         label: 'Ordner öffnen',
         onAct: async ()=>{
-          const res = await api.revealPath(pathStr);
+          const res = await platform.revealPath(pathStr);
           if (res && res.ok === false && res.error) showToast(`Konnte Ordner nicht öffnen: ${res.error}`, { tone: 'danger' });
         },
       } : null,
@@ -2400,20 +2436,20 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
   };
 
   const exportBackup = async () => {
-    if (!api) {
+    if (!capabilities.backupFiles) {
       showToast('Backup-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
-    const path = await api.exportBackup();
+    const path = await platform.exportBackup();
     if (path) toastSavedPath('Backup gespeichert.', path);
   };
 
   const importBackup = async () => {
-    if (!api) {
+    if (!capabilities.backupFiles) {
       showToast('Backup-Import ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
-    const imported = await api.importBackup();
+    const imported = await platform.importBackup();
     if (imported) {
       persist(ensureDbShape(imported));
       showToast('Backup importiert.', { tone: 'success' });
@@ -2616,10 +2652,10 @@ const rememberClassGroupIn = (nextDb, label) => {
   if (nextDb.hiddenSuggestions.classGroups[l]) delete nextDb.hiddenSuggestions.classGroups[l];
 
   if (!nextDb.classGroups) nextDb.classGroups = {};
+  // Ersetzen statt verändern: der Eintrag kann noch mit dem vorigen
+  // Zustand geteilt sein, wenn nur der geänderte Pfad kopiert wurde.
   const existing = nextDb.classGroups[l] || { count: 0, lastUsed: '' };
-  existing.count = (existing.count || 0) + 1;
-  existing.lastUsed = new Date().toISOString();
-  nextDb.classGroups[l] = existing;
+  nextDb.classGroups[l] = { ...existing, count: (existing.count || 0) + 1, lastUsed: new Date().toISOString() };
 };
 
 const rememberSubjectIn = (nextDb, label) => {
@@ -2631,10 +2667,10 @@ const rememberSubjectIn = (nextDb, label) => {
   if (nextDb.hiddenSuggestions.subjects[l]) delete nextDb.hiddenSuggestions.subjects[l];
 
   if (!nextDb.subjects) nextDb.subjects = {};
+  // Ersetzen statt verändern: der Eintrag kann noch mit dem vorigen
+  // Zustand geteilt sein, wenn nur der geänderte Pfad kopiert wurde.
   const existing = nextDb.subjects[l] || { count: 0, lastUsed: '' };
-  existing.count = (existing.count || 0) + 1;
-  existing.lastUsed = new Date().toISOString();
-  nextDb.subjects[l] = existing;
+  nextDb.subjects[l] = { ...existing, count: (existing.count || 0) + 1, lastUsed: new Date().toISOString() };
 };
 
 
@@ -2647,10 +2683,10 @@ const rememberSupervisionIn = (nextDb, label) => {
   if (nextDb.hiddenSuggestions.supervisionLabels[l]) delete nextDb.hiddenSuggestions.supervisionLabels[l];
 
   if (!nextDb.supervisionLabels) nextDb.supervisionLabels = {};
+  // Ersetzen statt verändern: der Eintrag kann noch mit dem vorigen
+  // Zustand geteilt sein, wenn nur der geänderte Pfad kopiert wurde.
   const existing = nextDb.supervisionLabels[l] || { count: 0, lastUsed: '' };
-  existing.count = (existing.count || 0) + 1;
-  existing.lastUsed = new Date().toISOString();
-  nextDb.supervisionLabels[l] = existing;
+  nextDb.supervisionLabels[l] = { ...existing, count: (existing.count || 0) + 1, lastUsed: new Date().toISOString() };
 };
 
 const ensureGroupColorIn = (nextDb, classGroup, subject) => {
@@ -2784,14 +2820,14 @@ const deleteTodo = (id) => {
   };
 
   const exportTemplates = async () => {
-    if (!api) { showToast('Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' }); return; }
-    const path = await api.exportTemplates();
+    if (!capabilities.templateFiles) { showToast('Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' }); return; }
+    const path = await platform.exportTemplates();
     if (path) toastSavedPath('Sequenz-Vorlagen exportiert.', path);
   };
 
   const importTemplates = async () => {
-    if (!api) { showToast('Import ist nur in der Desktop-App verfügbar.', { tone: 'warning' }); return; }
-    const importedDb = await api.importTemplates();
+    if (!capabilities.templateFiles) { showToast('Import ist nur in der Desktop-App verfügbar.', { tone: 'warning' }); return; }
+    const importedDb = await platform.importTemplates();
     if (importedDb) {
       persist(ensureDbShape(importedDb));
       showToast('Sequenz-Vorlagen importiert.', { tone: 'success' });
@@ -2892,11 +2928,11 @@ const deleteTodo = (id) => {
 
 
   const doExportPdf = async (html, suggestedName) => {
-    if (!api) {
+    if (!capabilities.pdfExport) {
       showToast('PDF-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
-    const saved = await api.exportPdf({ html, suggestedFileName: suggestedName });
+    const saved = await platform.exportPdf({ html, suggestedFileName: suggestedName });
     if (saved) toastSavedPath('PDF gespeichert.', saved);
   };
 
@@ -2904,12 +2940,12 @@ const deleteTodo = (id) => {
 const doExportDocx = async (html, suggestedName) => {
   // Wir exportieren bewusst als .doc (HTML), weil das auf allen Word-Versionen
   // zuverlässig öffnet. ("echtes" .docx hatte bei manchen Systemen Probleme.)
-  if (!api) {
+  if (!capabilities.docxExport) {
     showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
   const safe = String(suggestedName || 'Unterrichtsstunde.doc').replace(/\.docx$/i, '.doc');
-  const saved = await api.exportDocx({ html, suggestedFileName: safe });
+  const saved = await platform.exportDocx({ html, suggestedFileName: safe });
   if (saved) toastSavedPath('Word-Datei gespeichert.', saved);
 };
 
@@ -3074,7 +3110,7 @@ const doExportDocx = async (html, suggestedName) => {
       return <HelpView version={APP_VERSION} />;
     }
     if (view.name === 'execution') {
-      return <ExecutionWindow api={api} />;
+      return <ExecutionWindow />;
     }
     if (view.name === 'calendar') {
       return (
@@ -3135,8 +3171,8 @@ const doExportDocx = async (html, suggestedName) => {
         onExportPdf={doExportPdf}
           onExportDocx={doExportDocx}
         onOpenExecution={(snapshot)=>{
-          if (api?.openExecutionWindow) {
-            api.openExecutionWindow(snapshot);
+          if (capabilities.executionWindow) {
+            platform.openExecutionWindow(snapshot);
           } else {
             showToast('Durchführungsansicht ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
           }
@@ -3223,8 +3259,12 @@ const doExportDocx = async (html, suggestedName) => {
                 <button className="btn" title="Nächste Woche" aria-label="Nächste Woche" onClick={()=>goWeekDelta(1)}><ChevronRight {...ICON} /></button>
               </div>
               <button className="btn" onClick={()=>setShowWeekCopyDialog(true)}>In nächste Woche übernehmen</button>
-              <button className="btn" onClick={()=>exportBackup()}>Backup exportieren</button>
-              <button className="btn" onClick={()=>importBackup()}>Backup importieren</button>
+              {capabilities.backupFiles ? (
+                <>
+                  <button className="btn" onClick={()=>exportBackup()}>Backup exportieren</button>
+                  <button className="btn" onClick={()=>importBackup()}>Backup importieren</button>
+                </>
+              ) : null}
             </>
           )}
           {!isExecutionOnlyWindow && (
@@ -3534,8 +3574,12 @@ const exportWeekDocx = () => {
         </div>
         <div className="row" style={{gap:8}}>
           <button className="btn warning" onClick={onOpenTodos} title="To-do-Checkliste öffnen">To-dos{todayTodoCount ? ` (${todayTodoCount})` : ''}</button>
-          <button className="btn iconBtn-word" onClick={exportWeekDocx} title="Als Word-Datei speichern"><img src={wordIcon} alt="" className="btnIcon" />Word Woche</button>
-          <button className="btn iconBtn-pdf" onClick={exportWeekPdf} title="Als PDF speichern"><img src={pdfIcon} alt="" className="btnIcon" />PDF Woche</button>
+          {capabilities.docxExport ? (
+            <button className="btn iconBtn-word" onClick={exportWeekDocx} title="Als Word-Datei speichern"><img src={wordIcon} alt="" className="btnIcon" />Word Woche</button>
+          ) : null}
+          {capabilities.pdfExport ? (
+            <button className="btn iconBtn-pdf" onClick={exportWeekPdf} title="Als PDF speichern"><img src={pdfIcon} alt="" className="btnIcon" />PDF Woche</button>
+          ) : null}
           <span className="muted small">Stunden pro Tag:</span>
           <input className="input" style={{width:90}} type="number" min={1} max={12} value={slots} onChange={(e)=>onChangeSlots(Number(e.target.value||slots))} />
         </div>
@@ -4331,7 +4375,6 @@ const gColor = useMemo(()=>{
     setLocal(prev => ({ ...prev, [field]: value }));
   };
 
-  const api = (typeof window !== 'undefined' && window.api) ? window.api : null;
 
   const fileCopyOptIn = Boolean(appSettings?.fileCopyOptIn);
   const toggleFileCopyOptIn = () => {
@@ -4390,19 +4433,19 @@ const gColor = useMemo(()=>{
   };
 
   const addLessonFiles = async () => {
-    if (!api) {
+    if (!capabilities.fileAttachments) {
       ui.toast('Dateien anhängen ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
-    const picked = await api.pickFiles({ multi: true });
+    const picked = await platform.pickFiles({ multi: true });
     if (!Array.isArray(picked) || picked.length === 0) return;
 
     let copiedMap = null; // Map<sourcePath, destPath>
     let mode = 'link';
-    if (fileCopyOptIn && typeof api.copyToLibrary === 'function') {
+    if (fileCopyOptIn && typeof platform.copyToLibrary === 'function') {
       try {
         const seqName = (sequences?.[String(local.sequenceId || '').trim()]?.name || '').trim();
-        const res = await api.copyToLibrary({
+        const res = await platform.copyToLibrary({
           paths: picked,
           meta: {
             schoolYearLabel,
@@ -4453,22 +4496,22 @@ const gColor = useMemo(()=>{
   };
 
   const openFile = async (pathStr) => {
-    if (!api) return;
-    const res = await api.openPath(pathStr);
+    if (!capabilities.openExternally) return;
+    const res = await platform.openPath(pathStr);
     if (res && res.ok === false && res.error) ui.toast(`Konnte Datei nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const revealFile = async (pathStr) => {
-    if (!api) return;
-    const res = await api.revealPath(pathStr);
+    if (!capabilities.revealInFolder) return;
+    const res = await platform.revealPath(pathStr);
     if (res && res.ok === false && res.error) ui.toast(`Konnte Ordner nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const openLibraryRoot = async () => {
-    if (!api || typeof api.getLibraryRoot !== 'function') return;
-    const root = await api.getLibraryRoot();
+    if (!capabilities.fileLibrary) return;
+    const root = await platform.getLibraryRoot();
     if (!root) return;
-    const res = await api.openPath(root);
+    const res = await platform.openPath(root);
     if (res && res.ok === false && res.error) ui.toast(`Konnte Ablage nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
@@ -4577,10 +4620,16 @@ const exportDocx = () => {
           ) : null}
         </div>
         <div className="row" style={{gap:8}}>
-          <button className="btn success" onClick={startExecution}>▶ Durchführung</button>
+          {capabilities.executionWindow ? (
+            <button className="btn success" onClick={startExecution}><Play {...ICON_SM} /> Durchführung</button>
+          ) : null}
           <button className="btn danger" onClick={onDeleteLesson}>Stunde löschen</button>
-          <button className="btn iconBtn-word" onClick={exportDocx} title="Als Word-Datei speichern"><img src={wordIcon} alt="" className="btnIcon" />Word speichern</button>
-          <button className="btn iconBtn-pdf" onClick={exportPdf} title="Als PDF speichern"><img src={pdfIcon} alt="" className="btnIcon" />PDF speichern</button>
+          {capabilities.docxExport ? (
+            <button className="btn iconBtn-word" onClick={exportDocx} title="Als Word-Datei speichern"><img src={wordIcon} alt="" className="btnIcon" />Word speichern</button>
+          ) : null}
+          {capabilities.pdfExport ? (
+            <button className="btn iconBtn-pdf" onClick={exportPdf} title="Als PDF speichern"><img src={pdfIcon} alt="" className="btnIcon" />PDF speichern</button>
+          ) : null}
         </div>
       </div>
 
@@ -4888,7 +4937,7 @@ const exportDocx = () => {
                   <input type="checkbox" checked={fileCopyOptIn} onChange={toggleFileCopyOptIn} />
                   <span className="small muted">Dateien in App kopieren (opt‑in)</span>
                 </label>
-                {api && typeof api.getLibraryRoot === 'function' ? (
+                {capabilities.fileLibrary ? (
                   <button className="btn" onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</button>
                 ) : null}
               </div>
@@ -5996,14 +6045,13 @@ function SequenceManager({
     return ()=>{ try { clearTimeout(t); } catch {} };
   }, []);
 
-  const api = (typeof window !== 'undefined' && window.api) ? window.api : null;
   const [filesSeqId, setFilesSeqId] = useState(null);
 
   const openLibraryRoot = async () => {
-    if (!api || typeof api.getLibraryRoot !== 'function') return;
-    const root = await api.getLibraryRoot();
+    if (!capabilities.fileLibrary) return;
+    const root = await platform.getLibraryRoot();
     if (!root) return;
-    const res = await api.openPath(root);
+    const res = await platform.openPath(root);
     if (res && res.ok === false && res.error) ui.toast(`Konnte Ablage nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
@@ -6038,18 +6086,18 @@ function SequenceManager({
 
   const addSeqFiles = async () => {
     if (!filesSeqId) return;
-    if (!api) {
+    if (!capabilities.fileAttachments) {
       ui.toast('Dateien anhängen ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
-    const picked = await api.pickFiles({ multi: true });
+    const picked = await platform.pickFiles({ multi: true });
     if (!Array.isArray(picked) || picked.length === 0) return;
 
     let copiedMap = null; // Map<sourcePath, destPath>
     let mode = 'link';
-    if (fileCopyOptIn && typeof api.copyToLibrary === 'function') {
+    if (fileCopyOptIn && typeof platform.copyToLibrary === 'function') {
       try {
-        const res = await api.copyToLibrary({
+        const res = await platform.copyToLibrary({
           paths: picked,
           meta: {
             schoolYearLabel,
@@ -6100,14 +6148,14 @@ function SequenceManager({
   };
 
   const openFile = async (pathStr) => {
-    if (!api) return;
-    const res = await api.openPath(pathStr);
+    if (!capabilities.openExternally) return;
+    const res = await platform.openPath(pathStr);
     if (res && res.ok === false && res.error) ui.toast(`Konnte Datei nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const revealFile = async (pathStr) => {
-    if (!api) return;
-    const res = await api.revealPath(pathStr);
+    if (!capabilities.revealInFolder) return;
+    const res = await platform.revealPath(pathStr);
     if (res && res.ok === false && res.error) ui.toast(`Konnte Ordner nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
@@ -6181,7 +6229,7 @@ function SequenceManager({
                   <input type="checkbox" checked={fileCopyOptIn} onChange={toggleFileCopyOptIn} />
                   <span className="small muted">Dateien in App kopieren (opt‑in)</span>
                 </label>
-                {api && typeof api.getLibraryRoot === 'function' ? (
+                {capabilities.fileLibrary ? (
                   <button className="btn" onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</button>
                 ) : null}
               </div>

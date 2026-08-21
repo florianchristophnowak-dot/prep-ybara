@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('api', {
   getDB: () => ipcRenderer.invoke('db:get'),
   setDB: (db) => ipcRenderer.invoke('db:set', db),
+  // Teilschreibvorgang: nur geänderte Wochen statt der gesamten Datenbank.
+  patchDB: (patch) => ipcRenderer.invoke('db:patch', patch),
   exportBackup: () => ipcRenderer.invoke('backup:export'),
   importBackup: () => ipcRenderer.invoke('backup:import'),
   exportTemplates: () => ipcRenderer.invoke('templates:export'),

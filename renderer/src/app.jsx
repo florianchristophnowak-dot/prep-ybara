@@ -999,12 +999,18 @@ function normalizePhases(phases){
       duration: Math.max(MIN_PHASE_MIN, Math.round(src.duration || 0))
     };
   });
+  /* Ohne Phasen gibt es nichts zu verteilen.
+
+     Vorher stand hier ein Zweig für Summe 0, der p[0].duration setzte.
+     Bei einer leeren Liste ist p[0] undefined – das warf beim Öffnen
+     jeder Stunde ohne Phasen. Da jede Dauer oben auf MIN_PHASE_MIN
+     angehoben wird, ist Summe 0 ausserdem nur bei einer leeren Liste
+     überhaupt erreichbar; der Zweig entfällt damit ersatzlos. Eine
+     Stunde ohne Phasen bleibt eine Stunde ohne Phasen. */
+  if (!p.length) return p;
+
   let sum = p.reduce((a,b)=>a+b.duration,0);
   if (sum === TOTAL_MIN) return p;
-  if (sum === 0) {
-    p[0].duration = TOTAL_MIN;
-    return p;
-  }
   // adjust last phase to fit
   const diff = TOTAL_MIN - sum;
   p[p.length-1].duration = Math.max(MIN_PHASE_MIN, p[p.length-1].duration + diff);
@@ -5086,6 +5092,12 @@ const gColor = useMemo(()=>{
     setPhases((() => {
       const phases = deepClone(local.phases);
       const newPhase = { id: uid(), title: 'Neue Phase', duration: 5, socialForm: '', content: '', materialsMedia: '', remarks: '' };
+      // Erste Phase einer Stunde ohne Phasen: sie bekommt die ganze Zeit.
+      // Ohne diesen Fall griff die Suche unten auf phases[0] zu.
+      if (!phases.length) {
+        newPhase.duration = TOTAL_MIN;
+        return [newPhase];
+      }
       // reduce from the longest phase that can spare minutes
       let idxLongest = 0;
       for (let i=0;i<phases.length;i++){

@@ -6024,16 +6024,51 @@ function YearPlanView({
   };
 
   const axis = useMemo(()=>{
-    // Build month separators & week labels
-    const list = weekStarts.map((ws, i)=>{
+    return weekStarts.map((ws, i)=>{
       const d = fromISODate(ws);
-      const month = d.getMonth();
-      const year = d.getFullYear();
-      const wk = weekNumberISO(d); // "KW x / yyyy"
-      return { ws, i, month, year, wk };
+      const voll = weekNumberISO(d);            // "KW x / yyyy"
+      return {
+        ws, i,
+        month: d.getMonth(),
+        year: d.getFullYear(),
+        wk: voll,
+        // Nur die Zahl. "KW" 40-mal nebeneinander zu wiederholen ist der
+        // Grund, warum die Leiste vorher unlesbar war – es steht jetzt
+        // einmal in der Spaltenüberschrift.
+        nummer: (voll.match(/\d+/) || [''])[0],
+      };
     });
-    return list;
   }, [weekStarts]);
+
+  /* Monatsbänder: zusammenhängende Wochen desselben Monats zu einem Feld
+     gefasst. Vorher lag die Monatsbeschriftung IN der 28 px breiten
+     Wochenspalte und lief über ihre Nachbarn hinweg. */
+  const monatsBaender = useMemo(()=>{
+    const out = [];
+    for (const a of axis){
+      const letzter = out[out.length - 1];
+      if (letzter && letzter.month === a.month && letzter.year === a.year) {
+        letzter.wochen += 1;
+        continue;
+      }
+      out.push({ month: a.month, year: a.year, start: a.i, wochen: 1, ws: a.ws });
+    }
+    return out.map((m, i)=>{
+      const d = fromISODate(m.ws);
+      const kurz = d.toLocaleString('de-DE', { month: 'short' });
+      const lang = d.toLocaleString('de-DE', { month: 'long' });
+      // Die Jahreszahl steht am Anfang und beim Jahreswechsel, nicht an
+      // jedem Monat – sonst trägt die Leiste zwölfmal dieselbe Angabe.
+      const zeigtJahr = i === 0 || out[i-1].year !== m.year;
+      return {
+        key: `${m.year}-${m.month}`,
+        left: m.start * weekWidth,
+        width: m.wochen * weekWidth,
+        text: zeigtJahr ? `${kurz} ${m.year}` : kurz,
+        titel: `${lang} ${m.year}`,
+      };
+    });
+  }, [axis, weekWidth]);
 
   const scrollRef = useRef(null);
   useEffect(()=>{
@@ -6173,20 +6208,33 @@ function YearPlanView({
 
       <div className="yearPlanWrap">
         <div className="yearPlanAxis">
-          <div className="yearPlanSticky">&nbsp;</div>
+          <div className="yearPlanSticky yearPlanAxisSticky">
+            <div className="yearPlanAxisHint">Monat</div>
+            <div className="yearPlanAxisHint">Kalenderwoche</div>
+          </div>
           <div className="yearPlanScroll" ref={scrollRef}>
             <div className="yearPlanAxisInner" style={{width: totalWidth}}>
-              {axis.map(({ws,i,month,year,wk})=>{
-                const d = fromISODate(ws);
-                const isMonthStart = i===0 || fromISODate(axis[i-1].ws).getMonth() !== month;
-                const off = weekOffMap.get(ws);
-                return (
-                  <div key={ws} className={`yearPlanWeekTick ${off ? 'yearPlanWeekTick--off' : ''}`} style={{left: i*weekWidth, width: weekWidth}} title={wk}>
-                    {isMonthStart ? <div className="yearPlanMonthLabel">{d.toLocaleString('de-DE', { month:'short' })} {year}</div> : null}
-                    <div className="yearPlanWeekLabel">{wk.split(' / ')[0]}</div>
+              <div className="yearPlanMonthBand">
+                {monatsBaender.map(m=>(
+                  <div key={m.key} className="yearPlanMonth"
+                       style={{left: m.left, width: m.width}} title={m.titel}>
+                    <span className="yearPlanMonthLabel">{m.text}</span>
                   </div>
-                );
-              })}
+                ))}
+              </div>
+              <div className="yearPlanWeekBand">
+                {axis.map(({ws,i,month,wk,nummer})=>{
+                  const istMonatsbeginn = i===0 || axis[i-1].month !== month;
+                  const off = weekOffMap.get(ws);
+                  return (
+                    <div key={ws}
+                         className={`yearPlanWeekTick${off ? ' yearPlanWeekTick--off' : ''}${istMonatsbeginn ? ' is-monthStart' : ''}`}
+                         style={{left: i*weekWidth, width: weekWidth}} title={wk}>
+                      <span className="yearPlanWeekLabel">{nummer}</span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>
@@ -6206,7 +6254,10 @@ function YearPlanView({
                   {/* background grid */}
                   {weekStarts.map((ws, i)=>{
                     const off = weekOffMap.get(ws);
-                    return <div key={ws} className={`yearPlanGridCol ${off ? 'yearPlanGridCol--off' : ''}`} style={{left:i*weekWidth, width:weekWidth}} />;
+                    const istMonatsbeginn = i===0 || axis[i-1]?.month !== axis[i]?.month;
+                    return <div key={ws}
+                                className={`yearPlanGridCol${off ? ' yearPlanGridCol--off' : ''}${istMonatsbeginn ? ' is-monthStart' : ''}`}
+                                style={{left:i*weekWidth, width:weekWidth}} />;
                   })}
 
                   {laneBars.map((b, idx)=>{

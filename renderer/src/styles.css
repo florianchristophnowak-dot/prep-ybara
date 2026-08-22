@@ -279,8 +279,11 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .topbar h1 { font-size: 18px; font-weight: var(--fw-bold); margin: 0; letter-spacing: -0.02em; }
 .topbar .left { display: flex; align-items: center; gap: 12px; }
 .topbar .right { display: flex; gap: 8px; align-items: center; }
-.logo { width: 40px; height: 40px; border-radius: var(--radius); box-shadow: var(--shadow); transition: transform var(--transition); }
-.logo:hover { border-color: var(--primary); }
+/* Die Bildmarke ist ein rundes Medaillon auf durchsichtigem Grund – sie
+   bekommt weder Rahmen noch Radius. Beides ergäbe eine Form um eine Form.
+   Der dunkle Ring gehört zur Zeichnung selbst und trennt sie ausreichend
+   von der Tafel. */
+.logo { width: 40px; height: 40px; }
 
 .splashOverlay {
   position: fixed;
@@ -311,7 +314,10 @@ button, input, textarea, select { font: inherit; color: inherit; }
   from { opacity: 0; transform: translateY(20px) scale(0.96); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
-.splashLogo { width: min(200px, 50vw); height: auto; border-radius: var(--radius-xl); box-shadow: var(--shadow-md); }
+/* Ebenfalls die runde Bildmarke: kein Radius, kein Kastenschatten – der
+   Schatten folgt dem rechteckigen Rahmen und legt einen sichtbaren Kasten
+   hinter den Kreis. */
+.splashLogo { width: min(200px, 50vw); height: auto; }
 .splashTitle {
   font-weight: var(--fw-bold);
   font-size: var(--fs-2xl);
@@ -895,7 +901,6 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
   border-color: color-mix(in srgb, var(--on-board) 34%, transparent);
   color: var(--on-board);
 }
-.logo { border: 1px solid color-mix(in srgb, var(--on-board) 30%, transparent); }
 
 /* Der Korrekturrand: farbige linke Kante als durchgehendes Motiv. */
 .macroLesson { border-left-width: 4px; border-left-style: solid; }

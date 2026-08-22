@@ -7,8 +7,8 @@ import path from 'path';
    bisher; zusätzlich entsteht eine installierbare, offlinefähige Web-App.
    Der Service Worker wird nur für den Web-Build gebraucht – in Electron
    liegt die App unter file:// und registriert ihn gar nicht erst. */
-const THEME = '#394d3e';   // Tafelgrün, --board aus dem Designsystem
-const BACKGROUND = '#fbf8f0'; // Papier, --bg
+const THEME = '#4f6ef7';   // Indigoblau, --primary aus dem Designsystem
+const BACKGROUND = '#f8f9fc'; // Papier, --bg
 
 export default defineConfig({
   plugins: [

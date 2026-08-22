@@ -125,22 +125,22 @@ function PhaseHelpCard({ phaseTitle }){
 
 
 /* ============================================================
-   Farbsystem – eine Palette, aus der beide Modi abgeleitet werden
+   Farbsystem – die Paletten der Fassung 1.0.9
 
-   Früher lagen hier zwei getrennte Paletten: 18 Pastelltöne für
-   Lerngruppen und 12 kräftige Farben für Sequenzen. Jetzt gibt es
-   eine Palette. Gespeichert wird je Lerngruppe bzw. Sequenz ein
-   einziger Basiswert; Flächen- und Linienfarbe für hell und dunkel
-   werden daraus berechnet.
+   Zwei Paletten, wie im Release: 18 Pastelltöne für Lerngruppen und
+   12 kräftige Farben für Sequenzen. Die gespeicherte Farbe wird
+   unverändert dargestellt – ein Pastellton ist die Fläche, eine
+   Sequenzfarbe ist die Linie und die Schrift. Es wird nichts
+   umgerechnet; genau das ist die alte Farblogik.
 
-   Berechnet statt nachgeschlagen, weil die App drei freie Farbwähler
-   anbietet (input type="color"). Eine Zuordnungstabelle könnte selbst
-   gewählte Werte grundsätzlich nicht abdecken. Nebeneffekt: alle
-   bereits gespeicherten Farben bleiben unverändert gültig, eine
-   Datenmigration ist nicht nötig.
+   Ausnahme ist die dunkle Darstellung, die es im Release noch nicht
+   gab: dort würde ein Pastellton auf dunklem Grund verschwinden und
+   eine kräftige Linie zu dunkel stehen. Nur für diesen Fall wird die
+   Helligkeit angepasst – der Farbton bleibt, der Wert in der Datenbank
+   ohnehin.
    ============================================================ */
 
-// --- OKLab: perzeptuell gleichmäßige Ableitung ---------------------------
+// --- OKLab: perzeptuell gleichmäßige Helligkeitsanpassung ----------------
 function _srgbToLinear(c){ return c <= 0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
 function _linearToSrgb(c){ return c <= 0.0031308 ? c*12.92 : 1.055*Math.pow(c, 1/2.4)-0.055; }
 function _cbrt(v){ return Math.sign(v) * Math.pow(Math.abs(v), 1/3); }
@@ -187,57 +187,46 @@ let __prefersDark = false;
 function setDarkMode(v){ __prefersDark = Boolean(v); }
 function isDarkMode(){ return __prefersDark; }
 
-/* Textragende Fläche: Helligkeit in ein Band geklemmt, das gegen
-   var(--text) im jeweiligen Modus sicher über 4.5:1 liegt. */
-const NEUTRAL_HUE = 74 * Math.PI / 180;   // warme Papierachse
-const ACHROMATIC = 0.012;                 // darunter gilt eine Farbe als unbunt
+/* Helligkeit auf einen Zielwert setzen, Farbton und Sättigung behalten.
+   Wird ausschliesslich in der dunklen Darstellung aufgerufen. */
+function withLightness(hex, L){
+  const c = hexToLch(hex);
+  if (!c) return '';
+  return lchToHex(L, c.C, c.H);
+}
 
+/* Fläche: im Hellen der gespeicherte Ton selbst, wie im Release. */
 function surfaceColor(hex, dark = isDarkMode()){
-  const c = hexToLch(hex);
-  if (!c) return '';
-  // Unbunte Vorlagen (Grau, Schwarz, Weiß) haben keinen definierten Farbton.
-  // Ohne Sonderfall würde das Mindest-Chroma ihnen einen aufzwingen und aus
-  // einem grauen Lerngruppen-Ton z. B. einen blauen machen.
-  const flat = c.C < ACHROMATIC;
-  const H = flat ? NEUTRAL_HUE : c.H;
-  const C = flat ? 0.008
-                 : (dark ? Math.min(Math.max(c.C*0.62, 0.030), 0.075)
-                         : Math.min(Math.max(c.C*0.55, 0.030), 0.065));
-  return lchToHex(dark ? 0.430 : 0.885, C, H);
+  if (!hex) return '';
+  return dark ? withLightness(hex, 0.44) : hex;
 }
-/* Linien und Balken: Sättigung bleibt, nur modusgerecht aufgehellt. */
+/* Linie und Rand: im Hellen der gespeicherte Ton selbst. */
 function lineColor(hex, dark = isDarkMode()){
-  const c = hexToLch(hex);
-  if (!c) return '';
-  const flat = c.C < ACHROMATIC;
-  return lchToHex(dark ? 0.700 : 0.520,
-                  flat ? 0.010 : Math.max(c.C, 0.060),
-                  flat ? NEUTRAL_HUE : c.H);
+  if (!hex) return '';
+  return dark ? withLightness(hex, 0.72) : hex;
 }
-
-/* Schriftfarbe. Eine Linie darf kräftig sein, Text muss lesbar sein –
-   dafür reicht die Linienhelligkeit nicht. Die Werte sind gegen die
-   tatsächlich vorkommenden Flächen gerechnet (Karte, App-Grund, getönte
-   Wochenzelle, Jahresbalken) und liegen im schlechtesten Farbton bei
-   5,1:1 hell und 5,7:1 dunkel. */
+/* Schrift: im Hellen der gespeicherte Ton selbst. */
 function textColor(hex, dark = isDarkMode()){
-  const c = hexToLch(hex);
-  if (!c) return 'var(--text)';
-  const flat = c.C < ACHROMATIC;
-  return lchToHex(dark ? 0.760 : 0.480,
-                  flat ? 0.010 : Math.min(c.C, 0.120),
-                  flat ? NEUTRAL_HUE : c.H);
+  if (!hex) return 'var(--text)';
+  return dark ? withLightness(hex, 0.80) : hex;
 }
 
-/* Die eine Palette. Mittlere Helligkeit, damit sich daraus sowohl
-   Pastellflächen als auch kräftige Linien ableiten lassen. */
-const PALETTE = [
-  '#9a8532', '#b07939', '#bd6e5b', '#bc6a75', '#b56b8f', '#a171af',
-  '#857bc1', '#6386c5', '#408fbe', '#0698a4', '#369a7a', '#6e934f'
+/* Sequenzen: kräftige Farben, sie tragen Linien und Schrift. */
+const SEQ_COLORS = [
+  '#2563eb', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#d97706',
+  '#059669', '#0f766e', '#0891b2', '#4f46e5', '#9333ea', '#be123c'
 ];
-// Beide Altnamen zeigen auf dieselbe Palette – die Trennung ist aufgehoben.
-const SEQ_COLORS = PALETTE;
-const GROUP_PASTELS = PALETTE;
+
+/* Lerngruppen: Pastelltöne, sie tragen Flächen. */
+const GROUP_PASTELS = [
+  '#fde68a', '#fef3c7',
+  '#fecaca', '#ffe4e6',
+  '#fbcfe8', '#fce7f3',
+  '#f5d0fe', '#e9d5ff', '#ddd6fe',
+  '#c7d2fe', '#bfdbfe', '#bae6fd', '#a5f3fc', '#99f6e4',
+  '#a7f3d0', '#bbf7d0', '#d9f99d',
+  '#e5e7eb'
+];
 
 function groupKey(classGroup, subject){
   const g = (classGroup || '').trim();
@@ -327,182 +316,78 @@ function clamp01(x){
    die App gerade dargestellt wird. Ein mitschwenkender Wert würde in
    dunkler Darstellung helle Schrift auf weißes Papier exportieren.
    input[type=color] akzeptiert ausserdem kein var(). */
-const RTE_DEFAULT_INK = '#26201c';
+const RTE_DEFAULT_INK = '#111827';
 
 
 /* ============================================================
    Durchführungsansicht
 
-   Ein privater Fortschrittsmonitor für die Lehrkraft während des
-   Unterrichts. Sie beantwortet zwei Fragen: Wie liege ich in der Zeit,
-   und was kommt als Nächstes. Sie ist NICHT für den Beamer bestimmt.
-   Alles Weitere folgt daraus: kurze Blicke aus ein bis zwei Metern,
-   nebenbei, während unterrichtet wird.
+   Die Präsentationsfassung des Releases: ein grosses Fenster, das die
+   laufende Phase zeigt. Die Farbe ist hier die eigentliche Anzeige –
+   der Grund wandert über den Verlauf der Phase von Grün nach Rot. Man
+   sieht die verbleibende Zeit, ohne die Zahl zu lesen.
 
-   HIERARCHIE – begründete Entscheidung
-   Der Countdown ist das grösste Element, der kumulierte Verzug das
-   starke zweite. Die Vorgabe schlug es umgekehrt vor; dagegen sprechen
-   drei Gründe:
-
-   1. Im kurzen Blick handelt man nach der Restzeit der laufenden Phase
-      ("jetzt zusammenfassen" oder "noch weiterarbeiten lassen"). Der
-      kumulierte Verzug ist ein Wert, den man zwischen den Phasen
-      auswertet, nicht mitten in einer.
-   2. Der Countdown IST die Verzugsanzeige geworden: er läuft ins
-      Negative weiter. Bei −2:15 sieht man den entstehenden Verzug
-      bereits an der grössten Stelle. Ihn kleiner zu setzen würde die
-      Information verstecken, nicht hervorheben.
-   3. Der Countdown ändert sich sekündlich, der Verzug nur in Sprüngen.
-      Das ständig wandernde Element zieht den Blick ohnehin an – es
-      gehört an die Stelle, die dafür vorgesehen ist.
+   Steht der Countdown still (aus oder pausiert) oder ist die Stunde bei
+   den Hausaufgaben angekommen, gibt es nichts zu signalisieren: der
+   Grund bleibt dann weiß.
    ============================================================ */
 
-/* Vorzeichenbehaftete Dauer: +4:12 zu spät, −2:15 in Vorsprung. */
-function formatSignedMMSS(totalSeconds){
-  const n = Math.round(Number(totalSeconds) || 0);
-  if (Math.abs(n) < 30) return '±0 min';
-  const sign = n > 0 ? '+' : '−';
-  const a = Math.abs(n);
-  const mm = Math.floor(a / 60);
-  const ss = a % 60;
-  return `${sign}${mm}:${String(ss).padStart(2, '0')}`;
+function formatMMSS(totalSeconds){
+  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+  const mm = String(Math.floor(s / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
 }
 
-/* Countdown, der ins Negative laufen darf. */
-function formatCountdown(totalSeconds){
-  const n = Math.round(Number(totalSeconds) || 0);
-  const a = Math.abs(n);
-  const mm = String(Math.floor(a / 60)).padStart(2, '0');
-  const ss = String(a % 60).padStart(2, '0');
-  return `${n < 0 ? '−' : ''}${mm}:${ss}`;
-}
-
-function parseHHMMToSec(hhmm){
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim());
-  if (!m) return null;
-  return Number(m[1]) * 3600 + Number(m[2]) * 60;
-}
-function formatSecAsClock(sec){
-  // Auf die nächste Minute runden, nicht abschneiden: ein Stundenende um
-  // 08:44:58 ist 08:45, nicht 08:44.
-  const rounded = Math.round((Number(sec) || 0) / 60) * 60;
-  const s = ((rounded % 86400) + 86400) % 86400;
-  return `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}`;
-}
-function secondsSinceMidnight(d = new Date()){
-  return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
-}
-
-/* Ab wann der Verzug sichtbar wird. Rot hängt ausschliesslich hier –
-   nicht mehr am Phasenverlauf. */
-const VERZUG_WARN_SEC = 3 * 60;
-const VERZUG_STARK_SEC = 5 * 60;
-function verzugStufe(sec){
-  const n = Number(sec) || 0;
-  if (n <= -VERZUG_WARN_SEC) return 'vor';       // deutlich in Vorsprung
-  if (n < VERZUG_WARN_SEC) return 'plan';        // im Plan
-  if (n < VERZUG_STARK_SEC) return 'warn';
-  return 'stark';
-}
-
-/* Verzug = tatsächlich verstrichene Zeit − planmässig verstrichene Zeit.
-
-   Die planmässige Zeit wächst innerhalb einer Phase nur bis zu deren
-   Dauer. Läuft die Phase über, wächst nur noch die Ist-Zeit – der Verzug
-   steigt sekündlich weiter. Wird früher gewechselt, holt der Plan die
-   volle Dauer nach und der Vorsprung erscheint als negativer Wert.
-
-   Als reine Funktion herausgezogen, damit sie ohne Warten prüfbar ist. */
-export function computeVerzugSec({ phases, idx, remainingSec, elapsedSec, nowSec, openedAtSec, isHomeworkView }){
-  const list = Array.isArray(phases) ? phases : [];
-  if (!list.length) return 0;
-  const durOf = (p)=> Math.max(0, Math.round((Number(p?.duration) || 0) * 60));
-
-  const plannedBefore = list.slice(0, Math.min(idx, list.length)).reduce((a, p)=> a + durOf(p), 0);
-  const durationSec = isHomeworkView ? 0 : durOf(list[idx]);
-  const spentInCurrent = isHomeworkView ? 0 : Math.max(0, durationSec - remainingSec);
-  const plannedElapsed = plannedBefore + Math.min(spentInCurrent, durationSec);
-
-  /* Bezugspunkt: der geplante Stundenbeginn – ausser das Fenster wurde
-     schon davor geöffnet (der Normalfall in der Pause). Dann zählt der
-     Öffnungszeitpunkt, sonst stünde vor Stundenbeginn ein Vorsprung von
-     einer halben Stunde in der Anzeige. Wird spät geöffnet, bleibt der
-     geplante Beginn massgeblich – dann IST die Stunde in Verzug. */
-  const lessonStart = parseHHMMToSec(list[0]?.start);
-  const anchor = (lessonStart !== null && Number.isFinite(openedAtSec))
-    ? Math.min(lessonStart, openedAtSec)
-    : lessonStart;
-  const actualElapsed = (anchor !== null && Number.isFinite(nowSec))
-    ? Math.max(0, nowSec - anchor)
-    : (Number(elapsedSec) || 0);
-
-  return Math.round(actualElapsed - plannedElapsed);
+/* Grün (Farbton 120) am Anfang der Phase, Rot (Farbton 0) am Ende.
+   Hell und schwach gesättigt, damit der Text darauf ruhig bleibt. */
+export function bgFromProgress(progress){
+  const p = clamp01(progress);
+  const hue = 120 * (1 - p);
+  return `hsla(${hue}, 55%, 93%, 1)`;
 }
 
 export function ExecutionWindow(){
   const [snapshot, setSnapshot] = useState(null);
   const [idx, setIdx] = useState(0);
-  const [remainingSec, setRemainingSec] = useState(0);   // darf negativ werden
+  const [remainingSec, setRemainingSec] = useState(0);
   const [isCountdownOn, setIsCountdownOn] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
-  /* Automatisches Weiterschalten ist nicht mehr die Voreinstellung: Es
-     hat den Zeitverzug verschluckt, indem es bei Minute 8 weiterrückte
-     und so tat, als liefe alles nach Plan. */
-  const [autoAdvance, setAutoAdvance] = useState(false);
-  const [elapsedSec, setElapsedSec] = useState(0);       // Ist-Zeit seit Öffnen
 
   const endTsRef = useRef(null);
   const tickRef = useRef(null);
-  const lastTickRef = useRef(null);
-  const openedAtRef = useRef(secondsSinceMidnight());
+  const wurzelRef = useRef(null);
 
   const snapshotRef = useRef(null);
   const idxRef = useRef(0);
   const remainingRef = useRef(0);
   const countdownRef = useRef(true);
   const pausedRef = useRef(false);
-  const autoRef = useRef(false);
 
   useEffect(()=>{ snapshotRef.current = snapshot; }, [snapshot]);
   useEffect(()=>{ idxRef.current = idx; }, [idx]);
   useEffect(()=>{ remainingRef.current = remainingSec; }, [remainingSec]);
   useEffect(()=>{ countdownRef.current = isCountdownOn; }, [isCountdownOn]);
   useEffect(()=>{ pausedRef.current = isPaused; }, [isPaused]);
-  useEffect(()=>{ autoRef.current = autoAdvance; }, [autoAdvance]);
+
+  /* Die Ansicht lebt von der Verlaufsfarbe auf hellem Grund. Sie legt
+     sich deshalb – anders als die App – auf die helle Darstellung fest,
+     auch wenn das System auf dunkel steht. Gilt für das Electron-Fenster
+     wie für das Bild-im-Bild-Fenster im Browser. */
+  useEffect(()=>{
+    const dok = wurzelRef.current?.ownerDocument;
+    try { dok?.documentElement?.setAttribute('data-theme', 'light'); } catch {}
+  }, []);
 
   const phases = Array.isArray(snapshot?.phases) ? snapshot.phases : [];
   const isHomeworkView = snapshot && idx >= phases.length;
   const phase = (!isHomeworkView) ? (phases[idx] || null) : null;
-  const nextPhase = phases[idx + 1] || null;
   const durationSec = Math.max(0, Math.round((Number(phase?.duration) || 0) * 60));
-
-  /* ---- Zeitverzug ------------------------------------------------------
-     Verzug = tatsächlich verstrichene Zeit − planmässig verstrichene Zeit.
-
-     Die planmässige Zeit wächst innerhalb einer Phase nur bis zu deren
-     Dauer. Läuft die Phase über, wächst nur noch die Ist-Zeit – der
-     Verzug steigt sekündlich. Wird früher gewechselt, holt der Plan die
-     volle Dauer nach und der Vorsprung erscheint als negativer Wert. */
-  const verzugSec = useMemo(()=> computeVerzugSec({
-    phases, idx, remainingSec, elapsedSec,
-    nowSec: secondsSinceMidnight(), openedAtSec: openedAtRef.current, isHomeworkView,
-  }), [phases, idx, remainingSec, elapsedSec, isHomeworkView]);
-
-  /* Erwartetes Stundenende: geplantes Ende plus Verzug. */
-  const erwartetesEnde = useMemo(()=>{
-    if (!phases.length) return null;
-    const plannedEndClock = parseHHMMToSec(phases[phases.length - 1]?.end);
-    if (plannedEndClock !== null) return formatSecAsClock(plannedEndClock + verzugSec);
-    // Ohne Stundenzeiten: jetzt plus verbleibende Soll-Zeit.
-    const restPlanned = phases.slice(idx + 1)
-      .reduce((a, p)=> a + Math.max(0, Math.round((Number(p?.duration) || 0) * 60)), 0)
-      + Math.max(0, remainingSec);
-    return formatSecAsClock(secondsSinceMidnight() + restPlanned);
-  }, [phases, idx, remainingSec, verzugSec]);
-
-  const stufe = verzugStufe(verzugSec);
+  const progress = durationSec > 0 ? (1 - (remainingSec / durationSec)) : 0;
+  const bg = (!isHomeworkView && isCountdownOn && !isPaused) ? bgFromProgress(progress) : '#ffffff';
 
   const resetPhaseTime = (nextIdx) => {
+    // Die Hausaufgabenansicht steht NACH der letzten Phase.
     if (nextIdx >= phases.length) {
       endTsRef.current = null;
       setRemainingSec(0);
@@ -532,27 +417,27 @@ export function ExecutionWindow(){
 
   const toggleFullscreen = async () => {
     try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else await document.documentElement.requestFullscreen();
+      const dok = wurzelRef.current?.ownerDocument || document;
+      if (dok.fullscreenElement) await dok.exitFullscreen();
+      else await dok.documentElement.requestFullscreen();
     } catch {}
   };
 
   // Snapshot beziehen
   useEffect(()=>{
     let off = () => {};
+
     const applySnapshot = (payload) => {
       const snap = (payload && typeof payload === 'object') ? payload : null;
       setSnapshot(snap);
       setIdx(0);
       setIsCountdownOn(true);
       setIsPaused(false);
-      setElapsedSec(0);
-      openedAtRef.current = secondsSinceMidnight();
       endTsRef.current = null;
-      lastTickRef.current = null;
       const first = Array.isArray(snap?.phases) ? snap.phases[0] : null;
       setRemainingSec(Math.max(0, Math.round((Number(first?.duration) || 0) * 60)));
     };
+
     (async () => {
       try {
         if (capabilities.executionWindow) {
@@ -561,50 +446,53 @@ export function ExecutionWindow(){
         }
       } catch {}
     })();
+
     if (capabilities.executionWindow) {
       off = platform.onExecutionInit((payload)=>applySnapshot(payload));
     }
     return () => off && off();
   }, []);
 
-  // Taktgeber
+  // Taktgeber, ohne Drift
   useEffect(()=>{
     const loop = () => {
       const snap = snapshotRef.current;
       const i = idxRef.current;
+      const isOn = countdownRef.current;
+      const isP = pausedRef.current;
       const phasesNow = Array.isArray(snap?.phases) ? snap.phases : [];
-      const now = performance.now();
 
-      if (!snap || !phasesNow.length || i >= phasesNow.length) {
-        endTsRef.current = null;
-        lastTickRef.current = null;
-        tickRef.current = requestAnimationFrame(loop);
-        return;
-      }
-      if (!countdownRef.current || pausedRef.current) {
-        endTsRef.current = null;
-        lastTickRef.current = null;
+      if (!snap || !phasesNow.length) {
         tickRef.current = requestAnimationFrame(loop);
         return;
       }
 
-      // Ist-Zeit mitzählen, solange tatsächlich gelaufen wird.
-      if (lastTickRef.current !== null) {
-        const delta = (now - lastTickRef.current) / 1000;
-        if (delta > 0 && delta < 5) setElapsedSec((e)=> e + delta);
+      if (i >= phasesNow.length) {
+        // Hausaufgabenansicht: die Uhr steht.
+        endTsRef.current = null;
+        if (remainingRef.current !== 0) setRemainingSec(0);
+        tickRef.current = requestAnimationFrame(loop);
+        return;
       }
-      lastTickRef.current = now;
 
       const ph = phasesNow[i] || null;
-      const dur = Math.max(0, Math.round((Number(ph?.duration) || 0) * 60));
-      const rem = Number(remainingRef.current) || 0;
-      if (endTsRef.current == null) endTsRef.current = now + rem * 1000;
 
-      // Bewusst OHNE untere Schranke: die Phase läuft ins Negative weiter.
-      const secLeft = Math.ceil((endTsRef.current - now) / 1000);
+      if (!isOn || isP) {
+        // Countdown aus oder pausiert: die Zeit bleibt stehen.
+        endTsRef.current = null;
+        tickRef.current = requestAnimationFrame(loop);
+        return;
+      }
+
+      const dur = Math.max(0, Math.round((Number(ph?.duration) || 0) * 60));
+      const rem = Math.max(0, Number(remainingRef.current) || 0);
+      if (endTsRef.current == null) endTsRef.current = performance.now() + rem * 1000;
+
+      const msLeft = endTsRef.current - performance.now();
+      const secLeft = Math.max(0, Math.ceil(msLeft / 1000));
       if (secLeft !== rem) setRemainingSec(secLeft);
 
-      if (secLeft <= 0 && autoRef.current) {
+      if (secLeft <= 0) {
         endTsRef.current = null;
         if (i < phasesNow.length - 1) {
           const next = i + 1;
@@ -612,19 +500,24 @@ export function ExecutionWindow(){
           const nextP = phasesNow[next] || null;
           setRemainingSec(Math.max(0, Math.round((Number(nextP?.duration) || 0) * 60)));
         } else {
+          // Nach der letzten Phase folgt die Hausaufgabenansicht.
           setIdx(phasesNow.length);
           setIsPaused(true);
           setRemainingSec(0);
         }
       }
+
+      // Falls sich die Dauer geändert hat: die Restzeit darf sie nicht übersteigen.
       if (dur > 0 && remainingRef.current > dur) setRemainingSec(dur);
+
       tickRef.current = requestAnimationFrame(loop);
     };
+
     tickRef.current = requestAnimationFrame(loop);
     return () => { if (tickRef.current) cancelAnimationFrame(tickRef.current); };
   }, []);
 
-  // Tastenkürzel – unverändert gegenüber der bisherigen Fassung.
+  // Tastenkürzel
   useEffect(()=>{
     const onKey = (e) => {
       if (e.key === 'ArrowLeft') goPrev();
@@ -638,47 +531,38 @@ export function ExecutionWindow(){
     return ()=>window.removeEventListener('keydown', onKey);
   }, [phases.length]);
 
-  /* Fortschritt über die GANZE Stunde, segmentiert nach geplanter Dauer.
-     Vorher zeigte der Balken den Verlauf innerhalb einer Phase und sprang
-     bei jedem Wechsel auf null zurück. */
-  const segmente = useMemo(()=> phases.map((p, i)=>{
-    const d = Math.max(1, Math.round((Number(p?.duration) || 0) * 60));
-    let fuellung = 0;
-    if (i < idx) fuellung = 1;
-    else if (i === idx && !isHomeworkView) fuellung = clamp01((d - Math.max(0, remainingSec)) / d);
-    return { key: p?.id || i, titel: p?.title || `Phase ${i + 1}`, gewicht: d, fuellung };
-  }), [phases, idx, remainingSec, isHomeworkView]);
-
-  const verzugText = stufe === 'plan' ? 'im Plan' : formatSignedMMSS(verzugSec);
+  const pct = Math.round(clamp01(progress) * 100);
+  const contentLen = (
+    String(phase?.content || '').length +
+    String(phase?.materialsMedia || '').length +
+    String(phase?.remarks || '').length
+  );
+  // Viel Text: die Ansicht rückt zusammen, damit weniger gescrollt wird.
+  const isDense = contentLen > 900;
 
   return (
-    <div className="execRoot">
+    <div ref={wurzelRef} className={`execRoot ${isDense ? 'dense' : ''}`} style={{ background: bg }}>
       <div className="execTopbar">
         <div className="execTitle">
           <div className="execTitleMain">{snapshot?.lessonTitle || 'Durchführung'}</div>
           {snapshot?.meta ? <div className="execTitleSub">{snapshot.meta}</div> : null}
         </div>
+
         <div className="execActions">
+          <button className="btn" onClick={()=>setIsCountdownOn(v=>!v)} title="C">
+            Countdown: {isCountdownOn ? 'An' : 'Aus'}
+          </button>
           <button className="btn" onClick={()=>setIsPaused(p=>!p)} title="Leertaste">
             {isPaused ? 'Weiter' : 'Pause'}
           </button>
-          <button className="btn" onClick={toggleFullscreen} title="F" aria-label="Vollbild"><Maximize2 {...ICON_SM} /></button>
-          <button className="btn" onClick={()=>window.close?.()} title="Escape" aria-label="Schließen"><X {...ICON_SM} /></button>
+          <button className="btn" onClick={toggleFullscreen} title="F"><Maximize2 {...ICON_SM} /> Vollbild</button>
+          <button className="btn danger" onClick={()=>window.close?.()} title="Escape"><X {...ICON_SM} /> Schließen</button>
         </div>
       </div>
 
-      {/* Fortschritt der ganzen Stunde */}
-      {phases.length ? (
-        <div className="execSegments" role="img"
-             aria-label={`Phase ${Math.min(idx + 1, phases.length)} von ${phases.length}`}>
-          {segmente.map((s, i)=>(
-            <div key={s.key} className={`execSegment${i === idx ? ' is-current' : ''}`}
-                 style={{ flexGrow: s.gewicht }} title={s.titel}>
-              <div className="execSegmentFill" style={{ width: `${s.fuellung * 100}%` }} />
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <div className="execProgress">
+        <div className="execProgressBar" style={{ width: `${pct}%` }} />
+      </div>
 
       <div className="execMain">
         {!snapshot ? (
@@ -687,53 +571,46 @@ export function ExecutionWindow(){
           <div className="muted">Keine Phasen vorhanden.</div>
         ) : isHomeworkView ? (
           <div className="execCard">
-            <div className="execPhaseName">Hausaufgaben</div>
-            <div className="execBlock execDetailsGrow">
-              <div className="execRich" style={{ whiteSpace: 'pre-wrap' }}>
-                {String(snapshot?.homework || '').trim() ? String(snapshot.homework) : 'Keine Hausaufgaben hinterlegt.'}
+            <div className="execPhaseTitle">Hausaufgaben</div>
+
+            <div className="execDetails execDetailsGrow">
+              <div className="execBlock">
+                <div className="execBlockTitle">Hausaufgaben</div>
+                <div className="execRich" style={{ whiteSpace: 'pre-wrap' }}>
+                  {String(snapshot?.homework || '').trim() ? String(snapshot.homework) : 'Keine Hausaufgaben hinterlegt.'}
+                </div>
               </div>
             </div>
+
             <div className="execNav">
               <button className="btn" onClick={goPrev} disabled={idx<=0} aria-label="Vorherige Phase"><ArrowLeft {...ICON} /></button>
+              <button className="btn" onClick={goNext} disabled={idx>=phases.length} aria-label="Nächste Phase"><ArrowRight {...ICON} /></button>
             </div>
           </div>
         ) : (
           <div className="execCard">
-            <div className="execPhaseLine">
-              <span className="execPhaseName">{phase?.title || '—'}</span>
-              {phase?.socialForm ? <span className="execPhaseSocial">{phase.socialForm}</span> : null}
-              <span className="execPhaseCount">{idx + 1}/{phases.length}</span>
+            <div className="execCardHeader">
+              <div className="execCornerLeft">
+                <div className="execCornerChip">Phase {idx + 1} / {phases.length}</div>
+                <div className="execCornerChip">{Number(phase?.duration) || 0} min</div>
+                {(phase?.start || phase?.end) ? (
+                  <div className="execCornerChip">
+                    {phase?.start ? `${phase.start}` : ''}{(phase?.start && phase?.end) ? ' – ' : ''}{phase?.end ? phase.end : ''}
+                  </div>
+                ) : null}
+              </div>
+              <div className="execCornerRight" aria-label="Countdown">
+                <div className="execCornerTimer">{formatMMSS(remainingSec)}</div>
+              </div>
             </div>
 
-            {/* Grösstes Element: die Restzeit der laufenden Phase. */}
-            <div className={`execTimer${remainingSec < 0 ? ' is-over' : ''}${isPaused ? ' is-paused' : ''}`}
-                 aria-label="Restzeit dieser Phase">
-              {isCountdownOn ? formatCountdown(remainingSec) : '—'}
-            </div>
-
-            {/* Starkes zweites Element: kumulierter Verzug und erwartetes Ende. */}
-            <div className={`execVerzug execVerzug--${stufe}`}>
-              <span className="execVerzugWert">{verzugText}</span>
-              {erwartetesEnde ? <span className="execVerzugEnde">Ende ~{erwartetesEnde}</span> : null}
-            </div>
-
-            {/* Immer sichtbar, gedämpft: was als Nächstes kommt. */}
-            <div className="execNext">
-              {nextPhase ? (
-                <>
-                  <span className="execNextLabel">Danach</span>
-                  <span className="execNextName">{nextPhase.title || '—'}</span>
-                  <span className="execNextMeta">
-                    {Number(nextPhase.duration) || 0} min
-                    {nextPhase.socialForm ? ` · ${nextPhase.socialForm}` : ''}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span className="execNextLabel">Danach</span>
-                  <span className="execNextName">Hausaufgaben</span>
-                </>
-              )}
+            <div className="execCenterHeader">
+              <div className="execPhaseTitle">{phase?.title || '—'}</div>
+              {phase?.socialForm ? (
+                <div className="execSocialProminent" aria-label={`Sozialform: ${phase.socialForm}`}>
+                  {phase.socialForm}
+                </div>
+              ) : null}
             </div>
 
             {(phase?.content || phase?.materialsMedia || phase?.remarks) ? (
@@ -744,12 +621,14 @@ export function ExecutionWindow(){
                     <div className="execRich" dangerouslySetInnerHTML={{ __html: String(phase.content) }} />
                   </div>
                 ) : null}
+
                 {phase?.materialsMedia ? (
                   <div className="execBlock">
                     <div className="execBlockTitle">Materialien &amp; Medien</div>
                     <div className="execRich" dangerouslySetInnerHTML={{ __html: String(phase.materialsMedia) }} />
                   </div>
                 ) : null}
+
                 {phase?.remarks ? (
                   <div className="execBlock">
                     <div className="execBlockTitle">Bemerkungen</div>
@@ -761,11 +640,7 @@ export function ExecutionWindow(){
 
             <div className="execNav">
               <button className="btn" onClick={goPrev} disabled={idx<=0} aria-label="Vorherige Phase"><ArrowLeft {...ICON} /></button>
-              <label className="execAuto" title="Bei 0 automatisch zur nächsten Phase springen">
-                <input type="checkbox" checked={autoAdvance} onChange={(e)=>setAutoAdvance(e.target.checked)} />
-                <span>Automatisch weiter</span>
-              </label>
-              <button className="btn primary" onClick={goNext} aria-label="Nächste Phase"><ArrowRight {...ICON} /></button>
+              <button className="btn" onClick={goNext} disabled={idx>=phases.length} aria-label="Nächste Phase"><ArrowRight {...ICON} /></button>
             </div>
           </div>
         ))}
@@ -1550,7 +1425,7 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
 function SequenceProgress({ progress, kompakt = false }){
   if (!progress || progress.position < 1) return null;
   const anteil = progress.total > 0 ? progress.position / progress.total : 0;
-  const linie = progress.color ? lineColor(progress.color) : 'var(--board)';
+  const linie = progress.color ? lineColor(progress.color) : 'var(--primary)';
   return (
     <div className={`seqProgress${kompakt ? ' seqProgress--kompakt' : ''}`}>
       <div className="seqProgressText">
@@ -6971,7 +6846,7 @@ function SequenceManager({
             <div key={s.id} className="seqRow">
               <input
                 type="color"
-                value={s.color || PALETTE[0]}
+                value={s.color || SEQ_COLORS[0]}
                 onChange={(e)=>onUpdate(s.id, { color: e.target.value })}
                 title="Farbe"
               />

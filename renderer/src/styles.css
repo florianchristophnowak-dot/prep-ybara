@@ -1,17 +1,16 @@
 /* ============================================================
    Prép-ybara – Designsystem
 
-   Gestaltungsentscheidung: Lineatur statt Schwebe.
-   Die Oberfläche ist Papier, die Gliederung tragen Linien und Ränder –
-   nicht Schlagschatten und schwebende Karten. Vorbild ist das
-   Handwerkszeug des Berufs: Schulheft, Lehrerkalender, Karteikarte,
-   Tafel. Terrakotta bleibt der Handlung vorbehalten, Tafelgrün und
-   Papierweiß tragen die Fläche.
+   Form: Lineatur statt Schwebe. Die Oberfläche ist Papier, die
+   Gliederung tragen Linien, Ränder und Kästchen – nicht Schlagschatten
+   und schwebende Karten. Spitze Ecken, zurückgenommene Schatten.
+
+   Farbe: die Palette der Fassung 1.0.9. Indigoblau trägt die Handlung,
+   Weiß und helles Blaugrau die Fläche, Rot/Bernstein/Grün den Status.
+   Die Kopfleiste ist wieder eine helle Fläche mit Trennlinie.
 
    Alle Farbwerte stehen ausschliesslich hier. Ausserhalb dieser
    Definition wird nur noch über var(--token) zugegriffen.
-   Ableitung: OKLCH-Ramps aus der Bildmarke, jede Paarung auf
-   Kontrast >= 4.5:1 geprüft.
    ============================================================ */
 
 /* ============================================================
@@ -42,48 +41,47 @@
 
 :root {
   color-scheme: light;
-  /* Flächen – Papier trägt, Pergament tönt nur */
-  --bg: #fbf8f0;
-  --bg-subtle: #f5eee3;
-  --card: #fefcf8;
-  --parchment: #f9ecce;
-  /* Tafel – trägt die Struktur */
-  --board: #394d3e;
-  --board-hover: #2b3d2f;
-  --board-soft: #e9f7ec;
-  --board-ink: #223226;
-  /* Die Tafel ist in beiden Modi dunkel – Text darauf ist deshalb in
-     beiden Modi hell. Eigene Rolle, damit sie nicht mit der hellen
-     Tönungsfläche --board-soft verwechselt wird. */
-  --on-board: #e4f1e6;
-  --board-edge: #223226;
+
+  /* Flächen – helles Papier, wie im Release */
+  --bg: #f8f9fc;
+  --bg-subtle: #f3f4f8;
+  --card: #ffffff;
+  /* Getönte Hinweisfläche (Leitfragen, Hinweiskarten) */
+  --parchment: #eff6ff;
+
   /* Text */
-  --text: #26201c;
-  --text-secondary: #6a5d52;
-  --muted: #77685c;
-  /* Linien – ersetzen den Schatten als Gliederungsmittel */
-  --border: #baafa2;
-  --border-light: #d7cec1;
-  --border-strong: #988c7f;
-  /* Aktion – Terrakotta, sparsam und nur für Handlungen */
-  --primary: #ab5e13;
-  --primary-hover: #934900;
-  --primary-ink: #783a00;
-  --primary-soft: #ffecd6;
+  --text: #1a1d26;
+  --text-secondary: #4a5068;
+  --muted: #6b7280;
+
+  /* Linien */
+  --border: #e2e4eb;
+  --border-light: #eef0f5;
+  --border-strong: #cbd5e1;
+
+  /* Aktion – Indigoblau, die Leitfarbe des Releases */
+  --primary: #4f6ef7;
+  --primary-hover: #3d5ce5;
+  --primary-ink: #1d4ed8;
+  --primary-soft: #eef1fe;
   --on-primary: #ffffff;
+
   /* Status */
-  --danger: #b4564c;
-  --danger-soft: #ffe9e4;
-  --success: #357855;
-  --success-soft: #e0faea;
-  --warning: #886f17;
-  --warning-soft: #fdf2d1;
+  --danger: #ef4444;
+  --danger-soft: #fef2f2;
+  --success: #10b981;
+  --success-soft: #ecfdf5;
+  --warning: #f59e0b;
+  --warning-soft: #fffbeb;
+
   /* Export-Marken */
-  --export-word: #2e5072;
-  --export-pdf: #7e2f36;
+  --export-word: #1e3a5f;
+  --export-pdf: #8b1538;
+
   /* Abdunklung hinter Overlays */
-  --scrim: rgba(38, 32, 28, 0.46);
-  --scrim-strong: rgba(38, 32, 28, 0.56);
+  --scrim: rgba(26, 29, 38, 0.46);
+  --scrim-strong: rgba(26, 29, 38, 0.56);
+
   /* Fokus */
   --focus-ring: var(--primary);
   --focus-halo: var(--card);
@@ -94,7 +92,7 @@
   --primary-glow: var(--primary-soft);
   --danger-light: var(--danger-soft);
   --warning-light: var(--warning-soft);
-  --word: var(--export-word);
+  --word: #3b82f6;
 
   /* Kanten: spitz. Schulheft, Karteikarte und Formular haben keine
      abgerundeten Ecken – das trägt die Lineatur-Entscheidung weiter.
@@ -143,55 +141,59 @@
   --lh-relaxed: 1.6;
 }
 
-/* Dunkel: warmes Dunkelbraun aus der Tinte-Achse, kein Neutralgrau. */
+/* Dunkel: kühles Blaugrau aus derselben Achse wie die Leitfarbe. */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* Flächen – Papier trägt, Pergament tönt nur */
-  --bg: #1c1611;
-  --bg-subtle: #28211c;
-  --card: #2c241e;
-  --parchment: #3a3224;
-  /* Tafel – trägt die Struktur */
-  --board: #293a2d;
-  --board-hover: #374a3c;
-  --board-soft: #223025;
-  --board-ink: #cadece;
-  --on-board: #d4e2d7;
-  --board-edge: #111e15;
+  /* Flächen */
+  --bg: #12151d;
+  --bg-subtle: #1a1e28;
+  --card: #1e222d;
+  --parchment: #1b2740;
+
   /* Overlays brauchen auf dunklem Grund kräftigere Tiefe. */
   --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.46);
   --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.62);
+
   /* Text */
-  --text: #f1ece4;
-  --text-secondary: #c4bdb1;
-  --muted: #a39a8e;
-  /* Linien – ersetzen den Schatten als Gliederungsmittel */
-  --border: #4f463c;
-  --border-light: #3c342c;
-  --border-strong: #7f7264;
-  /* Aktion – Terrakotta, sparsam und nur für Handlungen */
-  --primary: #ea9d61;
-  --primary-hover: #feb57e;
-  --primary-ink: #f6ab71;
-  --primary-soft: #3d2614;
-  --on-primary: #201208;
+  --text: #e9ebf2;
+  --text-secondary: #b4bacb;
+  --muted: #949bad;
+
+  /* Linien */
+  --border: #333a4b;
+  --border-light: #2a3040;
+  --border-strong: #5b6377;
+
+  /* Aktion */
+  --primary: #8ea4ff;
+  --primary-hover: #a7b8ff;
+  --primary-ink: #a7b8ff;
+  --primary-soft: #232c47;
+  --on-primary: #10162a;
+
   /* Status */
-  --danger: #e6867a;
-  --danger-soft: #40231f;
-  --success: #7fc39b;
-  --success-soft: #1c3125;
-  --warning: #d3b968;
-  --warning-soft: #332b13;
+  --danger: #f5877f;
+  --danger-soft: #3a2020;
+  --success: #5fd0a4;
+  --success-soft: #14312a;
+  --warning: #f0bc5e;
+  --warning-soft: #352a12;
+
   /* Export-Marken */
-  --export-word: #6990b8;
-  --export-pdf: #c66f73;
+  --export-word: #6f9bd0;
+  --export-pdf: #d4708f;
+
   /* Abdunklung hinter Overlays */
-  --scrim: rgba(10, 7, 5, 0.64);
-  --scrim-strong: rgba(10, 7, 5, 0.74);
+  --scrim: rgba(6, 8, 14, 0.64);
+  --scrim-strong: rgba(6, 8, 14, 0.74);
+
   /* Fokus */
   --focus-ring: var(--primary);
   --focus-halo: var(--bg);
+
+  /* Alias auf die dunkle Wortmarke */
+  --word: #6f9bd0;
 }
 
 /* Systemvorgabe, solange der Nutzer nicht ausdrücklich hell gewählt hat. */
@@ -199,51 +201,55 @@
   :root:not([data-theme="light"]):not([data-theme="dark"]) {
     color-scheme: dark;
 
-  /* Flächen – Papier trägt, Pergament tönt nur */
-  --bg: #1c1611;
-  --bg-subtle: #28211c;
-  --card: #2c241e;
-  --parchment: #3a3224;
-  /* Tafel – trägt die Struktur */
-  --board: #293a2d;
-  --board-hover: #374a3c;
-  --board-soft: #223025;
-  --board-ink: #cadece;
-  --on-board: #d4e2d7;
-  --board-edge: #111e15;
-  /* Overlays brauchen auf dunklem Grund kräftigere Tiefe. */
-  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.46);
-  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.62);
-  /* Text */
-  --text: #f1ece4;
-  --text-secondary: #c4bdb1;
-  --muted: #a39a8e;
-  /* Linien – ersetzen den Schatten als Gliederungsmittel */
-  --border: #4f463c;
-  --border-light: #3c342c;
-  --border-strong: #7f7264;
-  /* Aktion – Terrakotta, sparsam und nur für Handlungen */
-  --primary: #ea9d61;
-  --primary-hover: #feb57e;
-  --primary-ink: #f6ab71;
-  --primary-soft: #3d2614;
-  --on-primary: #201208;
-  /* Status */
-  --danger: #e6867a;
-  --danger-soft: #40231f;
-  --success: #7fc39b;
-  --success-soft: #1c3125;
-  --warning: #d3b968;
-  --warning-soft: #332b13;
-  /* Export-Marken */
-  --export-word: #6990b8;
-  --export-pdf: #c66f73;
-  /* Abdunklung hinter Overlays */
-  --scrim: rgba(10, 7, 5, 0.64);
-  --scrim-strong: rgba(10, 7, 5, 0.74);
-  /* Fokus */
-  --focus-ring: var(--primary);
-  --focus-halo: var(--bg);
+    /* Flächen */
+    --bg: #12151d;
+    --bg-subtle: #1a1e28;
+    --card: #1e222d;
+    --parchment: #1b2740;
+
+    /* Overlays brauchen auf dunklem Grund kräftigere Tiefe. */
+    --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.46);
+    --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.62);
+
+    /* Text */
+    --text: #e9ebf2;
+    --text-secondary: #b4bacb;
+    --muted: #949bad;
+
+    /* Linien */
+    --border: #333a4b;
+    --border-light: #2a3040;
+    --border-strong: #5b6377;
+
+    /* Aktion */
+    --primary: #8ea4ff;
+    --primary-hover: #a7b8ff;
+    --primary-ink: #a7b8ff;
+    --primary-soft: #232c47;
+    --on-primary: #10162a;
+
+    /* Status */
+    --danger: #f5877f;
+    --danger-soft: #3a2020;
+    --success: #5fd0a4;
+    --success-soft: #14312a;
+    --warning: #f0bc5e;
+    --warning-soft: #352a12;
+
+    /* Export-Marken */
+    --export-word: #6f9bd0;
+    --export-pdf: #d4708f;
+
+    /* Abdunklung hinter Overlays */
+    --scrim: rgba(6, 8, 14, 0.64);
+    --scrim-strong: rgba(6, 8, 14, 0.74);
+
+    /* Fokus */
+    --focus-ring: var(--primary);
+    --focus-halo: var(--bg);
+
+    /* Alias auf die dunkle Wortmarke */
+    --word: #6f9bd0;
   }
 }
 
@@ -605,127 +611,114 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .rteBody { padding: 10px 12px; min-height: 90px; font-size: var(--fs-base); line-height: 1.6; outline: none; white-space: normal; }
 .rteBody:empty:before { content: attr(data-placeholder); color: var(--muted); opacity: 0.6; }
 
-.btn.exec { background: var(--board); border-color: var(--board); color: var(--on-board); }
-.btn.exec:hover { background: var(--board-hover); }
+.btn.exec { background: var(--text); border-color: var(--text); color: var(--card); }
+.btn.exec:hover { filter: brightness(1.25); }
 
 /* ============================================================
    Durchführungsansicht
 
-   Schmales Fenster, kurze Blicke aus ein bis zwei Metern. Genau ein
-   Element ist das grösste: die Restzeit. Rot hängt ausschliesslich am
-   Verzugswert – der Phasenverlauf färbt nichts mehr ein.
+   Die Präsentationsfassung des Releases: grosser Phasentitel in der
+   Mitte, Countdown oben rechts, Eckchips links, Fortschrittsbalken
+   unter der Kopfzeile. Der Grund wandert über den Verlauf der Phase
+   von Grün nach Rot – das ist die eigentliche Anzeige.
+
+   Übernommen aus dem heutigen Designsystem ist allein die Form:
+   spitze Ecken, Kästchen mit Rand, keine schwebenden Karten.
    ============================================================ */
 .execRoot {
   height: 100vh;
   width: 100vw;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  gap: 16px;
+  padding: 20px;
   color: var(--text);
+  transition: background 400ms ease;
 }
 .execTopbar {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 12px;
-  padding: 10px 14px;
-  background: var(--board);
-  border-bottom: 1px solid var(--board-edge);
+  gap: 16px;
 }
-.execTitleMain { font-size: var(--fs-md); font-weight: var(--fw-bold); color: var(--on-board); line-height: 1.25; }
-.execTitleSub { font-size: var(--fs-xs); color: color-mix(in srgb, var(--on-board) 72%, transparent); margin-top: 2px; }
-.execActions { display: flex; gap: 6px; flex-shrink: 0; }
-.execActions .btn {
-  background: transparent;
-  border-color: color-mix(in srgb, var(--on-board) 38%, transparent);
-  color: var(--on-board);
-  padding: 5px 10px;
-  font-size: var(--fs-sm);
+.execTitleMain { font-size: var(--fs-xl); font-weight: var(--fw-bold); letter-spacing: -0.02em; }
+.execTitleSub { font-size: var(--fs-md); color: var(--muted); margin-top: 4px; }
+.execActions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+
+/* Fortschritt der laufenden Phase. */
+.execProgress { height: 10px; background: var(--card); border: 1px solid var(--border); overflow: hidden; flex-shrink: 0; }
+.execProgressBar {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary) 0%, var(--success) 100%);
+  transition: width 300ms linear;
 }
-.execActions .btn:hover { background: color-mix(in srgb, var(--on-board) 14%, transparent); }
 
-/* Fortschritt der ganzen Stunde, Segmentbreite nach geplanter Dauer. */
-.execSegments { display: flex; gap: 2px; height: 8px; background: var(--bg-subtle); flex-shrink: 0; }
-.execSegment { position: relative; background: var(--border-light); overflow: hidden; min-width: 3px; }
-.execSegment.is-current { background: var(--border); }
-.execSegmentFill { height: 100%; background: var(--board); transition: width 240ms linear; }
-
-.execMain { flex: 1; min-height: 0; display: flex; padding: 14px; }
+.execMain { flex: 1; min-height: 0; display: flex; justify-content: center; align-items: stretch; padding: 0 12px 12px; }
 .execCard {
-  flex: 1;
+  width: min(1100px, 96vw);
+  height: 100%;
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
   background: var(--card);
   border: 1px solid var(--border);
-  border-left: 4px solid var(--board);
-  padding: 14px 16px;
-}
-
-.execPhaseLine { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.execPhaseName { font-size: var(--fs-xl); font-weight: var(--fw-bold); letter-spacing: -0.01em; }
-.execPhaseSocial {
-  font-size: var(--fs-sm); font-weight: var(--fw-medium);
-  border: 1px solid var(--border); padding: 2px 8px; color: var(--text-secondary);
-}
-.execPhaseCount { margin-left: auto; font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
-
-/* Grösstes Element. */
-.execTimer {
-  font-size: clamp(56px, 17vw, 104px);
-  font-weight: var(--fw-bold);
-  line-height: 1;
-  letter-spacing: -0.03em;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-  margin: 2px 0;
-}
-.execTimer.is-over { color: var(--danger); }
-.execTimer.is-paused { color: var(--muted); }
-
-/* Starkes zweites Element. Nur hier gibt es Farbe für den Zustand. */
-.execVerzug {
+  padding: 24px;
   display: flex;
-  align-items: baseline;
-  justify-content: center;
-  gap: 12px;
+  flex-direction: column;
+}
+
+.execCardHeader { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.execCornerLeft { display: flex; flex-wrap: wrap; gap: 8px; }
+.execCornerChip {
+  display: inline-flex; align-items: center; padding: 6px 12px;
+  border: 1px solid var(--border); background: var(--bg-subtle);
+  font-weight: var(--fw-bold); font-size: var(--fs-md);
+}
+.execCornerRight { display: flex; align-items: flex-start; justify-content: flex-end; }
+.execCornerTimer {
+  font-size: clamp(48px, 5.5vw, 96px);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.02em;
+  line-height: 1;
+  text-align: right;
   font-variant-numeric: tabular-nums;
 }
-.execVerzugWert { font-size: clamp(20px, 5.5vw, 32px); font-weight: var(--fw-bold); letter-spacing: -0.01em; }
-.execVerzugEnde { font-size: var(--fs-md); color: var(--muted); }
-.execVerzug--plan  .execVerzugWert { color: var(--text-secondary); }
-.execVerzug--vor   .execVerzugWert { color: var(--success); }
-.execVerzug--warn  .execVerzugWert { color: var(--warning); }
-.execVerzug--stark .execVerzugWert { color: var(--danger); }
 
-/* Immer sichtbar, gedämpft. */
-.execNext {
-  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-  border-top: 1px solid var(--border-light);
-  border-bottom: 1px solid var(--border-light);
-  padding: 8px 0;
+.execCenterHeader { text-align: center; margin-top: 12px; }
+.execPhaseTitle {
+  font-size: clamp(36px, 5.5vw, 68px);
+  font-weight: var(--fw-bold);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 12px 0 8px;
+  text-align: center;
 }
-.execNextLabel { font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
-.execNextName { font-size: var(--fs-base); font-weight: var(--fw-medium); color: var(--text-secondary); }
-.execNextMeta { font-size: var(--fs-sm); color: var(--muted); }
+.execSocialProminent {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 10px 22px; margin-top: 10px;
+  border: 2px solid var(--border); background: var(--bg-subtle);
+  font-weight: var(--fw-bold); font-size: clamp(18px, 2.2vw, 28px);
+}
 
-.execDetails { display: grid; gap: 10px; text-align: left; }
+.execDetails { margin-top: 16px; display: grid; gap: 12px; text-align: left; }
 .execDetailsGrow { flex: 1; min-height: 0; overflow: auto; padding-right: 4px; }
-.execBlock { background: var(--bg-subtle); border: 1px solid var(--border-light); padding: 10px 12px; }
+.execBlock { background: var(--card); border: 1px solid var(--border); padding: 14px 16px; }
 .execBlockTitle {
-  font-weight: var(--fw-bold); font-size: var(--fs-2xs); color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;
+  font-weight: var(--fw-bold); font-size: var(--fs-xs); color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px;
 }
-.execRich { font-size: var(--fs-base); line-height: 1.5; }
-.execRich p { margin: 0 0 8px 0; }
-.execRich ul, .execRich ol { margin: 0 0 8px 20px; }
+.execRich { font-size: clamp(18px, 2.2vw, 24px); line-height: 1.5; }
+.execRich p { margin: 0 0 10px 0; }
+.execRich ul, .execRich ol { margin: 0 0 10px 24px; }
 
 .execNav {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); flex-shrink: 0;
+  display: flex; justify-content: center; gap: 12px;
+  margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); flex-shrink: 0;
 }
-.execAuto { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); cursor: pointer; }
+
+/* Viel Text: alles rückt eine Stufe zusammen. */
+.execRoot.dense .execRich { font-size: clamp(16px, 1.8vw, 20px); }
+.execRoot.dense .execPhaseTitle { font-size: clamp(30px, 4.8vw, 56px); }
+.execRoot.dense .execSocialProminent { font-size: clamp(16px, 2vw, 24px); padding: 8px 18px; }
+.execRoot.dense .execCornerTimer { font-size: clamp(42px, 4.8vw, 84px); }
 
 @media (max-width: 768px) {
   .split { grid-template-columns: 1fr; }
@@ -854,19 +847,17 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 /* ============================================================
    Lineatur – die Gestaltungsentscheidung in der Anwendung
 
-   Die Kopfleiste ist die Tafel, der Inhalt darunter das Papier.
+   Kopfleiste und Inhalt stehen auf demselben hellen Papier; getrennt
+   werden sie durch eine Linie, nicht durch eine dunkle Fläche.
    Gliederung entsteht durch Linien und Ränder, nicht durch
    schwebende Karten.
    ============================================================ */
 .topbar {
-  background: var(--board);
-  border-bottom: 1px solid var(--board-edge);
-  color: var(--on-board);
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
 }
-.topbar h1 { color: var(--on-board); white-space: nowrap; }
-/* Formularfelder bringen ihre eigene helle Fläche mit – sie dürfen die
-   Schriftfarbe der Tafel NICHT erben, sonst steht heller Text auf hellem
-   Grund (das Datumsfeld lag bei 1,14:1). */
+.topbar h1 { color: var(--text); white-space: nowrap; }
 .topbar input,
 .topbar textarea,
 .topbar select {
@@ -876,13 +867,13 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 }
 .topbar input::placeholder { color: var(--muted); }
 .topbar .btn {
-  background: transparent;
-  border-color: color-mix(in srgb, var(--on-board) 38%, transparent);
-  color: var(--on-board);
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--text);
 }
 .topbar .btn:hover {
-  background: color-mix(in srgb, var(--on-board) 14%, transparent);
-  border-color: var(--on-board);
+  background: var(--bg-subtle);
+  border-color: var(--border-strong);
 }
 .topbar .btn.primary {
   background: var(--primary);
@@ -891,11 +882,11 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 }
 .topbar .btn.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
 .topbar .badge {
-  background: color-mix(in srgb, var(--on-board) 12%, transparent);
-  border-color: color-mix(in srgb, var(--on-board) 34%, transparent);
-  color: var(--on-board);
+  background: var(--bg-subtle);
+  border-color: var(--border);
+  color: var(--text-secondary);
 }
-.logo { border: 1px solid color-mix(in srgb, var(--on-board) 30%, transparent); }
+.logo { border: 1px solid var(--border); }
 
 /* Der Korrekturrand: farbige linke Kante als durchgehendes Motiv. */
 .macroLesson { border-left-width: 4px; border-left-style: solid; }
@@ -907,10 +898,10 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
   border-bottom: 1px solid var(--border);
 }
 
-/* Darstellungs-Umschalter: drei Zustände als Segmentschalter in der Tafelleiste. */
+/* Darstellungs-Umschalter: drei Zustände als Segmentschalter in der Kopfleiste. */
 .themeSwitch {
   display: inline-flex;
-  border: 1px solid color-mix(in srgb, var(--on-board) 34%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-full);
   overflow: hidden;
   flex-shrink: 0;
@@ -918,7 +909,7 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .themeSwitchBtn {
   border: none;
   background: transparent;
-  color: var(--on-board);
+  color: var(--text-secondary);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
   padding: 6px 12px;
@@ -926,9 +917,9 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 .themeSwitchBtn + .themeSwitchBtn {
-  border-left: 1px solid color-mix(in srgb, var(--on-board) 26%, transparent);
+  border-left: 1px solid var(--border);
 }
-.themeSwitchBtn:hover { background: color-mix(in srgb, var(--on-board) 14%, transparent); }
+.themeSwitchBtn:hover { background: var(--bg-subtle); }
 .themeSwitchBtn.is-active {
   background: var(--primary);
   color: var(--on-primary);
@@ -1200,12 +1191,6 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .settingsHeading { margin: 0 0 6px; font-size: var(--fs-md); font-weight: var(--fw-bold); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .settingsText { margin: 0 0 8px; font-size: var(--fs-base); line-height: 1.55; max-width: 78ch; }
 .settingsRow { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-/* In den Einstellungen steht der Schalter auf Papier, nicht auf der Tafel. */
-.settingsRow .themeSwitch { border-color: var(--border); }
-.settingsRow .themeSwitchBtn { color: var(--text-secondary); }
-.settingsRow .themeSwitchBtn + .themeSwitchBtn { border-left-color: var(--border); }
-.settingsRow .themeSwitchBtn:hover { background: var(--bg-subtle); }
-.settingsRow .themeSwitchBtn.is-active { background: var(--primary); color: var(--on-primary); }
 
 /* ============================================================
    Sequenzfortschritt
@@ -1226,7 +1211,7 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
   display: flex; align-items: flex-start; gap: 12px; width: 100%;
   text-align: left; cursor: pointer; padding: 10px 12px;
   background: var(--card); border: 1px solid var(--border);
-  border-left: 4px solid var(--board);
+  border-left: 4px solid var(--primary);
   transition: background var(--transition-fast), border-color var(--transition-fast);
 }
 .todayLesson:hover { background: var(--bg-subtle); border-color: var(--primary); }
@@ -1257,7 +1242,7 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
   font-variant-numeric: tabular-nums; font-size: var(--fs-md);
 }
 /* Die Fläche trägt die Intensität, die Zahl bleibt immer lesbar. */
-.heatFill { position: absolute; inset: 0; background: var(--board); pointer-events: none; }
+.heatFill { position: absolute; inset: 0; background: var(--primary); pointer-events: none; }
 .heatZahl { position: relative; }
 .heatSum { font-weight: var(--fw-bold); background: var(--bg-subtle); }
 

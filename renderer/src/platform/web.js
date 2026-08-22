@@ -24,6 +24,9 @@ import {
 import {
   createExecutionBridge, requestSnapshotOverChannel, hasDocumentPip,
 } from './web-execution.js';
+import {
+  pickAndStoreFiles, openStoredFile, pruneUnusedHandles, isFileRef,
+} from './web-handles.js';
 
 const LEGACY_KEY = 'lehrerplan_db';
 const META_KEY = 'meta';
@@ -80,7 +83,11 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
 
     lastWeeks = new Map(Object.entries(weeks).map(([k, v]) => [k, { ref: v, json: JSON.stringify(v) }]));
     lastMeta = JSON.stringify(meta);
-    return { ...meta, weeks };
+    const db = { ...meta, weeks };
+    // Handles wegräumen, auf die keine Stunde mehr verweist. Bewusst erst
+    // hier: im Stundeneditor ist das Entfernen nur ein Entwurf.
+    pruneUnusedHandles(db);
+    return db;
   };
 
   const saveDB = async (nextDb) => {
@@ -211,8 +218,17 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
     importTemplates,
     exportPdf: ({ html }) => printHtmlAsPdf({ html, appVersion }),
     exportDocx: (payload) => exportDocxInBrowser(payload),
-    pickFiles: notAvailable,
-    openPath: async (p) => { try { window.open(p, '_blank', 'noopener'); return { ok: true }; } catch (e) { return { ok: false, error: String(e?.message || e) }; } },
+    /* Dateianhänge: Der Handle wandert in eine eigene IndexedDB-Ablage,
+       in der Stunde steht nur eine Referenz im Feld `path`. Das
+       Datenmodell bleibt dadurch unberührt. */
+    pickFiles: async ({ multi = true } = {}) => pickAndStoreFiles({ multi }),
+    openPath: async (p) => {
+      if (isFileRef(p)) return openStoredFile(p);
+      // Kein Dateiverweis, sondern ein Link aus der Stunde.
+      try { window.open(p, '_blank', 'noopener'); return { ok: true }; }
+      catch (e) { return { ok: false, error: String(e?.message || e) }; }
+    },
+    // Es gibt im Browser keinen Dateimanager, den man ansteuern könnte.
     revealPath: notAvailable,
     getLibraryRoot: notAvailable,
     copyToLibrary: notAvailable,

@@ -1474,6 +1474,15 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
         </p>
 
         {istBrowser ? (
+          <p className="settingsText">
+            Angehängte Dateien bleiben dort liegen, wo sie sind – die App merkt
+            sich nur einen Verweis darauf. Wird eine Datei verschoben oder
+            gelöscht, meldet die App das beim Öffnen. Im Backup stehen die
+            Verweise, nicht die Dateien selbst.
+          </p>
+        ) : null}
+
+        {istBrowser ? (
           storageState?.granted ? (
             <div className="inlineNotice">
               Der Browser hat die Ablage als dauerhaft zugesagt. Deine Planung
@@ -5648,7 +5657,9 @@ const exportDocx = () => {
                       </div>
                       <div className="row wrap" style={{gap:8}}>
                         <button className="btn" onClick={()=>openFile(f.path)}>Öffnen</button>
-                        <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                        {capabilities.revealInFolder ? (
+                          <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                        ) : null}
                       </div>
                     </div>
                   ))}
@@ -5677,7 +5688,9 @@ const exportDocx = () => {
                     </div>
                     <div className="row wrap" style={{gap:8}}>
                       <button className="btn" onClick={()=>openFile(f.path)}>Öffnen</button>
-                      <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                      {capabilities.revealInFolder ? (
+                          <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                        ) : null}
                       <button className="btn danger" onClick={()=>removeLessonFile(f.id)}>Entfernen</button>
                     </div>
                   </div>
@@ -6943,7 +6956,9 @@ function SequenceManager({
                         </div>
                         <div className="row wrap" style={{gap:8}}>
                           <button className="btn" onClick={()=>openFile(f.path)}>Öffnen</button>
+                          {capabilities.revealInFolder ? (
                           <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                        ) : null}
                           <button className="btn danger" onClick={()=>removeSeqFile(f.id)}>Entfernen</button>
                         </div>
                       </div>

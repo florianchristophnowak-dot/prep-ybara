@@ -401,32 +401,11 @@ async function exportPdfFromHtml({ html, suggestedFileName }) {
 
 
 
-// --- DOCX export (Word) ---
-let _htmlToDocx = null;
-async function getHtmlToDocx() {
-  if (_htmlToDocx) return _htmlToDocx;
-  // html-to-docx is ESM in some builds, so use dynamic import from CJS.
-  // Hinweis: Wir verwenden in der App standardmäßig .doc (HTML), weil das
-  // auf vielen Word-Versionen zuverlässiger öffnet als ein konvertiertes .docx.
-  const mod = await import('html-to-docx');
-  _htmlToDocx = mod?.default || mod;
-  return _htmlToDocx;
-}
-
-function ensureDocxBuffer(docx) {
-  let buf = docx;
-  // Common return types: Buffer, ArrayBuffer, Uint8Array, etc.
-  if (Buffer.isBuffer(buf)) return buf;
-  if (buf instanceof ArrayBuffer) return Buffer.from(new Uint8Array(buf));
-  if (ArrayBuffer.isView(buf)) return Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
-  if (buf && typeof buf === 'object') {
-    if (Buffer.isBuffer(buf.buffer)) return buf.buffer;
-    if (buf.buffer instanceof ArrayBuffer) return Buffer.from(new Uint8Array(buf.buffer));
-    if (ArrayBuffer.isView(buf.data)) return Buffer.from(buf.data.buffer, buf.data.byteOffset, buf.data.byteLength);
-  }
-  if (typeof buf === 'string') return Buffer.from(buf, 'binary');
-  throw new Error(`Unsupported DOCX export type: ${typeof buf}`);
-}
+/* Hinweis: Der Word-Export erzeugt für Word aufbereitetes HTML als .doc,
+   siehe word-export.mjs. An dieser Stelle standen bis hierher ein Lader für
+   html-to-docx und ein Puffer-Normalisierer – beide wurden nie aufgerufen.
+   Mit ihnen entfällt die Abhängigkeit html-to-docx samt lodash, jszip,
+   xmlbuilder2 und virtual-dom. */
 
 // Gemeinsames Modul, damit Haupt- und Renderer-Prozess dieselbe Datei erzeugen.
 let _wordExport = null;

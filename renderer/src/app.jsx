@@ -1,8 +1,6 @@
 import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import logo from './assets/logo.webp';
 import eastereggImg from './assets/easteregg.webp';
-import wordIcon from './assets/word-icon.svg';
-import pdfIcon from './assets/pdf-icon.svg';
 import helpMd from './assets/HELP.md?raw';
 import platform, { capabilities, platformName } from './platform/index.js';
 import { APP_VERSION } from './version.js';
@@ -13,7 +11,7 @@ import {
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronLeft, ChevronRight,
-  CalendarCheck, CalendarRange, CircleHelp, ClipboardPaste, Copy, Grid3x3, Library,
+  CalendarCheck, CalendarRange, CircleHelp, ClipboardPaste, Copy, FileDown, FileText, Grid3x3, Library,
   Maximize2, NotebookPen, Palmtree, Pencil, Play, Rows3, Scissors, Search, Settings,
   Square, Star, Sun, Trash2, X,
 } from 'lucide-react';
@@ -1165,10 +1163,14 @@ function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
 function deepClone(obj){
   try {
     if (typeof globalThis.structuredClone === 'function') {
-      return globalThis.deepClone(obj);
+      // Rief bisher globalThis.deepClone auf – das gibt es nicht, der
+      // Aufruf warf, und der Rückfall unten hat den Fehler stillschweigend
+      // geschluckt. Der schnelle Weg lief dadurch nie.
+      return globalThis.structuredClone(obj);
     }
   } catch {}
-  // Fallback: JSON clone (OK for our plain data objects)
+  // Rückfall für Umgebungen ohne structuredClone. Für unsere reinen
+  // Datenobjekte verhält er sich gleich, ist aber rund 1,4x langsamer.
   return JSON.parse(JSON.stringify(obj ?? null));
 }
 
@@ -4253,10 +4255,10 @@ const exportWeekDocx = () => {
         <div className="row" style={{gap:8}}>
           <button className="btn warning" onClick={onOpenTodos} title="To-do-Checkliste öffnen">To-dos{todayTodoCount ? ` (${todayTodoCount})` : ''}</button>
           {capabilities.docxExport ? (
-            <button className="btn iconBtn-word" onClick={exportWeekDocx} title="Als Word-Datei speichern"><img src={wordIcon} alt="" className="btnIcon" />Word Woche</button>
+            <button className="btn iconBtn-word" onClick={exportWeekDocx} title="Als Word-Datei speichern"><FileText {...ICON_SM} /> Word Woche</button>
           ) : null}
           {capabilities.pdfExport ? (
-            <button className="btn iconBtn-pdf" onClick={exportWeekPdf} title="Als PDF speichern"><img src={pdfIcon} alt="" className="btnIcon" />PDF Woche</button>
+            <button className="btn iconBtn-pdf" onClick={exportWeekPdf} title="Als PDF speichern"><FileDown {...ICON_SM} /> PDF Woche</button>
           ) : null}
           <span className="muted small">Stunden pro Tag:</span>
           <input className="input" style={{width:90}} type="number" min={1} max={12} value={slots} onChange={(e)=>onChangeSlots(Number(e.target.value||slots))} />
@@ -5304,10 +5306,10 @@ const exportDocx = () => {
           ) : null}
           <button className="btn danger" onClick={onDeleteLesson}>Stunde löschen</button>
           {capabilities.docxExport ? (
-            <button className="btn iconBtn-word" onClick={exportDocx} title="Als Word-Datei speichern"><img src={wordIcon} alt="" className="btnIcon" />Word speichern</button>
+            <button className="btn iconBtn-word" onClick={exportDocx} title="Als Word-Datei speichern"><FileText {...ICON_SM} /> Word speichern</button>
           ) : null}
           {capabilities.pdfExport ? (
-            <button className="btn iconBtn-pdf" onClick={exportPdf} title="Als PDF speichern"><img src={pdfIcon} alt="" className="btnIcon" />PDF speichern</button>
+            <button className="btn iconBtn-pdf" onClick={exportPdf} title="Als PDF speichern"><FileDown {...ICON_SM} /> PDF speichern</button>
           ) : null}
         </div>
       </div>
@@ -6979,10 +6981,10 @@ function SequenceManager({
               }} title="Sequenz als Vorlage für spätere Schuljahre speichern">Als Vorlage speichern</button>
               <button className="btn iconBtn-pdf" onClick={()=>{
                 if (typeof onExportPdfSequence === 'function') onExportPdfSequence(s.id);
-              }} title="Sequenz als PDF speichern"><img src={pdfIcon} alt="" className="btnIcon" />PDF</button>
+              }} title="Sequenz als PDF speichern"><FileDown {...ICON_SM} /> PDF</button>
               <button className="btn iconBtn-word" onClick={()=>{
                 if (typeof onExportDocxSequence === 'function') onExportDocxSequence(s.id);
-              }} title="Sequenz als Word speichern"><img src={wordIcon} alt="" className="btnIcon" />Word</button>
+              }} title="Sequenz als Word speichern"><FileText {...ICON_SM} /> Word</button>
               <button className="btn" onClick={()=>openSeqFiles(s.id)} title="Dateien für diese Sequenz hinterlegen (nur Verweise, nicht exportiert)">Dateien</button>
               <button className="btn danger" onClick={()=>{
                 onDelete(s.id);

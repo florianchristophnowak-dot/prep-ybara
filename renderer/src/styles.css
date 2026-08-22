@@ -345,8 +345,9 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .btn.word { background: var(--word); border-color: var(--word); color: var(--on-primary); }
 .btn.word:hover { filter: brightness(1.05); }
 
-/* Icon Buttons for Word and PDF */
-.btnIcon { width: 18px; height: 18px; margin-right: 6px; vertical-align: middle; }
+/* Export-Knöpfe. Die Symbole kommen aus demselben Satz wie alle anderen –
+   unterschieden werden Word und PDF über Farbe und Beschriftung, nicht über
+   nachgebaute Fremdmarken. */
 .btn.iconBtn-word { 
   background: var(--export-word); 
   border-color: var(--export-word); 

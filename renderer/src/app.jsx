@@ -215,6 +215,20 @@ function lineColor(hex, dark = isDarkMode()){
                   flat ? NEUTRAL_HUE : c.H);
 }
 
+/* Schriftfarbe. Eine Linie darf kräftig sein, Text muss lesbar sein –
+   dafür reicht die Linienhelligkeit nicht. Die Werte sind gegen die
+   tatsächlich vorkommenden Flächen gerechnet (Karte, App-Grund, getönte
+   Wochenzelle, Jahresbalken) und liegen im schlechtesten Farbton bei
+   5,1:1 hell und 5,7:1 dunkel. */
+function textColor(hex, dark = isDarkMode()){
+  const c = hexToLch(hex);
+  if (!c) return 'var(--text)';
+  const flat = c.C < ACHROMATIC;
+  return lchToHex(dark ? 0.760 : 0.480,
+                  flat ? 0.010 : Math.min(c.C, 0.120),
+                  flat ? NEUTRAL_HUE : c.H);
+}
+
 /* Die eine Palette. Mittlere Helligkeit, damit sich daraus sowohl
    Pastellflächen als auch kräftige Linien ableiten lassen. */
 const PALETTE = [
@@ -3912,7 +3926,7 @@ const doExportDocx = async (html, suggestedName) => {
           ) : null}
           <img className="logo" src={logo} alt="Prép-ybara Logo" />
           <h1>Prép-ybara</h1>
-          <span className="badge">{viewBadgeLabel}</span>
+          {viewBadgeLabel ? <span className="badge">{viewBadgeLabel}</span> : null}
         </div>
 
         <div className="right">
@@ -3934,12 +3948,6 @@ const doExportDocx = async (html, suggestedName) => {
                 </>
               ) : null}
             </>
-          )}
-          {!isExecutionOnlyWindow && (
-            <ThemeSwitch
-              value={themeChoice}
-              onChange={(next)=>updateAppSettings({ theme: next })}
-            />
           )}
         </div>
       </div>
@@ -4412,7 +4420,7 @@ const exportWeekDocx = () => {
                     ) : null}
                     <div className="title">{title || 'Planen…'}</div>
                     <div className="sub">{sub}</div>
-                    {seq ? <span className="badge" style={{borderColor: seq.color, color: seq.color}}>Sequenz: {seq.name}</span> : null}
+                    {seq ? <span className="badge" style={{borderColor: lineColor(seq.color), color: textColor(seq.color)}}>Sequenz: {seq.name}</span> : null}
                     {l?.topic ? <span className="badge">Thema: {l.topic}</span> : <span className="badge">Noch kein Thema</span>}
                   </div>
                 );
@@ -4486,10 +4494,6 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
   const setSchoolYear = (patch) => {
     onUpdate((prev)=>({ ...prev, schoolYear: { ...(prev.schoolYear||{startISO:'', endISO:''}), ...patch } }));
   };
-
-  const vacNameRef = useRef(null);
-  const freeNameRef = useRef(null);
-  const evNameRef = useRef(null);
 
   const addVacation = () => {
     const name = (newVac.name || '').trim() || 'Ferien';
@@ -4714,8 +4718,6 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
           {vacations.length === 0 ? (
             <EmptyState
               text="Hier stehen die Ferienzeiten deines Bundeslandes. Eingetragene Ferien werden im Wochenraster und im Makro-Plan gekennzeichnet."
-              actionLabel="Ferien eintragen"
-              onAction={()=>vacNameRef.current?.focus()}
             />
           ) : vacations.map(v => (
             <div key={v.id} className="calendarRow">
@@ -4744,8 +4746,6 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
           {freeDays.length === 0 ? (
             <EmptyState
               text="Einzelne unterrichtsfreie Tage – bewegliche Ferientage, Feiertage, pädagogische Tage."
-              actionLabel="Schulfreien Tag eintragen"
-              onAction={()=>freeNameRef.current?.focus()}
             />
           ) : freeDays.map(f => (
             <div key={f.id} className="calendarRow2">
@@ -4775,8 +4775,6 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
           {events.length === 0 ? (
             <EmptyState
               text="Termine wie Elternabende, Konferenzen oder Klassenfahrten. Sie erscheinen als Hinweis im Wochenraster."
-              actionLabel="Termin eintragen"
-              onAction={()=>evNameRef.current?.focus()}
             />
           ) : events.map(ev => (
             <div key={ev.id} className="calendarRow3">
@@ -5300,8 +5298,8 @@ const exportDocx = () => {
           <div className="muted small">{lessonTitle}</div>
           {(dayInfo.vac || dayInfo.fd || (dayInfo.evs && dayInfo.evs.length)) ? (
             <div className="row wrap" style={{gap:6, marginTop:6}}>
-              {dayInfo.vac ? <span className="badge badge--vacation"><Palmtree {...ICON_SM} /> Ferien: {dayInfo.vac.name || ''}</span> : null}
-              {dayInfo.fd ? <span className="badge badge--dayoff"><Ban {...ICON_SM} /> Schulfrei: {dayInfo.fd.name || ''}</span> : null}
+              {dayInfo.vac ? <span className="badge badge--vacation" title={`Ferien: ${dayInfo.vac.name || ''}`}><Palmtree {...ICON_SM} /> Ferien: {dayInfo.vac.name || ''}</span> : null}
+              {dayInfo.fd ? <span className="badge badge--dayoff" title={`Schulfrei: ${dayInfo.fd.name || ''}`}><Ban {...ICON_SM} /> Schulfrei: {dayInfo.fd.name || ''}</span> : null}
               {(dayInfo.evs || []).slice(0,2).map(ev => (
                 <span key={ev.id} className="badge"><CalendarDays {...ICON_SM} /> {ev.name || ev.summary || 'Termin'}</span>
               ))}
@@ -5584,8 +5582,6 @@ const exportDocx = () => {
               {lessonLinks.length === 0 ? (
                 <EmptyState
                   text="Verweise auf Material im Netz oder auf Ablagen – sie bleiben an dieser Stunde gespeichert."
-                  actionLabel="Link hinzufügen"
-                  onAction={addLink}
                 />
               ) : (
                 <div style={{display:'flex', flexDirection:'column', gap:8}}>
@@ -5671,8 +5667,6 @@ const exportDocx = () => {
             {lessonFiles.length === 0 ? (
               <EmptyState
                 text="Arbeitsblätter, Folien oder Hörtexte, die zu dieser Stunde gehören."
-                actionLabel="Datei hinzufügen"
-                onAction={addLessonFiles}
               />
             ) : (
               <div style={{display:'flex', flexDirection:'column', gap:8}}>
@@ -6347,7 +6341,7 @@ function YearPlanView({
                       >
                         <div className="yearPlanBarHandle yearPlanBarHandle--left" onMouseDown={(e)=>onMouseDownBar(e, b, 'resize-left')} />
                         <div className="yearPlanBarHandle yearPlanBarHandle--right" onMouseDown={(e)=>onMouseDownBar(e, b, 'resize-right')} />
-                        <div className="yearPlanBarTitle" style={{color: b.color}}>
+                        <div className="yearPlanBarTitle" style={{color: textColor(b.color)}}>
                           <span className="yearPlanDot" style={{background:b.color}} />
                           {b.title || 'Ohne Titel'}
                         </div>
@@ -6938,8 +6932,6 @@ function SequenceManager({
               {seqFiles.length === 0 ? (
                 <EmptyState
                   text="Material, das für die ganze Sequenz gilt – nicht nur für eine einzelne Stunde."
-                  actionLabel="Dateien hinzufügen"
-                  onAction={addSeqFiles}
                 />
               ) : (
                 <div style={{display:'flex', flexDirection:'column', gap:8}}>
@@ -6974,8 +6966,6 @@ function SequenceManager({
           {list.length === 0 ? (
             <EmptyState
               text="Eine Sequenz fasst die Stunden zu einem Thema zusammen und zeigt dir, wo du darin stehst."
-              actionLabel="Sequenz anlegen"
-              onAction={()=>newNameRef.current?.focus()}
             />
           ) : list.map(s => (
             <div key={s.id} className="seqRow">
@@ -7190,8 +7180,7 @@ function TypeaheadInput({
   placeholder,
   autoFocus,
   wrapStyle,
-  inputStyle,
-  inputRef
+  inputStyle
 }){
   const closeTimer = useRef(null);
   const [open, setOpen] = useState(false);
@@ -7234,7 +7223,6 @@ function TypeaheadInput({
   return (
     <div className="typeaheadWrap" style={wrapStyle}>
       <input
-        ref={inputRef}
         className="input"
         style={inputStyle}
         autoFocus={autoFocus}
@@ -7498,7 +7486,6 @@ function CompetencyPrimaryInput({ value, suggestions, onChange, onCommit, onHide
 
 
 function CompetencyEditor({ competencies, primary, suggestions, onChange, onRemember, onHideSuggestion }){
-  const competencyInputRef = useRef(null);
   const [draft, setDraft] = useState('');
   const id = useMemo(()=> `ct-${Math.random().toString(16).slice(2)}`, []);
 
@@ -7539,7 +7526,6 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
       <div className="row wrap" style={{gap:8}}>
         <div style={{flex:1}}>
           <TypeaheadInput
-            inputRef={competencyInputRef}
             value={draft}
             suggestions={suggestions}
             onChange={setDraft}
@@ -7559,8 +7545,6 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
         {(competencies || []).length === 0 ? (
           <EmptyState
             text="Welche Kompetenzen diese Stunde bedient. Eine davon lässt sich als primär markieren – das taucht später in der Jahresübersicht auf."
-            actionLabel="Kompetenz hinzufügen"
-            onAction={()=>competencyInputRef.current?.focus()}
           />
         ) : (
           (competencies || []).map((c)=>(

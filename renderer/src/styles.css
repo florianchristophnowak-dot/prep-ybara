@@ -408,7 +408,11 @@ button, input, textarea, select { font: inherit; color: inherit; }
   transition: all var(--transition);
   box-shadow: var(--shadow-inner);
 }
-.input:focus, textarea:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }
+/* Nur die farbige Kante als zusätzlicher Hinweis. Kein outline:none –
+   das unterdrückte den globalen Fokusring, und der blasse Hof, der übrig
+   blieb, war praktisch unsichtbar. Ring und Hof liefert die
+   :focus-visible-Regel weiter unten, für alle Bedienelemente gleich. */
+.input:focus, textarea:focus, select:focus { border-color: var(--primary); }
 textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 
 .yearPlanWrap { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; background: var(--card); box-shadow: var(--shadow); }
@@ -860,6 +864,17 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
   color: var(--on-board);
 }
 .topbar h1 { color: var(--on-board); white-space: nowrap; }
+/* Formularfelder bringen ihre eigene helle Fläche mit – sie dürfen die
+   Schriftfarbe der Tafel NICHT erben, sonst steht heller Text auf hellem
+   Grund (das Datumsfeld lag bei 1,14:1). */
+.topbar input,
+.topbar textarea,
+.topbar select {
+  color: var(--text);
+  background: var(--card);
+  border-color: var(--border-strong);
+}
+.topbar input::placeholder { color: var(--muted); }
 .topbar .btn {
   background: transparent;
   border-color: color-mix(in srgb, var(--on-board) 38%, transparent);
@@ -917,6 +932,40 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .themeSwitchBtn.is-active {
   background: var(--primary);
   color: var(--on-primary);
+}
+
+/* ============================================================
+   Das Wochenraster muss schrumpfen können
+
+   Rasterzellen haben von sich aus min-width:auto und werden damit nie
+   schmaler als ihr Inhalt. Zusammen mit width:max-content an den Chips
+   ergab das ein Raster, das über den sichtbaren Bereich hinauslief –
+   seit der Seitenleiste bei üblichen Fensterbreiten sichtbar.
+
+   Die Chips kürzen jetzt mit Auslassungspunkten; der vollständige Text
+   steht im title-Attribut und in der Einzelstunde.
+   ============================================================ */
+.grid > * { min-width: 0; }
+.lessonCell { min-width: 0; }
+.lessonCell .badge,
+.lessonCell .pill {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
+.lessonCell .title,
+.lessonCell .sub { overflow: hidden; text-overflow: ellipsis; }
+.cellHeader { min-width: 0; overflow: hidden; }
+/* Auch die Kennzeichnung im Tageskopf ("Schulfrei: …") muss kürzen –
+   text-overflow am Elternelement greift nicht für Kindelemente. */
+.cellHeader .badge {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
 }
 
 /* Ferien und schulfreie Tage: Statusfarbe aus dem System, nicht inline. */

@@ -1,9 +1,20 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import logo from './assets/logo.png';
-import eastereggImg from './assets/easteregg.png';
-import wordIcon from './assets/word-icon.svg';
-import pdfIcon from './assets/pdf-icon.svg';
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import logo from './assets/logo.webp';
+import eastereggImg from './assets/easteregg.webp';
 import helpMd from './assets/HELP.md?raw';
+import platform, { capabilities, platformName } from './platform/index.js';
+import { APP_VERSION } from './version.js';
+import { setupServiceWorker } from './pwa.js';
+import {
+  sequenceProgress, competencyHeatmap, todayOverview, weekSummary,
+} from './insights.js';
+// Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
+import {
+  ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronLeft, ChevronRight,
+  CalendarCheck, CalendarRange, CircleHelp, ClipboardPaste, Copy, FileDown, FileText, Grid3x3, Library,
+  Maximize2, NotebookPen, Palmtree, Pencil, Play, Rows3, Scissors, Search, Settings,
+  Square, Star, Sun, Trash2, X,
+} from 'lucide-react';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
 const PX_PER_MIN = 10;
@@ -55,7 +66,7 @@ function computePhaseTimes(phases, lessonStartHHMM){
 }
 
 // Keep in sync with package.json
-const APP_VERSION = '1.0.9';
+
 
 
 const PHASE_HELP_QUESTIONS = {
@@ -113,21 +124,106 @@ function PhaseHelpCard({ phaseTitle }){
 }
 
 
-const SEQ_COLORS = [
-  '#2563eb', '#7c3aed', '#db2777', '#dc2626', '#ea580c', '#d97706',
-  '#059669', '#0f766e', '#0891b2', '#4f46e5', '#9333ea', '#be123c'
-];
+/* ============================================================
+   Farbsystem – eine Palette, aus der beide Modi abgeleitet werden
 
+   Früher lagen hier zwei getrennte Paletten: 18 Pastelltöne für
+   Lerngruppen und 12 kräftige Farben für Sequenzen. Jetzt gibt es
+   eine Palette. Gespeichert wird je Lerngruppe bzw. Sequenz ein
+   einziger Basiswert; Flächen- und Linienfarbe für hell und dunkel
+   werden daraus berechnet.
 
-const GROUP_PASTELS = [
-  '#fde68a', '#fef3c7',
-  '#fecaca', '#ffe4e6',
-  '#fbcfe8', '#fce7f3',
-  '#f5d0fe', '#e9d5ff', '#ddd6fe',
-  '#c7d2fe', '#bfdbfe', '#bae6fd', '#a5f3fc', '#99f6e4',
-  '#a7f3d0', '#bbf7d0', '#d9f99d',
-  '#e5e7eb'
+   Berechnet statt nachgeschlagen, weil die App drei freie Farbwähler
+   anbietet (input type="color"). Eine Zuordnungstabelle könnte selbst
+   gewählte Werte grundsätzlich nicht abdecken. Nebeneffekt: alle
+   bereits gespeicherten Farben bleiben unverändert gültig, eine
+   Datenmigration ist nicht nötig.
+   ============================================================ */
+
+// --- OKLab: perzeptuell gleichmäßige Ableitung ---------------------------
+function _srgbToLinear(c){ return c <= 0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
+function _linearToSrgb(c){ return c <= 0.0031308 ? c*12.92 : 1.055*Math.pow(c, 1/2.4)-0.055; }
+function _cbrt(v){ return Math.sign(v) * Math.pow(Math.abs(v), 1/3); }
+
+function parseHex(hex){
+  let h = String(hex || '').trim().replace('#','');
+  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  return [0,2,4].map(i => parseInt(h.slice(i,i+2),16)/255);
+}
+function toHex(rgb){
+  return '#' + rgb.map(c => {
+    const v = Math.max(0, Math.min(255, Math.round(c*255)));
+    return v.toString(16).padStart(2,'0');
+  }).join('');
+}
+function hexToLch(hex){
+  const rgb = parseHex(hex);
+  if (!rgb) return null;
+  const [r,g,b] = rgb.map(_srgbToLinear);
+  const l = _cbrt(0.4122214708*r + 0.5363325363*g + 0.0514459929*b);
+  const m = _cbrt(0.2119034982*r + 0.6806995451*g + 0.1073969566*b);
+  const s = _cbrt(0.0883024619*r + 0.2817188376*g + 0.6299787005*b);
+  const L = 0.2104542553*l + 0.7936177850*m - 0.0040720468*s;
+  const A = 1.9779984951*l - 2.4285922050*m + 0.4505937099*s;
+  const B = 0.0259040371*l + 0.7827717662*m - 0.8086757660*s;
+  return { L, C: Math.hypot(A,B), H: Math.atan2(B,A) };
+}
+function lchToHex(L, C, H){
+  const a = C*Math.cos(H), b = C*Math.sin(H);
+  const l = Math.pow(L + 0.3963377774*a + 0.2158037573*b, 3);
+  const m = Math.pow(L - 0.1055613458*a - 0.0638541728*b, 3);
+  const s = Math.pow(L - 0.0894841775*a - 1.2914855480*b, 3);
+  return toHex([
+     4.0767416621*l - 3.3077115913*m + 0.2309699292*s,
+    -1.2684380046*l + 2.6097574011*m - 0.3413193965*s,
+    -0.0041960863*l - 0.7034186147*m + 1.7076147010*s,
+  ].map(v => _linearToSrgb(Math.max(0, Math.min(1, v)))));
+}
+
+/* Ob gerade dunkel dargestellt wird. Wird von App beim Rendern gesetzt,
+   bevor Kinder rendern, und von den Ableitungen unten gelesen. */
+let __prefersDark = false;
+function setDarkMode(v){ __prefersDark = Boolean(v); }
+function isDarkMode(){ return __prefersDark; }
+
+/* Textragende Fläche: Helligkeit in ein Band geklemmt, das gegen
+   var(--text) im jeweiligen Modus sicher über 4.5:1 liegt. */
+const NEUTRAL_HUE = 74 * Math.PI / 180;   // warme Papierachse
+const ACHROMATIC = 0.012;                 // darunter gilt eine Farbe als unbunt
+
+function surfaceColor(hex, dark = isDarkMode()){
+  const c = hexToLch(hex);
+  if (!c) return '';
+  // Unbunte Vorlagen (Grau, Schwarz, Weiß) haben keinen definierten Farbton.
+  // Ohne Sonderfall würde das Mindest-Chroma ihnen einen aufzwingen und aus
+  // einem grauen Lerngruppen-Ton z. B. einen blauen machen.
+  const flat = c.C < ACHROMATIC;
+  const H = flat ? NEUTRAL_HUE : c.H;
+  const C = flat ? 0.008
+                 : (dark ? Math.min(Math.max(c.C*0.62, 0.030), 0.075)
+                         : Math.min(Math.max(c.C*0.55, 0.030), 0.065));
+  return lchToHex(dark ? 0.430 : 0.885, C, H);
+}
+/* Linien und Balken: Sättigung bleibt, nur modusgerecht aufgehellt. */
+function lineColor(hex, dark = isDarkMode()){
+  const c = hexToLch(hex);
+  if (!c) return '';
+  const flat = c.C < ACHROMATIC;
+  return lchToHex(dark ? 0.700 : 0.520,
+                  flat ? 0.010 : Math.max(c.C, 0.060),
+                  flat ? NEUTRAL_HUE : c.H);
+}
+
+/* Die eine Palette. Mittlere Helligkeit, damit sich daraus sowohl
+   Pastellflächen als auch kräftige Linien ableiten lassen. */
+const PALETTE = [
+  '#9a8532', '#b07939', '#bd6e5b', '#bc6a75', '#b56b8f', '#a171af',
+  '#857bc1', '#6386c5', '#408fbe', '#0698a4', '#369a7a', '#6e934f'
 ];
+// Beide Altnamen zeigen auf dieselbe Palette – die Trennung ist aufgehoben.
+const SEQ_COLORS = PALETTE;
+const GROUP_PASTELS = PALETTE;
 
 function groupKey(classGroup, subject){
   const g = (classGroup || '').trim();
@@ -208,55 +304,194 @@ function clamp01(x){
   return Math.max(0, Math.min(1, n));
 }
 
-function formatMMSS(totalSeconds){
-  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
-  const mm = String(Math.floor(s / 60)).padStart(2, '0');
-  const ss = String(s % 60).padStart(2, '0');
-  return `${mm}:${ss}`;
+
+/* Vorgabe des Schriftfarbwählers im Rich-Text-Editor.
+
+   Bewusst ein fester Wert und kein Token: Die Farbe wird in den
+   Stundeninhalt geschrieben und landet unverändert im PDF- und
+   Word-Export. Dort ist der Grund immer weiß, unabhängig davon, wie
+   die App gerade dargestellt wird. Ein mitschwenkender Wert würde in
+   dunkler Darstellung helle Schrift auf weißes Papier exportieren.
+   input[type=color] akzeptiert ausserdem kein var(). */
+const RTE_DEFAULT_INK = '#26201c';
+
+
+/* ============================================================
+   Durchführungsansicht
+
+   Ein privater Fortschrittsmonitor für die Lehrkraft während des
+   Unterrichts. Sie beantwortet zwei Fragen: Wie liege ich in der Zeit,
+   und was kommt als Nächstes. Sie ist NICHT für den Beamer bestimmt.
+   Alles Weitere folgt daraus: kurze Blicke aus ein bis zwei Metern,
+   nebenbei, während unterrichtet wird.
+
+   HIERARCHIE – begründete Entscheidung
+   Der Countdown ist das grösste Element, der kumulierte Verzug das
+   starke zweite. Die Vorgabe schlug es umgekehrt vor; dagegen sprechen
+   drei Gründe:
+
+   1. Im kurzen Blick handelt man nach der Restzeit der laufenden Phase
+      ("jetzt zusammenfassen" oder "noch weiterarbeiten lassen"). Der
+      kumulierte Verzug ist ein Wert, den man zwischen den Phasen
+      auswertet, nicht mitten in einer.
+   2. Der Countdown IST die Verzugsanzeige geworden: er läuft ins
+      Negative weiter. Bei −2:15 sieht man den entstehenden Verzug
+      bereits an der grössten Stelle. Ihn kleiner zu setzen würde die
+      Information verstecken, nicht hervorheben.
+   3. Der Countdown ändert sich sekündlich, der Verzug nur in Sprüngen.
+      Das ständig wandernde Element zieht den Blick ohnehin an – es
+      gehört an die Stelle, die dafür vorgesehen ist.
+   ============================================================ */
+
+/* Vorzeichenbehaftete Dauer: +4:12 zu spät, −2:15 in Vorsprung. */
+function formatSignedMMSS(totalSeconds){
+  const n = Math.round(Number(totalSeconds) || 0);
+  if (Math.abs(n) < 30) return '±0 min';
+  const sign = n > 0 ? '+' : '−';
+  const a = Math.abs(n);
+  const mm = Math.floor(a / 60);
+  const ss = a % 60;
+  return `${sign}${mm}:${String(ss).padStart(2, '0')}`;
 }
 
-function bgFromProgress(progress){
-  const p = clamp01(progress);
-  // hue 120 (green) -> 0 (red). Light + low saturation to keep it subtle.
-  const hue = 120 * (1 - p);
-  return `hsla(${hue}, 55%, 93%, 1)`;
+/* Countdown, der ins Negative laufen darf. */
+function formatCountdown(totalSeconds){
+  const n = Math.round(Number(totalSeconds) || 0);
+  const a = Math.abs(n);
+  const mm = String(Math.floor(a / 60)).padStart(2, '0');
+  const ss = String(a % 60).padStart(2, '0');
+  return `${n < 0 ? '−' : ''}${mm}:${ss}`;
 }
 
-function ExecutionWindow({ api }){
+function parseHHMMToSec(hhmm){
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim());
+  if (!m) return null;
+  return Number(m[1]) * 3600 + Number(m[2]) * 60;
+}
+function formatSecAsClock(sec){
+  // Auf die nächste Minute runden, nicht abschneiden: ein Stundenende um
+  // 08:44:58 ist 08:45, nicht 08:44.
+  const rounded = Math.round((Number(sec) || 0) / 60) * 60;
+  const s = ((rounded % 86400) + 86400) % 86400;
+  return `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}`;
+}
+function secondsSinceMidnight(d = new Date()){
+  return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+}
+
+/* Ab wann der Verzug sichtbar wird. Rot hängt ausschliesslich hier –
+   nicht mehr am Phasenverlauf. */
+const VERZUG_WARN_SEC = 3 * 60;
+const VERZUG_STARK_SEC = 5 * 60;
+function verzugStufe(sec){
+  const n = Number(sec) || 0;
+  if (n <= -VERZUG_WARN_SEC) return 'vor';       // deutlich in Vorsprung
+  if (n < VERZUG_WARN_SEC) return 'plan';        // im Plan
+  if (n < VERZUG_STARK_SEC) return 'warn';
+  return 'stark';
+}
+
+/* Verzug = tatsächlich verstrichene Zeit − planmässig verstrichene Zeit.
+
+   Die planmässige Zeit wächst innerhalb einer Phase nur bis zu deren
+   Dauer. Läuft die Phase über, wächst nur noch die Ist-Zeit – der Verzug
+   steigt sekündlich weiter. Wird früher gewechselt, holt der Plan die
+   volle Dauer nach und der Vorsprung erscheint als negativer Wert.
+
+   Als reine Funktion herausgezogen, damit sie ohne Warten prüfbar ist. */
+export function computeVerzugSec({ phases, idx, remainingSec, elapsedSec, nowSec, openedAtSec, isHomeworkView }){
+  const list = Array.isArray(phases) ? phases : [];
+  if (!list.length) return 0;
+  const durOf = (p)=> Math.max(0, Math.round((Number(p?.duration) || 0) * 60));
+
+  const plannedBefore = list.slice(0, Math.min(idx, list.length)).reduce((a, p)=> a + durOf(p), 0);
+  const durationSec = isHomeworkView ? 0 : durOf(list[idx]);
+  const spentInCurrent = isHomeworkView ? 0 : Math.max(0, durationSec - remainingSec);
+  const plannedElapsed = plannedBefore + Math.min(spentInCurrent, durationSec);
+
+  /* Bezugspunkt: der geplante Stundenbeginn – ausser das Fenster wurde
+     schon davor geöffnet (der Normalfall in der Pause). Dann zählt der
+     Öffnungszeitpunkt, sonst stünde vor Stundenbeginn ein Vorsprung von
+     einer halben Stunde in der Anzeige. Wird spät geöffnet, bleibt der
+     geplante Beginn massgeblich – dann IST die Stunde in Verzug. */
+  const lessonStart = parseHHMMToSec(list[0]?.start);
+  const anchor = (lessonStart !== null && Number.isFinite(openedAtSec))
+    ? Math.min(lessonStart, openedAtSec)
+    : lessonStart;
+  const actualElapsed = (anchor !== null && Number.isFinite(nowSec))
+    ? Math.max(0, nowSec - anchor)
+    : (Number(elapsedSec) || 0);
+
+  return Math.round(actualElapsed - plannedElapsed);
+}
+
+export function ExecutionWindow(){
   const [snapshot, setSnapshot] = useState(null);
   const [idx, setIdx] = useState(0);
-  const [remainingSec, setRemainingSec] = useState(0);
+  const [remainingSec, setRemainingSec] = useState(0);   // darf negativ werden
   const [isCountdownOn, setIsCountdownOn] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
+  /* Automatisches Weiterschalten ist nicht mehr die Voreinstellung: Es
+     hat den Zeitverzug verschluckt, indem es bei Minute 8 weiterrückte
+     und so tat, als liefe alles nach Plan. */
+  const [autoAdvance, setAutoAdvance] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);       // Ist-Zeit seit Öffnen
 
   const endTsRef = useRef(null);
   const tickRef = useRef(null);
+  const lastTickRef = useRef(null);
+  const openedAtRef = useRef(secondsSinceMidnight());
 
   const snapshotRef = useRef(null);
   const idxRef = useRef(0);
   const remainingRef = useRef(0);
   const countdownRef = useRef(true);
   const pausedRef = useRef(false);
+  const autoRef = useRef(false);
 
   useEffect(()=>{ snapshotRef.current = snapshot; }, [snapshot]);
   useEffect(()=>{ idxRef.current = idx; }, [idx]);
   useEffect(()=>{ remainingRef.current = remainingSec; }, [remainingSec]);
   useEffect(()=>{ countdownRef.current = isCountdownOn; }, [isCountdownOn]);
   useEffect(()=>{ pausedRef.current = isPaused; }, [isPaused]);
+  useEffect(()=>{ autoRef.current = autoAdvance; }, [autoAdvance]);
 
   const phases = Array.isArray(snapshot?.phases) ? snapshot.phases : [];
   const isHomeworkView = snapshot && idx >= phases.length;
   const phase = (!isHomeworkView) ? (phases[idx] || null) : null;
+  const nextPhase = phases[idx + 1] || null;
   const durationSec = Math.max(0, Math.round((Number(phase?.duration) || 0) * 60));
-  const progress = durationSec > 0 ? (1 - (remainingSec / durationSec)) : 0;
-  const bg = (!isHomeworkView && isCountdownOn && !isPaused) ? bgFromProgress(progress) : '#ffffff';
+
+  /* ---- Zeitverzug ------------------------------------------------------
+     Verzug = tatsächlich verstrichene Zeit − planmässig verstrichene Zeit.
+
+     Die planmässige Zeit wächst innerhalb einer Phase nur bis zu deren
+     Dauer. Läuft die Phase über, wächst nur noch die Ist-Zeit – der
+     Verzug steigt sekündlich. Wird früher gewechselt, holt der Plan die
+     volle Dauer nach und der Vorsprung erscheint als negativer Wert. */
+  const verzugSec = useMemo(()=> computeVerzugSec({
+    phases, idx, remainingSec, elapsedSec,
+    nowSec: secondsSinceMidnight(), openedAtSec: openedAtRef.current, isHomeworkView,
+  }), [phases, idx, remainingSec, elapsedSec, isHomeworkView]);
+
+  /* Erwartetes Stundenende: geplantes Ende plus Verzug. */
+  const erwartetesEnde = useMemo(()=>{
+    if (!phases.length) return null;
+    const plannedEndClock = parseHHMMToSec(phases[phases.length - 1]?.end);
+    if (plannedEndClock !== null) return formatSecAsClock(plannedEndClock + verzugSec);
+    // Ohne Stundenzeiten: jetzt plus verbleibende Soll-Zeit.
+    const restPlanned = phases.slice(idx + 1)
+      .reduce((a, p)=> a + Math.max(0, Math.round((Number(p?.duration) || 0) * 60)), 0)
+      + Math.max(0, remainingSec);
+    return formatSecAsClock(secondsSinceMidnight() + restPlanned);
+  }, [phases, idx, remainingSec, verzugSec]);
+
+  const stufe = verzugStufe(verzugSec);
 
   const resetPhaseTime = (nextIdx) => {
-    // Homework view sits AFTER the last phase
     if (nextIdx >= phases.length) {
       endTsRef.current = null;
       setRemainingSec(0);
-      // keep paused so nothing restarts unexpectedly
       setIsPaused(true);
       return;
     }
@@ -269,7 +504,6 @@ function ExecutionWindow({ api }){
   const goPrev = () => {
     setIdx((cur)=>{
       const next = Math.max(0, cur - 1);
-      // reset time to that phase
       setTimeout(()=>resetPhaseTime(next), 0);
       return next;
     });
@@ -284,124 +518,104 @@ function ExecutionWindow({ api }){
 
   const toggleFullscreen = async () => {
     try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-      } else {
-        await document.documentElement.requestFullscreen();
-      }
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
     } catch {}
   };
 
-  // Receive snapshot from main process
+  // Snapshot beziehen
   useEffect(()=>{
     let off = () => {};
-
     const applySnapshot = (payload) => {
       const snap = (payload && typeof payload === 'object') ? payload : null;
       setSnapshot(snap);
       setIdx(0);
       setIsCountdownOn(true);
       setIsPaused(false);
+      setElapsedSec(0);
+      openedAtRef.current = secondsSinceMidnight();
       endTsRef.current = null;
+      lastTickRef.current = null;
       const first = Array.isArray(snap?.phases) ? snap.phases[0] : null;
-      const d = Math.max(0, Math.round((Number(first?.duration) || 0) * 60));
-      setRemainingSec(d);
+      setRemainingSec(Math.max(0, Math.round((Number(first?.duration) || 0) * 60)));
     };
-
-    // Preferred: fetch payload on demand (prevents race with early IPC send)
     (async () => {
       try {
-        if (api?.getExecutionSnapshot) {
-          const p = await api.getExecutionSnapshot();
+        if (capabilities.executionWindow) {
+          const p = await platform.getExecutionSnapshot();
           if (p) applySnapshot(p);
         }
       } catch {}
     })();
-
-    // Backwards/fallback: listen for push init
-    if (api?.onExecutionInit) {
-      off = api.onExecutionInit((payload)=>applySnapshot(payload));
+    if (capabilities.executionWindow) {
+      off = platform.onExecutionInit((payload)=>applySnapshot(payload));
     }
     return () => off && off();
-  }, [api]);
+  }, []);
 
-  // Main ticker loop (drift-free)
+  // Taktgeber
   useEffect(()=>{
     const loop = () => {
       const snap = snapshotRef.current;
       const i = idxRef.current;
-      const isOn = countdownRef.current;
-      const isP = pausedRef.current;
       const phasesNow = Array.isArray(snap?.phases) ? snap.phases : [];
-      // Homework view: index == phasesNow.length
-      if (!snap || !phasesNow.length) {
+      const now = performance.now();
+
+      if (!snap || !phasesNow.length || i >= phasesNow.length) {
+        endTsRef.current = null;
+        lastTickRef.current = null;
+        tickRef.current = requestAnimationFrame(loop);
+        return;
+      }
+      if (!countdownRef.current || pausedRef.current) {
+        endTsRef.current = null;
+        lastTickRef.current = null;
         tickRef.current = requestAnimationFrame(loop);
         return;
       }
 
-      if (i >= phasesNow.length) {
-        // Homework screen: keep timer stopped
-        endTsRef.current = null;
-        if (remainingRef.current !== 0) setRemainingSec(0);
-        tickRef.current = requestAnimationFrame(loop);
-        return;
+      // Ist-Zeit mitzählen, solange tatsächlich gelaufen wird.
+      if (lastTickRef.current !== null) {
+        const delta = (now - lastTickRef.current) / 1000;
+        if (delta > 0 && delta < 5) setElapsedSec((e)=> e + delta);
       }
+      lastTickRef.current = now;
 
       const ph = phasesNow[i] || null;
-
-      if (!isOn || isP) {
-        // When countdown is off or paused, keep time static.
-        endTsRef.current = null;
-        tickRef.current = requestAnimationFrame(loop);
-        return;
-      }
-
       const dur = Math.max(0, Math.round((Number(ph?.duration) || 0) * 60));
-      const rem = Math.max(0, Number(remainingRef.current) || 0);
-      if (endTsRef.current == null) {
-        endTsRef.current = performance.now() + rem * 1000;
-      }
-      const msLeft = endTsRef.current - performance.now();
-      const secLeft = Math.max(0, Math.ceil(msLeft / 1000));
+      const rem = Number(remainingRef.current) || 0;
+      if (endTsRef.current == null) endTsRef.current = now + rem * 1000;
+
+      // Bewusst OHNE untere Schranke: die Phase läuft ins Negative weiter.
+      const secLeft = Math.ceil((endTsRef.current - now) / 1000);
       if (secLeft !== rem) setRemainingSec(secLeft);
 
-      if (secLeft <= 0) {
+      if (secLeft <= 0 && autoRef.current) {
         endTsRef.current = null;
         if (i < phasesNow.length - 1) {
           const next = i + 1;
           setIdx(next);
           const nextP = phasesNow[next] || null;
-          const nextDur = Math.max(0, Math.round((Number(nextP?.duration) || 0) * 60));
-          setRemainingSec(nextDur);
+          setRemainingSec(Math.max(0, Math.round((Number(nextP?.duration) || 0) * 60)));
         } else {
-          // last phase finished -> go to homework view (one step after last phase)
           setIdx(phasesNow.length);
           setIsPaused(true);
           setRemainingSec(0);
         }
       }
-
-      // If duration changed (shouldn't during execution), ensure remaining isn't above duration.
       if (dur > 0 && remainingRef.current > dur) setRemainingSec(dur);
-
       tickRef.current = requestAnimationFrame(loop);
     };
-
     tickRef.current = requestAnimationFrame(loop);
-    return () => {
-      if (tickRef.current) cancelAnimationFrame(tickRef.current);
-    };
+    return () => { if (tickRef.current) cancelAnimationFrame(tickRef.current); };
   }, []);
 
-  // Keyboard shortcuts
+  // Tastenkürzel – unverändert gegenüber der bisherigen Fassung.
   useEffect(()=>{
     const onKey = (e) => {
       if (e.key === 'ArrowLeft') goPrev();
       if (e.key === 'ArrowRight') goNext();
-      if (e.key === ' ') {
-        e.preventDefault();
-        setIsPaused(p=>!p);
-      }
+      if (e.key === ' ') { e.preventDefault(); setIsPaused(p=>!p); }
       if (String(e.key || '').toLowerCase() === 'c') setIsCountdownOn(v=>!v);
       if (String(e.key || '').toLowerCase() === 'f') toggleFullscreen();
       if (e.key === 'Escape') window.close?.();
@@ -410,38 +624,47 @@ function ExecutionWindow({ api }){
     return ()=>window.removeEventListener('keydown', onKey);
   }, [phases.length]);
 
-  const pct = Math.round(clamp01(progress) * 100);
-  const contentLen = (
-    String(phase?.content || '').length +
-    String(phase?.materialsMedia || '').length +
-    String(phase?.remarks || '').length
-  );
-  // If the phase has a lot of text, tighten the layout a bit to reduce scrolling.
-  const isDense = contentLen > 900;
+  /* Fortschritt über die GANZE Stunde, segmentiert nach geplanter Dauer.
+     Vorher zeigte der Balken den Verlauf innerhalb einer Phase und sprang
+     bei jedem Wechsel auf null zurück. */
+  const segmente = useMemo(()=> phases.map((p, i)=>{
+    const d = Math.max(1, Math.round((Number(p?.duration) || 0) * 60));
+    let fuellung = 0;
+    if (i < idx) fuellung = 1;
+    else if (i === idx && !isHomeworkView) fuellung = clamp01((d - Math.max(0, remainingSec)) / d);
+    return { key: p?.id || i, titel: p?.title || `Phase ${i + 1}`, gewicht: d, fuellung };
+  }), [phases, idx, remainingSec, isHomeworkView]);
+
+  const verzugText = stufe === 'plan' ? 'im Plan' : formatSignedMMSS(verzugSec);
 
   return (
-    <div className={`execRoot ${isDense ? 'dense' : ''}`} style={{ background: bg, transition: 'background 320ms linear' }}>
+    <div className="execRoot">
       <div className="execTopbar">
         <div className="execTitle">
           <div className="execTitleMain">{snapshot?.lessonTitle || 'Durchführung'}</div>
           {snapshot?.meta ? <div className="execTitleSub">{snapshot.meta}</div> : null}
         </div>
-
         <div className="execActions">
-          <button className="btn" onClick={()=>setIsCountdownOn(v=>!v)}>
-            Countdown: {isCountdownOn ? 'An' : 'Aus'}
-          </button>
-          <button className="btn" onClick={()=>setIsPaused(p=>!p)}>
+          <button className="btn" onClick={()=>setIsPaused(p=>!p)} title="Leertaste">
             {isPaused ? 'Weiter' : 'Pause'}
           </button>
-          <button className="btn" onClick={toggleFullscreen}>Vollbild</button>
-          <button className="btn danger" onClick={()=>window.close?.()}>Schließen</button>
+          <button className="btn" onClick={toggleFullscreen} title="F" aria-label="Vollbild"><Maximize2 {...ICON_SM} /></button>
+          <button className="btn" onClick={()=>window.close?.()} title="Escape" aria-label="Schließen"><X {...ICON_SM} /></button>
         </div>
       </div>
 
-      <div className="execProgress">
-        <div className="execProgressBar" style={{ width: `${pct}%` }} />
-      </div>
+      {/* Fortschritt der ganzen Stunde */}
+      {phases.length ? (
+        <div className="execSegments" role="img"
+             aria-label={`Phase ${Math.min(idx + 1, phases.length)} von ${phases.length}`}>
+          {segmente.map((s, i)=>(
+            <div key={s.key} className={`execSegment${i === idx ? ' is-current' : ''}`}
+                 style={{ flexGrow: s.gewicht }} title={s.titel}>
+              <div className="execSegmentFill" style={{ width: `${s.fuellung * 100}%` }} />
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <div className="execMain">
         {!snapshot ? (
@@ -450,44 +673,53 @@ function ExecutionWindow({ api }){
           <div className="muted">Keine Phasen vorhanden.</div>
         ) : isHomeworkView ? (
           <div className="execCard">
-            <div className="execPhaseTitle">Hausaufgaben</div>
-
-            <div className="execDetails execDetailsGrow">
-              <div className="execBlock">
-                <div className="execBlockTitle">Hausaufgaben</div>
-                <div className="execRich" style={{ whiteSpace: 'pre-wrap' }}>
-                  {String(snapshot?.homework || '').trim() ? String(snapshot.homework) : 'Keine Hausaufgaben hinterlegt.'}
-                </div>
+            <div className="execPhaseName">Hausaufgaben</div>
+            <div className="execBlock execDetailsGrow">
+              <div className="execRich" style={{ whiteSpace: 'pre-wrap' }}>
+                {String(snapshot?.homework || '').trim() ? String(snapshot.homework) : 'Keine Hausaufgaben hinterlegt.'}
               </div>
             </div>
-
             <div className="execNav">
-              <button className="btn" onClick={goPrev} disabled={idx<=0}>←</button>
-              <button className="btn" onClick={goNext} disabled={idx>=phases.length}>→</button>
+              <button className="btn" onClick={goPrev} disabled={idx<=0} aria-label="Vorherige Phase"><ArrowLeft {...ICON} /></button>
             </div>
           </div>
         ) : (
           <div className="execCard">
-            <div className="execCardHeader">
-              <div className="execCornerLeft">
-                <div className="execCornerChip">Phase {idx + 1} / {phases.length}</div>
-                <div className="execCornerChip">{Number(phase?.duration) || 0} min</div>
-                {(phase?.start || phase?.end) ? (
-                  <div className="execCornerChip">{phase?.start ? `${phase.start}` : ''}{(phase?.start && phase?.end) ? ' – ' : ''}{phase?.end ? phase.end : ''}</div>
-                ) : null}
-              </div>
-              <div className="execCornerRight" aria-label="Countdown">
-                <div className="execCornerTimer">{formatMMSS(remainingSec)}</div>
-              </div>
+            <div className="execPhaseLine">
+              <span className="execPhaseName">{phase?.title || '—'}</span>
+              {phase?.socialForm ? <span className="execPhaseSocial">{phase.socialForm}</span> : null}
+              <span className="execPhaseCount">{idx + 1}/{phases.length}</span>
             </div>
 
-            <div className="execCenterHeader">
-              <div className="execPhaseTitle">{phase?.title || '—'}</div>
-              {phase?.socialForm ? (
-                <div className="execSocialProminent" aria-label={`Sozialform: ${phase.socialForm}`}>
-                  {phase.socialForm}
-                </div>
-              ) : null}
+            {/* Grösstes Element: die Restzeit der laufenden Phase. */}
+            <div className={`execTimer${remainingSec < 0 ? ' is-over' : ''}${isPaused ? ' is-paused' : ''}`}
+                 aria-label="Restzeit dieser Phase">
+              {isCountdownOn ? formatCountdown(remainingSec) : '—'}
+            </div>
+
+            {/* Starkes zweites Element: kumulierter Verzug und erwartetes Ende. */}
+            <div className={`execVerzug execVerzug--${stufe}`}>
+              <span className="execVerzugWert">{verzugText}</span>
+              {erwartetesEnde ? <span className="execVerzugEnde">Ende ~{erwartetesEnde}</span> : null}
+            </div>
+
+            {/* Immer sichtbar, gedämpft: was als Nächstes kommt. */}
+            <div className="execNext">
+              {nextPhase ? (
+                <>
+                  <span className="execNextLabel">Danach</span>
+                  <span className="execNextName">{nextPhase.title || '—'}</span>
+                  <span className="execNextMeta">
+                    {Number(nextPhase.duration) || 0} min
+                    {nextPhase.socialForm ? ` · ${nextPhase.socialForm}` : ''}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="execNextLabel">Danach</span>
+                  <span className="execNextName">Hausaufgaben</span>
+                </>
+              )}
             </div>
 
             {(phase?.content || phase?.materialsMedia || phase?.remarks) ? (
@@ -498,14 +730,12 @@ function ExecutionWindow({ api }){
                     <div className="execRich" dangerouslySetInnerHTML={{ __html: String(phase.content) }} />
                   </div>
                 ) : null}
-
                 {phase?.materialsMedia ? (
                   <div className="execBlock">
-                    <div className="execBlockTitle">Materialien & Medien</div>
+                    <div className="execBlockTitle">Materialien &amp; Medien</div>
                     <div className="execRich" dangerouslySetInnerHTML={{ __html: String(phase.materialsMedia) }} />
                   </div>
                 ) : null}
-
                 {phase?.remarks ? (
                   <div className="execBlock">
                     <div className="execBlockTitle">Bemerkungen</div>
@@ -516,8 +746,12 @@ function ExecutionWindow({ api }){
             ) : null}
 
             <div className="execNav">
-              <button className="btn" onClick={goPrev} disabled={idx<=0}>←</button>
-              <button className="btn" onClick={goNext} disabled={idx>=phases.length}>→</button>
+              <button className="btn" onClick={goPrev} disabled={idx<=0} aria-label="Vorherige Phase"><ArrowLeft {...ICON} /></button>
+              <label className="execAuto" title="Bei 0 automatisch zur nächsten Phase springen">
+                <input type="checkbox" checked={autoAdvance} onChange={(e)=>setAutoAdvance(e.target.checked)} />
+                <span>Automatisch weiter</span>
+              </label>
+              <button className="btn primary" onClick={goNext} aria-label="Nächste Phase"><ArrowRight {...ICON} /></button>
             </div>
           </div>
         ))}
@@ -929,13 +1163,723 @@ function clamp(n, min, max){ return Math.max(min, Math.min(max, n)); }
 function deepClone(obj){
   try {
     if (typeof globalThis.structuredClone === 'function') {
-      return globalThis.deepClone(obj);
+      // Rief bisher globalThis.deepClone auf – das gibt es nicht, der
+      // Aufruf warf, und der Rückfall unten hat den Fehler stillschweigend
+      // geschluckt. Der schnelle Weg lief dadurch nie.
+      return globalThis.structuredClone(obj);
     }
   } catch {}
-  // Fallback: JSON clone (OK for our plain data objects)
+  // Rückfall für Umgebungen ohne structuredClone. Für unsere reinen
+  // Datenobjekte verhält er sich gleich, ist aber rund 1,4x langsamer.
   return JSON.parse(JSON.stringify(obj ?? null));
 }
 
+
+// Einzige Quelle für die Schema-Kennzeichnung im Renderer. Muss mit
+// SCHEMA_VERSION in electron/main.cjs übereinstimmen.
+const SCHEMA_VERSION = 8;
+
+/* ============================================================
+   Interaktionsschicht: Meldungen, Bestätigung, Eingabe
+
+   Ersetzt die nativen Browserdialoge. Grundsatz: Bei umkehrbaren
+   Aktionen wird nicht gefragt, sondern ausgeführt und ein Toast mit
+   "Rückgängig" gezeigt. Ein echter Bestätigungsdialog bleibt nur dort,
+   wo etwas unwiederbringlich überschrieben wird.
+   ============================================================ */
+
+// Einheitliche Darstellung aller Symbole: eine Grösse, eine Strichstärke.
+const ICON = { size: 16, strokeWidth: 1.75, 'aria-hidden': true, focusable: 'false' };
+const ICON_SM = { size: 14, strokeWidth: 1.75, 'aria-hidden': true, focusable: 'false' };
+
+/* Ein Kontext für die gesamte Interaktionsschicht. Die Meldungen und
+   Dialoge werden aus tief verschachtelten Komponenten heraus gebraucht;
+   sie durch zehn Ebenen als Eigenschaften zu reichen wäre die schlechtere
+   Lösung. React-Bordmittel, kein Zustandsframework. */
+const UiContext = React.createContext(null);
+const NOOP_UI = {
+  toast: ()=>{},
+  dismissToast: ()=>{},
+  // Ausserhalb des Providers (Durchführungsfenster) nicht blockieren:
+  // die Rückgabe entspricht "abgebrochen".
+  askConfirm: async ()=>false,
+  askInput: async ()=>null,
+};
+function useUi(){ return useContext(UiContext) || NOOP_UI; }
+
+function ToastHost({ toasts, onDismiss }){
+  if (!toasts.length) return null;
+  return (
+    <div className="toastHost">
+      {/* Screenreader lesen Änderungen hier vor, ohne den Fokus zu stehlen. */}
+      <ol className="toastList" aria-live="polite" aria-relevant="additions" aria-label="Meldungen">
+        {toasts.map((t)=>(
+          <li key={t.id} className={`toast toast--${t.tone || 'info'}`}>
+            <span className="toastText">{t.text}</span>
+            {t.action ? (
+              <button
+                type="button"
+                className="toastAction"
+                onClick={()=>{ try { t.action.onAct?.(); } finally { onDismiss(t.id); } }}
+              >{t.action.label}</button>
+            ) : null}
+            <button
+              type="button"
+              className="toastClose"
+              aria-label="Meldung schließen"
+              onClick={()=>onDismiss(t.id)}
+            ><X {...ICON_SM} /></button>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/* Bestätigung nur für Unwiederbringliches. Der Knopf benennt die
+   Handlung, nicht "OK" – man soll lesen können, was gleich passiert. */
+function ConfirmDialog({ open, title, body, confirmLabel, tone = 'primary', onConfirm, onCancel }){
+  const confirmRef = useRef(null);
+  useEffect(()=>{ if (open) confirmRef.current?.focus(); }, [open]);
+  if (!open) return null;
+  return (
+    <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onCancel?.(); }}>
+      <div className="modalCard" role="alertdialog" aria-modal="true" aria-label={title}
+           onKeyDown={(e)=>{ if (e.key === 'Escape') onCancel?.(); }}>
+        <h3 className="dialogTitle">{title}</h3>
+        {body ? <p className="dialogBody">{body}</p> : null}
+        <div className="dialogActions">
+          <button type="button" className="btn" onClick={onCancel}>Abbrechen</button>
+          <button ref={confirmRef} type="button" className={`btn ${tone}`} onClick={onConfirm}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Eingabe an Ort und Stelle ist nicht überall möglich (etwa beim Anlegen
+   aus einem Menü heraus) – dann dieses Feld statt window.prompt. */
+function PromptDialog({ open, title, label, placeholder, initialValue = '', confirmLabel = 'Übernehmen', onConfirm, onCancel }){
+  const [value, setValue] = useState(initialValue);
+  const inputRef = useRef(null);
+  useEffect(()=>{ if (open){ setValue(initialValue); setTimeout(()=>{ inputRef.current?.focus(); inputRef.current?.select(); }, 0);} }, [open, initialValue]);
+  if (!open) return null;
+  const submit = (e)=>{ e?.preventDefault?.(); const v = value.trim(); if (!v) return; onConfirm?.(v); };
+  return (
+    <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onCancel?.(); }}>
+      <form className="modalCard" onSubmit={submit} role="dialog" aria-modal="true" aria-label={title}
+            onKeyDown={(e)=>{ if (e.key === 'Escape') onCancel?.(); }}>
+        <h3 className="dialogTitle">{title}</h3>
+        <label className="small muted" htmlFor="promptDialogInput">{label}</label>
+        <input id="promptDialogInput" ref={inputRef} className="input" value={value}
+               placeholder={placeholder || ''} onChange={(e)=>setValue(e.target.value)} />
+        <div className="dialogActions">
+          <button type="button" className="btn" onClick={onCancel}>Abbrechen</button>
+          <button type="submit" className="btn primary" disabled={!value.trim()}>{confirmLabel}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* Leerzustand: eine Zeile, was hierhin gehört, und ein Knopf, der genau
+   das beginnt.
+
+   Die Illustration ist hier bewusst NICHT mehr gesetzt: Phase 6 gibt dem
+   Wochenabschluss den einen Auftritt der Bildmarke. Zwei dekorative
+   Stellen wären eine zu viel – die Möglichkeit bleibt als Eigenschaft
+   erhalten, falls sie einmal woanders gebraucht wird. */
+function EmptyState({ text, actionLabel, onAction, illustration = false }){
+  return (
+    <div className={`emptyState${illustration ? ' emptyState--art' : ''}`}>
+      {illustration ? <img className="emptyStateArt" src={logo} alt="" aria-hidden="true" /> : null}
+      <p className="emptyStateText">{text}</p>
+      {actionLabel && onAction ? (
+        <button type="button" className="btn primary" onClick={onAction}>{actionLabel}</button>
+      ) : null}
+    </div>
+  );
+}
+
+/* Suchvergleich ohne Akzente: In einer App für den Französischunterricht
+   heissen Sequenzen "Le passé composé". Wer "passe" tippt, muss sie finden –
+   sonst ist die Palette für genau die Inhalte unbrauchbar, um die es geht. */
+function foldForSearch(str){
+  return String(str || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/ß/g, 'ss')
+    .toLowerCase()
+    .trim();
+}
+
+/* ============================================================
+   Befehlspalette (Strg+K)
+
+   Vollständig über die Tastatur bedienbar: tippen filtert, Pfeiltasten
+   wählen, Eingabe führt aus, Escape schliesst. Die Liste bekommt sie
+   von aussen, damit sie nichts über den Aufbau der App wissen muss.
+   ============================================================ */
+function CommandPalette({ open, commands, onClose }){
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const inputRef = useRef(null);
+  const listRef = useRef(null);
+
+  useEffect(()=>{
+    if (!open) return;
+    setQuery('');
+    setActive(0);
+    const t = setTimeout(()=>inputRef.current?.focus(), 0);
+    return ()=> clearTimeout(t);
+  }, [open]);
+
+  const filtered = useMemo(()=>{
+    const q = foldForSearch(query);
+    if (!q) return commands.slice(0, 60);
+    const words = q.split(/\s+/);
+    return commands
+      .map((c)=>{
+        const hay = foldForSearch(`${c.label} ${c.group || ''} ${c.hint || ''}`);
+        if (!words.every(w => hay.includes(w))) return null;
+        // Treffer am Wortanfang zählen mehr als irgendwo mittendrin.
+        return { c, score: hay.startsWith(q) ? 0 : (foldForSearch(c.label).includes(q) ? 1 : 2) };
+      })
+      .filter(Boolean)
+      .sort((a,b)=> a.score - b.score)
+      .map(x => x.c)
+      .slice(0, 60);
+  }, [commands, query]);
+
+  useEffect(()=>{ setActive(0); }, [query]);
+  useEffect(()=>{
+    if (!open) return;
+    const el = listRef.current?.querySelector('[data-active="true"]');
+    el?.scrollIntoView({ block: 'nearest' });
+  }, [active, open, filtered.length]);
+
+  if (!open) return null;
+
+  const run = (cmd)=>{ onClose(); setTimeout(()=>cmd?.run?.(), 0); };
+
+  const onKeyDown = (e)=>{
+    if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(i => Math.min(i + 1, filtered.length - 1)); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); setActive(i => Math.max(i - 1, 0)); return; }
+    if (e.key === 'Home') { e.preventDefault(); setActive(0); return; }
+    if (e.key === 'End') { e.preventDefault(); setActive(Math.max(0, filtered.length - 1)); return; }
+    if (e.key === 'Enter') { e.preventDefault(); run(filtered[active]); return; }
+  };
+
+  return (
+    <div className="modalOverlay paletteOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onClose(); }}>
+      <div className="paletteCard" role="dialog" aria-modal="true" aria-label="Befehlspalette">
+        <div className="paletteSearch">
+          <Search {...ICON} />
+          <input
+            ref={inputRef}
+            className="paletteInput"
+            value={query}
+            onChange={(e)=>setQuery(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Springen oder ausführen…"
+            aria-label="Befehl suchen"
+            aria-controls="paletteList"
+            aria-activedescendant={filtered[active] ? `paletteItem-${active}` : undefined}
+            role="combobox"
+            aria-expanded="true"
+            autoComplete="off"
+          />
+          <kbd className="paletteHint">Esc</kbd>
+        </div>
+        <ul className="paletteList" id="paletteList" role="listbox" ref={listRef}>
+          {filtered.length === 0 ? (
+            <li className="paletteEmpty">Kein Treffer für „{query}“.</li>
+          ) : filtered.map((c, i)=>(
+            <li
+              key={c.id}
+              id={`paletteItem-${i}`}
+              role="option"
+              aria-selected={i === active}
+              data-active={i === active ? 'true' : 'false'}
+              className={`paletteItem${i === active ? ' is-active' : ''}`}
+              onMouseEnter={()=>setActive(i)}
+              onMouseDown={(e)=>{ e.preventDefault(); run(c); }}
+            >
+              <span className="paletteLabel">{c.label}</span>
+              {c.group ? <span className="paletteGroup">{c.group}</span> : null}
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   Einstellungen
+
+   Bis hierher hatte die App keinen eigenen Bereich dafür. Speicherstatus,
+   Datenschutzhinweis und die Trennung zwischen Desktop und Browser
+   brauchen aber einen sichtbaren Platz – Lehrkräfte müssen gegenüber
+   Schulleitung und Datenschutzbeauftragten belegen können, wo die Daten
+   liegen. Ein Satz in der Dokumentation reicht dafür nicht.
+   ============================================================ */
+function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onImportBackup,
+                        weekReview, onChangeWeekReview }){
+  const istBrowser = platformName === 'browser';
+  return (
+    <div className="card" style={{display:'flex', flexDirection:'column', gap:18}}>
+      <div>
+        <h2 className="dialogTitle">Einstellungen</h2>
+        <p className="muted small" style={{margin:0}}>
+          Darstellung, Datenablage und Datenschutz.
+        </p>
+      </div>
+
+      <section>
+        <h3 className="settingsHeading">Darstellung</h3>
+        <div className="settingsRow">
+          <span>Hell, dunkel oder wie das Betriebssystem</span>
+          <ThemeSwitch value={theme} onChange={onChangeTheme} />
+        </div>
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Wochenabschluss</h3>
+        <div className="settingsRow">
+          <span className="settingsText" style={{margin:0}}>
+            Beim Verlassen einer Woche einen kurzen Rückblick zeigen.
+          </span>
+          <label className="row" style={{gap:8, flexShrink:0}}>
+            <input type="checkbox" checked={!!weekReview}
+                   onChange={(e)=>onChangeWeekReview(e.target.checked)} />
+            <span>Anzeigen</span>
+          </label>
+        </div>
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Wo deine Daten liegen</h3>
+        <p className="settingsText">
+          {istBrowser
+            ? 'Diese Planung liegt in der Datenbank deines Browsers, auf diesem Gerät. Sie wird nicht an einen Server übertragen – die App hat keinen.'
+            : 'Diese Planung liegt als Datei auf diesem Rechner, im Benutzerordner der App. Sie wird nicht an einen Server übertragen – die App hat keinen.'}
+        </p>
+        <p className="settingsText">
+          Es gibt keine Anmeldung, keine Nutzerkonten, keine Statistik und keine
+          Verbindung nach aussen. Schriften und Symbole sind mitgeliefert und
+          werden nicht nachgeladen.
+        </p>
+
+        {istBrowser ? (
+          <p className="settingsText">
+            Angehängte Dateien bleiben dort liegen, wo sie sind – die App merkt
+            sich nur einen Verweis darauf. Wird eine Datei verschoben oder
+            gelöscht, meldet die App das beim Öffnen. Im Backup stehen die
+            Verweise, nicht die Dateien selbst.
+          </p>
+        ) : null}
+
+        {istBrowser ? (
+          storageState?.granted ? (
+            <div className="inlineNotice">
+              Der Browser hat die Ablage als dauerhaft zugesagt. Deine Planung
+              bleibt auch dann erhalten, wenn Speicherplatz knapp wird.
+            </div>
+          ) : (
+            <div className="inlineNotice inlineNotice--warning">
+              Der Browser hat die Ablage <b>nicht</b> als dauerhaft zugesagt. Bei
+              Platzmangel oder beim Löschen der Browserdaten kann deine Planung
+              verschwinden. Lege regelmässig ein Backup an – am besten nach jeder
+              Planungssitzung.
+            </div>
+          )
+        ) : null}
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Desktop-App und Browser-Version</h3>
+        <div className="inlineNotice inlineNotice--warning">
+          Beide Fassungen teilen ihre Daten <b>nicht</b>. Wer beides nutzt, hat
+          zwei getrennte Planungen auf demselben Gerät. Die Brücke dazwischen ist
+          der Backup-Export: hier ausgeben, dort einlesen.
+        </div>
+        {capabilities.backupFiles ? (
+          <div className="row" style={{gap:8, marginTop:10}}>
+            <button className="btn primary" onClick={onExportBackup}>Backup exportieren</button>
+            <button className="btn" onClick={onImportBackup}>Backup importieren</button>
+          </div>
+        ) : null}
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Version</h3>
+        <p className="settingsText">
+          Prép-ybara {APP_VERSION} · {istBrowser ? 'Browser-Version' : 'Desktop-App'} · © Florian Nowak
+        </p>
+      </section>
+    </div>
+  );
+}
+
+/* Sequenzfortschritt: "Le passé composé – Stunde 4 von 9".
+
+   Von allen Anzeigen dieser Ebene die stärkste, weil sie gleichzeitig
+   Orientierung gibt und Fortschritt zeigt. Beides steckt bereits im
+   Datenmodell – die Zuordnung in lesson.sequenceId, die Reihenfolge im
+   Datum. Es kommt kein Feld hinzu.
+
+   Der Balken bewertet nichts: er sagt, wo man steht, nicht ob das gut
+   ist. Deshalb kein Prozentwert und kein Soll-Vergleich. */
+function SequenceProgress({ progress, kompakt = false }){
+  if (!progress || progress.position < 1) return null;
+  const anteil = progress.total > 0 ? progress.position / progress.total : 0;
+  const linie = progress.color ? lineColor(progress.color) : 'var(--board)';
+  return (
+    <div className={`seqProgress${kompakt ? ' seqProgress--kompakt' : ''}`}>
+      <div className="seqProgressText">
+        <span className="seqProgressName">{progress.name}</span>
+        <span className="seqProgressZahl">Stunde {progress.position} von {progress.total}</span>
+      </div>
+      <div className="seqProgressBahn" role="img"
+           aria-label={`${progress.name}: Stunde ${progress.position} von ${progress.total}`}>
+        <div className="seqProgressFuellung"
+             style={{ width: `${Math.round(anteil * 100)}%`, background: linie }} />
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   Heute
+
+   Ersetzt das morgendliche "Wochenraster öffnen, Tag suchen". Zeigt die
+   Stunden des laufenden Tages, Aufsichten und offene To-dos.
+
+   Die bestehende Datenschutzlogik bleibt gewahrt: Von den To-dos steht
+   hier nur die ANZAHL. Der Inhalt erscheint erst, wenn die Liste
+   geöffnet wird – wer mit dem Rechner am Pult steht, soll nicht
+   versehentlich Namen und Vermerke zeigen.
+   ============================================================ */
+function TodayView({ heute, todayISO, getSeqProgress, onOpenLesson, onOpenTodos, onOpenWeek }){
+  const datum = new Date(`${todayISO}T00:00:00`);
+  const wochentag = Number.isNaN(datum.getTime())
+    ? '' : datum.toLocaleDateString('de-DE', { weekday: 'long' });
+
+  return (
+    <div style={{display:'flex', flexDirection:'column', gap:14}}>
+      <div className="card">
+        <div className="row" style={{justifyContent:'space-between', alignItems:'flex-start', gap:12}}>
+          <div>
+            <h2 className="dialogTitle">Heute</h2>
+            <p className="muted small" style={{margin:0}}>
+              {wochentag}, {formatDateDE(todayISO)}
+            </p>
+          </div>
+          <button className="btn" onClick={onOpenWeek}>Zur Woche</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3 className="settingsHeading">Stunden</h3>
+        {heute.stunden.length === 0 ? (
+          <EmptyState
+            text="Für heute ist keine Stunde eingetragen. Im Wochenraster kannst du eine anlegen."
+            actionLabel="Wochenraster öffnen"
+            onAction={onOpenWeek}
+          />
+        ) : (
+          <div className="todayList">
+            {heute.stunden.map((s)=>{
+              const l = s.lesson || {};
+              const p = l.sequenceId ? getSeqProgress?.(l.sequenceId, s.dayIndex, s.slotIndex) : null;
+              const farbe = l.classGroup && l.subject ? null : null;
+              return (
+                <button
+                  key={s.key}
+                  type="button"
+                  className="todayLesson"
+                  onClick={()=>onOpenLesson?.(s.dayIndex, s.slotIndex)}
+                >
+                  <span className="todaySlot">{s.slotIndex + 1}.</span>
+                  <span className="todayMain">
+                    <span className="todayTopic">{String(l.topic || '').trim() || 'Noch kein Thema'}</span>
+                    <span className="todayMeta">
+                      {[l.classGroup, l.subject, l.room].filter(Boolean).join(' · ') || 'Ohne Lerngruppe'}
+                    </span>
+                    {p ? <SequenceProgress progress={p} kompakt /> : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {heute.aufsichten.length ? (
+        <div className="card">
+          <h3 className="settingsHeading">Aufsichten</h3>
+          <div className="tagRow">
+            {heute.aufsichten.map((a)=>(
+              <span key={a.key} className="badge badge--dayoff">{a.title}</span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="card">
+        <h3 className="settingsHeading">To-dos</h3>
+        {(heute.offeneHeute + heute.offeneUeberfaellig) === 0 ? (
+          <p className="settingsText muted" style={{margin:0}}>Für heute steht nichts an.</p>
+        ) : (
+          <>
+            <p className="settingsText" style={{marginBottom:8}}>
+              {heute.offeneHeute > 0
+                ? `${heute.offeneHeute} offene${heute.offeneHeute === 1 ? 's' : ''} To-do${heute.offeneHeute === 1 ? '' : 's'} für heute.`
+                : 'Für heute selbst steht nichts an.'}
+              {heute.offeneUeberfaellig > 0
+                ? ` ${heute.offeneUeberfaellig} mit abgelaufener Frist.`
+                : ''}
+              {' '}Die Inhalte werden aus Datenschutzgründen erst in der Liste angezeigt.
+            </p>
+            <button className="btn primary" onClick={onOpenTodos}>To-dos öffnen</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   Kompetenz-Wärmekarte
+
+   Verwandelt Pflichtdokumentation in eine Auswertung: welche Kompetenz
+   wurde wie oft und wann bedient. Die Daten liegen bereits vor –
+   competencies je Stunde, eine davon als primäre markiert.
+
+   Bewusst ohne Soll-Vergleich und ohne Lücken-Warnung. Die Karte zeigt
+   die Verteilung; ob sie stimmt, weiss nur die Lehrkraft.
+   ============================================================ */
+function CompetencyHeatmapView({ daten, onBack }){
+  const monatsName = (m)=>{
+    const [j, mo] = String(m).split('-');
+    const d = new Date(Number(j), Number(mo) - 1, 1);
+    return Number.isNaN(d.getTime()) ? m : d.toLocaleDateString('de-DE', { month: 'short' });
+  };
+
+  if (!daten.zeilen.length) {
+    return (
+      <div className="card">
+        <h2 className="dialogTitle">Kompetenzen im Jahr</h2>
+        <EmptyState
+          text="Sobald du Stunden Kompetenzen zuordnest, entsteht hier eine Übersicht darüber, welche Kompetenz du wann und wie oft bedient hast."
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <div className="row" style={{justifyContent:'space-between', alignItems:'flex-start', gap:12}}>
+        <div>
+          <h2 className="dialogTitle">Kompetenzen im Jahr</h2>
+          <p className="muted small" style={{margin:0}}>
+            Wie oft welche Kompetenz in welchem Monat vorkam. {daten.gesamt} Zuordnungen insgesamt.
+          </p>
+        </div>
+      </div>
+
+      <div className="heatScroll">
+        <table className="heatTable">
+          <thead>
+            <tr>
+              <th scope="col" className="heatRowHead">Kompetenz</th>
+              {daten.monate.map(m => <th key={m} scope="col" className="heatMonth">{monatsName(m)}</th>)}
+              <th scope="col" className="heatMonth">Summe</th>
+            </tr>
+          </thead>
+          <tbody>
+            {daten.zeilen.map((z)=>(
+              <tr key={z.name}>
+                <th scope="row" className="heatRowHead">
+                  {z.name}
+                  {z.primaerSumme > 0 ? (
+                    <span className="heatPrimaer" title={`${z.primaerSumme}× als primäre Kompetenz`}>
+                      {z.primaerSumme}× primär
+                    </span>
+                  ) : null}
+                </th>
+                {z.zellen.map((c, i)=>{
+                  const anteil = daten.hoechst > 0 ? c.anzahl / daten.hoechst : 0;
+                  return (
+                    <td key={i} className="heatCell"
+                        title={`${daten.monate[i]}: ${c.anzahl}× (davon ${c.primaer}× primär)`}>
+                      {/* Deckkraft gedeckelt: darüber wäre die Zahl auf der
+                          Fläche nicht mehr mit 4.5:1 lesbar (nachgerechnet). */}
+                      <span className="heatFill" style={{ opacity: c.anzahl ? 0.12 + anteil * 0.48 : 0 }} />
+                      <span className="heatZahl">{c.anzahl || ''}</span>
+                    </td>
+                  );
+                })}
+                <td className="heatCell heatSum">{z.summe}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   Wochenabschluss
+
+   Ein ruhiger Rückblick statt eines leeren Rasters. Ausdrücklich eine
+   Zusammenfassung, keine Bewertung: kein Prozentwert, kein Vergleich mit
+   einem Soll, kein Pokal. Die Zahlen sagen, was war – nicht ob es genug
+   war. Deshalb steht dort "4 von 5 Plätzen mit einem Thema" und nicht
+   "80 % erledigt".
+
+   Hier darf das Capybara einmal auftauchen – und genau einmal in der
+   ganzen Anwendung.
+   ============================================================ */
+function WeekReview({ offen, zusammenfassung, weekLabel, onClose, onDisable }){
+  if (!offen || !zusammenfassung) return null;
+  const z = zusammenfassung;
+  return (
+    <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modalCard reviewCard" role="dialog" aria-modal="true" aria-label="Wochenabschluss"
+           onKeyDown={(e)=>{ if (e.key === 'Escape') onClose(); }}>
+        <img className="reviewArt" src={logo} alt="" aria-hidden="true" />
+        <h3 className="dialogTitle">Woche abgeschlossen</h3>
+        <p className="muted small" style={{margin:'0 0 12px'}}>{weekLabel}</p>
+
+        <ul className="reviewList">
+          <li>
+            <span className="reviewZahl">{z.geplant}</span>
+            <span className="reviewText">
+              {z.geplant === 1 ? 'Stunde mit Thema' : 'Stunden mit Thema'}
+              {z.gesamt > z.geplant ? ` · ${z.gesamt - z.geplant} noch ohne` : ''}
+            </span>
+          </li>
+          {z.lerngruppen > 0 ? (
+            <li>
+              <span className="reviewZahl">{z.lerngruppen}</span>
+              <span className="reviewText">{z.lerngruppen === 1 ? 'Lerngruppe' : 'Lerngruppen'}</span>
+            </li>
+          ) : null}
+          {z.erledigteTodos > 0 ? (
+            <li>
+              <span className="reviewZahl">{z.erledigteTodos}</span>
+              <span className="reviewText">{z.erledigteTodos === 1 ? 'To-do erledigt' : 'To-dos erledigt'}</span>
+            </li>
+          ) : null}
+        </ul>
+
+        {z.sequenzen.length ? (
+          <div className="reviewSeq">
+            <div className="settingsHeading">Fortgesetzte Sequenzen</div>
+            <div className="tagRow">
+              {z.sequenzen.map((sq)=>(
+                <span key={sq.name} className="pill"
+                      style={{borderColor: lineColor(sq.color), color: lineColor(sq.color)}}>
+                  {sq.name} · {sq.anzahl}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="dialogActions">
+          <button type="button" className="btn" onClick={onDisable}>Nicht mehr zeigen</button>
+          <button type="button" className="btn primary" onClick={onClose}>Schließen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   Seitenleiste
+
+   Entscheidung: ja. Zwei Gründe.
+
+   Erstens war die Kopfleiste nachweislich überfüllt – in Phase 1 brach
+   der Titel um, bis white-space: nowrap gesetzt wurde. Diese Phase legt
+   zwei weitere Ansichten dazu; sie in dieselbe Zeile zu drängen hätte
+   die Leiste endgültig unlesbar gemacht.
+
+   Zweitens macht sie die Ebenen sichtbar, um die es fachlich geht:
+   Tag → Woche → Zeitraum → Jahr. Das Badge in der Kopfleiste nannte nur
+   die aktuelle Ansicht, nicht ihren Platz in dieser Folge.
+
+   Schmal gehalten und ab 900px auf Symbole reduziert, damit dem
+   Wochenraster mit seinen fünf Spalten die Breite bleibt.
+   ============================================================ */
+const NAV_EBENEN = [
+  { id: 'today',        label: 'Heute',       Icon: Sun },
+  { id: 'week',         label: 'Woche',       Icon: CalendarDays },
+  { id: 'macro',        label: 'Makro',       Icon: Rows3 },
+  { id: 'year',         label: 'Jahr',        Icon: CalendarRange },
+  { id: 'competencies', label: 'Kompetenzen', Icon: Grid3x3 },
+  { id: 'library',      label: 'Bibliothek',  Icon: Library },
+  { id: 'calendar',     label: 'Kalender',    Icon: CalendarCheck },
+];
+const NAV_FUSS = [
+  { id: 'settings', label: 'Einstellungen', Icon: Settings },
+  { id: 'help',     label: 'Hilfe',         Icon: CircleHelp },
+];
+
+function Sidebar({ aktiv, onNavigate }){
+  const eintrag = ({ id, label, Icon })=>(
+    <button
+      key={id}
+      type="button"
+      className={`navItem${aktiv === id ? ' is-active' : ''}`}
+      aria-current={aktiv === id ? 'page' : undefined}
+      onClick={()=>onNavigate(id)}
+      title={label}
+    >
+      <Icon {...ICON} />
+      <span className="navLabel">{label}</span>
+    </button>
+  );
+  return (
+    <nav className="sidebar" aria-label="Ansichten">
+      <div className="navGroup">{NAV_EBENEN.map(eintrag)}</div>
+      <div className="navGroup navGroup--fuss">{NAV_FUSS.map(eintrag)}</div>
+    </nav>
+  );
+}
+
+const THEME_CHOICES = ['light', 'dark', 'system'];
+const THEME_LABELS = { light: 'Hell', dark: 'Dunkel', system: 'System' };
+
+/* Drei Zustände, als Radiogruppe – damit Tastatur und Screenreader die
+   Auswahl als das lesen, was sie ist. */
+function ThemeSwitch({ value, onChange }){
+  return (
+    <div className="themeSwitch" role="radiogroup" aria-label="Darstellung">
+      {THEME_CHOICES.map((choice)=>(
+        <button
+          key={choice}
+          type="button"
+          role="radio"
+          aria-checked={value === choice}
+          className={`themeSwitchBtn${value === choice ? ' is-active' : ''}`}
+          onClick={()=>onChange(choice)}
+          title={`Darstellung: ${THEME_LABELS[choice]}`}
+        >{THEME_LABELS[choice]}</button>
+      ))}
+    </div>
+  );
+}
 
 function ensureDbShape(raw){
   const db = (raw && typeof raw === 'object') ? raw : {};
@@ -992,14 +1936,9 @@ function ensureDbShape(raw){
     if (!Array.isArray(db.schoolCalendar.events)) db.schoolCalendar.events = [];
   }
   if (!db.weeks || typeof db.weeks !== 'object') db.weeks = {};
-  if (db.schemaVersion < 2) db.schemaVersion = 2;
-  if (db.schemaVersion < 3) db.schemaVersion = 3;
-  if (db.schemaVersion < 4) db.schemaVersion = 4;
-  if (db.schemaVersion < 5) db.schemaVersion = 5;
-  if (db.schemaVersion < 6) db.schemaVersion = 6;
-  if (db.schemaVersion < 7) db.schemaVersion = 7;
-  if (db.schemaVersion < 8) db.schemaVersion = 8;
-  if (db.schemaVersion < 8) db.schemaVersion = 8;
+  // Die Formangleichung oben läuft unabhängig von der Version; versionsabhängige
+  // Migrationen gibt es bislang keine. Neue gehören vor diesen Clamp.
+  if (db.schemaVersion < SCHEMA_VERSION) db.schemaVersion = SCHEMA_VERSION;
 
   // Normalize Jahresgrobplanung-Balken
   db.yearBars = (Array.isArray(db.yearBars) ? db.yearBars : []).map(b => {
@@ -1098,6 +2037,10 @@ db.todos = (Array.isArray(db.todos) ? db.todos : []).map(t => {
   if (!db.appSettings || typeof db.appSettings !== 'object') db.appSettings = {};
   // Opt-in: Dateien beim Anhängen in App-Ordner kopieren
   db.appSettings.fileCopyOptIn = Boolean(db.appSettings.fileCopyOptIn);
+  // Darstellung: hell | dunkel | system. Unbekanntes fällt auf System zurück.
+  if (!THEME_CHOICES.includes(db.appSettings.theme)) db.appSettings.theme = 'system';
+  // Wochenabschluss: standardmässig an, dauerhaft abschaltbar.
+  if (typeof db.appSettings.weekReview !== 'boolean') db.appSettings.weekReview = true;
 
 
   return db;
@@ -1113,21 +2056,18 @@ function hashCode(str){
 
 function useDB(){
   const [db, setDb] = useState(null);
+  const [saveError, setSaveError] = useState(null);
   const saveTimer = useRef(null);
 
-  const api = (typeof window !== 'undefined' && window.api) ? window.api : null;
 
   useEffect(()=> {
     let cancelled = false;
     (async ()=>{
-      if (api) {
-        const loaded = ensureDbShape(await api.getDB());
-        if (!cancelled) setDb(loaded);
-      } else {
-        // fallback for browser
-        const raw = localStorage.getItem('lehrerplan_db');
-        setDb(raw ? JSON.parse(raw) : { schemaVersion:8, socialForms:{}, phaseNames:{}, hiddenSuggestions:{ socialForms:{}, phaseNames:{}, classGroups:{}, subjects:{}, competencies:{}, supervisionLabels:{} }, competencies:{}, classGroups:{}, subjects:{}, groupColors:{}, supervisionLabels:{}, todos:[], sequences:{}, sequenceTemplates:{}, yearBars:[], schoolCalendar:{ schoolYear:{startISO:'', endISO:''}, lessonTimesEnabled:false, lessonTimes:[], vacations:[], freeDays:[], events:[] }, weeks:{}, appSettings:{ fileCopyOptIn:false } });
-      }
+      // Ein Ladeweg für beide Plattformen. Liefert die Ablage nichts
+      // (Erststart), erzeugt ensureDbShape die vollständige Grundform –
+      // dieselbe Normalisierung, die auch Bestandsdaten durchlaufen.
+      const loaded = await platform.loadDB();
+      if (!cancelled) setDb(ensureDbShape(loaded || {}));
     })();
     return ()=> { cancelled = true; };
   }, []);
@@ -1135,17 +2075,22 @@ function useDB(){
   const persist = (nextDb) => {
     setDb(nextDb);
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(async ()=>{
-      if (api) await api.setDB(nextDb);
-      else localStorage.setItem('lehrerplan_db', JSON.stringify(nextDb));
+    saveTimer.current = setTimeout(()=>{
+      // Bewusst nicht erwartet: der Schreibvorgang läuft asynchron weiter
+      // und darf die Eingabe nicht aufhalten. Ein Fehlschlag wird als
+      // Zustand nach oben gereicht – die Meldung gehört in die App, hier
+      // ist sie nicht im Gültigkeitsbereich.
+      platform.saveDB(nextDb)
+        .then(()=> setSaveError(null))
+        .catch((err)=> setSaveError(String(err?.message || err)));
     }, 250);
   };
 
-  return { db, persist, api };
+  return { db, persist, saveError };
 }
 
 export default function App(){
-  const { db, persist, api } = useDB();
+  const { db, persist, saveError } = useDB();
   // Show a large logo once when the app starts (helps users recognize the app).
   const [splashVisible, setSplashVisible] = useState(true);
   const [easterEggVisible, setEasterEggVisible] = useState(false);
@@ -1258,8 +2203,8 @@ export default function App(){
     if (!db) return;
     const ns = (newStartISO || '').trim();
     const ne = (newEndISO || '').trim();
-    if (!ns || !ne) { alert('Bitte Start- und Enddatum des neuen Schuljahres angeben.'); return; }
-    if (ne < ns) { alert('Das Enddatum muss nach dem Startdatum liegen.'); return; }
+    if (!ns || !ne) { showToast('Bitte Start- und Enddatum des neuen Schuljahres angeben.', { tone: 'warning' }); return; }
+    if (ne < ns) { showToast('Das Enddatum muss nach dem Startdatum liegen.', { tone: 'warning' }); return; }
 
     const nextDb = deepClone(db);
 
@@ -1457,7 +2402,238 @@ const classGroupSuggestions = useMemo(()=>{
 
   const sequences = db?.sequences || {};
 
-  const appSettings = db?.appSettings || { fileCopyOptIn: false };
+  const appSettings = db?.appSettings || { fileCopyOptIn: false, theme: 'system' };
+
+  // Systemvorgabe beobachten, damit "System" ohne Neustart umschaltet.
+  const [systemPrefersDark, setSystemPrefersDark] = useState(()=>{
+    try { return window.matchMedia?.('(prefers-color-scheme: dark)').matches || false; }
+    catch { return false; }
+  });
+  useEffect(()=>{
+    let mq;
+    try { mq = window.matchMedia('(prefers-color-scheme: dark)'); } catch { return; }
+    const onChange = (e)=> setSystemPrefersDark(e.matches);
+    mq.addEventListener?.('change', onChange);
+    return ()=> mq.removeEventListener?.('change', onChange);
+  }, []);
+
+  /* ---- Meldungen ------------------------------------------------------ */
+  const [toasts, setToasts] = useState([]);
+  const toastTimers = useRef(new Map());
+  const dismissToast = useCallback((id)=>{
+    const t = toastTimers.current.get(id);
+    if (t) { clearTimeout(t); toastTimers.current.delete(id); }
+    setToasts(prev => prev.filter(x => x.id !== id));
+  }, []);
+  const showToast = useCallback((text, opts = {})=>{
+    const id = uid();
+    const ttl = Number.isFinite(opts.ttl) ? opts.ttl : (opts.action ? 9000 : 5000);
+    setToasts(prev => [...prev.slice(-3), { id, text, tone: opts.tone, action: opts.action }]);
+    if (ttl > 0) toastTimers.current.set(id, setTimeout(()=>dismissToast(id), ttl));
+    return id;
+  }, [dismissToast]);
+  useEffect(()=>()=>{ toastTimers.current.forEach(clearTimeout); toastTimers.current.clear(); }, []);
+
+
+  /* ---- Rückgängig -----------------------------------------------------
+     Bewusst an diskrete Aktionen gebunden, nicht an persist(): persist
+     läuft bei jedem Tastenanschlag, ein Stapel daraus wäre wertlos.
+     Nur im Speicher, nicht persistiert.                                  */
+  const UNDO_LIMIT = 10;
+  const undoStack = useRef([]);
+  const captureUndo = useCallback((label, snapshot)=>{
+    undoStack.current = [...undoStack.current.slice(-(UNDO_LIMIT - 1)), { label, db: deepClone(snapshot) }];
+  }, []);
+  const undoLast = useCallback(()=>{
+    const entry = undoStack.current[undoStack.current.length - 1];
+    if (!entry) { showToast('Nichts zum Rückgängigmachen.'); return; }
+    undoStack.current = undoStack.current.slice(0, -1);
+    persist(entry.db);
+    showToast(`${entry.label} rückgängig gemacht.`);
+  }, [showToast, persist]);
+
+  /* Umkehrbare Aktion: ausführen, dann Rückgängig anbieten. */
+  const runUndoable = useCallback((label, snapshot, mutate)=>{
+    captureUndo(label, snapshot);
+    mutate();
+    showToast(label, { action: { label: 'Rückgängig', onAct: undoLast } });
+  }, [captureUndo, showToast, undoLast]);
+
+  /* ---- Dialoge -------------------------------------------------------- */
+  const [confirmState, setConfirmState] = useState(null);
+  // Versprechensbasiert, damit die Aufrufstellen so knapp bleiben wie mit
+  // window.confirm: const ok = await askConfirm({...}); if (!ok) return;
+  const askConfirm = useCallback((cfg)=> new Promise((resolve)=>{
+    setConfirmState({ ...cfg, onConfirm: ()=>resolve(true), onCancel: ()=>resolve(false) });
+  }), []);
+  const [promptState, setPromptState] = useState(null);
+  const askPrompt = useCallback((cfg)=> new Promise((resolve)=>{
+    setPromptState({ ...cfg, onConfirm: (v)=>resolve(v), onCancel: ()=>resolve(null) });
+  }), []);
+
+  // Strg+Z global. In Eingabefeldern hat die native Rücknahme Vorrang.
+  useEffect(()=>{
+    const onKey = (e)=>{
+      const z = (e.key === 'z' || e.key === 'Z');
+      if (!z || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      const el = e.target;
+      const tag = (el?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || el?.isContentEditable) return;
+      e.preventDefault();
+      undoLast();
+    };
+    window.addEventListener('keydown', onKey);
+    return ()=> window.removeEventListener('keydown', onKey);
+  }, [undoLast]);
+
+  /* ---- Wochenabschluss ------------------------------------------------
+     Erscheint beim Verlassen der Woche und freitags – höchstens einmal je
+     Woche und Sitzung. Der Merker liegt nur im Speicher: er soll nicht in
+     die Datenbank, sondern beim nächsten Start wieder greifen. */
+  const [reviewWeek, setReviewWeek] = useState(null);
+  const reviewGezeigt = useRef(new Set());
+  const letzteWoche = useRef(view.weekStart);
+  useEffect(()=>{
+    const vorher = letzteWoche.current;
+    letzteWoche.current = view.weekStart;
+    if (!db || appSettings?.weekReview === false) return;
+    // Beim Verlassen der Wochenansicht
+    if (view.name === 'week') return;
+    if (!vorher || reviewGezeigt.current.has(vorher)) return;
+    const z = weekSummary(db, vorher);
+    if (!z.gesamt) return;                     // leere Woche: nichts zu berichten
+    reviewGezeigt.current.add(vorher);
+    setReviewWeek(vorher);
+  }, [view.name]);
+
+  /* ---- Befehlspalette ------------------------------------------------- */
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(()=>{
+    const onKey = (e)=>{
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setPaletteOpen(v => !v);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return ()=> window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const paletteCommands = useMemo(()=>{
+    const ws = view.weekStart || toISODate(startOfWeekMonday(new Date()));
+    const go = (v)=>()=> setView(v);
+    const cmds = [
+      { id:'v-today',    group:'Ansicht', label:'Heute',               run: go({ name:'today', weekStart: ws }) },
+      { id:'v-week',     group:'Ansicht', label:'Wochenraster',        run: go({ name:'week', weekStart: ws }) },
+      { id:'v-macro',    group:'Ansicht', label:'Makro-Plan',          run: go({ name:'macro', weekStart: ws, startISO: ws, rangeDays: 28 }) },
+      { id:'v-year',     group:'Ansicht', label:'Jahresgrobplanung',   run: go({ name:'year', weekStart: ws, focusISO: ws }) },
+      { id:'v-comp',     group:'Ansicht', label:'Kompetenzen im Jahr', run: go({ name:'competencies', weekStart: ws }) },
+      { id:'v-library',  group:'Ansicht', label:'Bibliothek',          run: go({ name:'library', weekStart: ws }) },
+      { id:'v-calendar', group:'Ansicht', label:'Schulkalender',       run: go({ name:'calendar', weekStart: ws }) },
+      { id:'v-todos',    group:'Ansicht', label:'To-dos',              run: go({ name:'todos', weekStart: ws }) },
+      { id:'v-settings', group:'Ansicht', label:'Einstellungen',       run: go({ name:'settings', weekStart: ws }) },
+      { id:'v-help',     group:'Ansicht', label:'Hilfe',               run: go({ name:'help', weekStart: ws }) },
+
+      { id:'w-prev',  group:'Woche', label:'Vorherige Woche', run: ()=>goWeekDelta(-1) },
+      { id:'w-next',  group:'Woche', label:'Nächste Woche',   run: ()=>goWeekDelta(1) },
+      { id:'w-today', group:'Woche', label:'Aktuelle Woche',  run: ()=>{
+          const t = toISODate(startOfWeekMonday(new Date()));
+          setView({ name:'week', weekStart: t }); setSelectedDate(toISODate(new Date()));
+        } },
+
+      { id:'a-undo',    group:'Aktion', label:'Rückgängig',            hint:'Strg+Z', run: undoLast },
+      { id:'a-seq',     group:'Aktion', label:'Sequenzen verwalten',   run: ()=>openSequenceManagerModal() },
+      { id:'a-copy',    group:'Aktion', label:'In nächste Woche übernehmen', run: ()=>setShowWeekCopyDialog(true) },
+      { id:'a-expback', group:'Aktion', label:'Backup exportieren',    run: ()=>exportBackup() },
+      { id:'a-impback', group:'Aktion', label:'Backup importieren',    run: ()=>importBackup() },
+
+      { id:'t-light',  group:'Darstellung', label:'Hell',   run: ()=>updateAppSettings({ theme:'light' }) },
+      { id:'t-dark',   group:'Darstellung', label:'Dunkel', run: ()=>updateAppSettings({ theme:'dark' }) },
+      { id:'t-system', group:'Darstellung', label:'System', run: ()=>updateAppSettings({ theme:'system' }) },
+    ];
+
+    // Sequenzen: direkt in den Makro-Plan springen und dort filtern.
+    for (const seq of Object.values(sequences || {})) {
+      if (!seq?.id) continue;
+      cmds.push({
+        id:`seq-${seq.id}`, group:'Sequenz', label: seq.name || 'Sequenz',
+        run: ()=> setView({ name:'macro', weekStart: ws, startISO: ws, rangeDays: 28, sequenceId: seq.id }),
+      });
+    }
+    // Lerngruppen aus den gespeicherten Farben ableiten – dort steht jede
+    // tatsächlich verwendete Kombination aus Klasse und Fach.
+    for (const key of Object.keys(db?.groupColors || {})) {
+      const [cls, subj] = String(key).split('||');
+      if (!cls || !subj) continue;
+      cmds.push({
+        id:`grp-${key}`, group:'Lerngruppe', label:`${cls} · ${subj}`,
+        run: ()=> setView({ name:'macro', weekStart: ws, startISO: ws, rangeDays: 28, groupQuery: `${cls} · ${subj}` }),
+      });
+    }
+    return cmds;
+  }, [view.weekStart, sequences, db?.groupColors, undoLast]);
+
+  // Ein fehlgeschlagenes Speichern darf nicht still bleiben. Die Meldung
+  // bleibt stehen (ttl 0), bis der Nutzer sie schliesst.
+  useEffect(()=>{
+    if (!saveError) return;
+    showToast(`Speichern fehlgeschlagen: ${saveError}`, { tone: 'danger', ttl: 0 });
+  }, [saveError, showToast]);
+
+  /* ---- Web-App: Service Worker und Speicherzusage --------------------- */
+  const [storageState, setStorageState] = useState(null);
+  useEffect(()=>{
+    let abgemeldet = false;
+    setupServiceWorker({
+      onUpdateAvailable: (anwenden)=>{
+        if (abgemeldet) return;
+        showToast('Neue Version verfügbar.', {
+          ttl: 0,
+          action: { label: 'Neu laden', onAct: ()=> anwenden() },
+        });
+      },
+    });
+    // Dauerhafte Ablage anfragen. Ohne Zusage darf der Browser die Daten
+    // bei Platzmangel verwerfen – das muss sichtbar sein, nicht geraten.
+    (async ()=>{
+      if (typeof platform.requestPersistence !== 'function') return;
+      const res = await platform.requestPersistence();
+      if (!abgemeldet) setStorageState(res);
+    })();
+    return ()=>{ abgemeldet = true; };
+  }, [showToast]);
+
+  const uiApi = useMemo(()=>({
+    toast: showToast, dismissToast, askConfirm, askInput: askPrompt,
+  }), [showToast, dismissToast, askConfirm, askPrompt]);
+
+  /* Beschriftung der Kopfleiste. Vorher eine fünffach verschachtelte
+     Ternärkette – als Zuordnung ist sie erweiterbar, ohne Klammern zu zählen. */
+  const viewBadgeLabel = useMemo(()=>{
+    switch (view.name) {
+      case 'macro':
+        return `${formatDateDE(view.startISO)} – ${formatDateDE(toISODate(addDays(fromISODate(view.startISO), (view.rangeDays || 28) - 1)))}`;
+      case 'year':     return 'Jahresgrobplanung';
+      case 'library':  return 'Bibliothek';
+      case 'today':    return 'Heute';
+      case 'competencies': return 'Kompetenzen';
+      case 'settings': return 'Einstellungen';
+      case 'help':     return 'Hilfe';
+      case 'week':     return '';
+      default:         return formatWeekLabel(view.weekStart);
+    }
+  }, [view]);
+
+  const themeChoice = THEME_CHOICES.includes(appSettings?.theme) ? appSettings.theme : 'system';
+  const darkActive = themeChoice === 'dark' || (themeChoice === 'system' && systemPrefersDark);
+  // Vor dem Rendern der Kinder setzen: die Farbableitungen lesen diesen Wert.
+  setDarkMode(darkActive);
+
+  useEffect(()=>{
+    const root = document.documentElement;
+    if (themeChoice === 'system') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', themeChoice);
+  }, [themeChoice]);
   const updateAppSettings = (patch) => {
     try {
       const nextDb = deepClone(db);
@@ -1580,16 +2756,19 @@ useEffect(()=>{
     persist(nextDb);
   };
 
-  const deleteLessonAt = (weekStart, dayIndex, slotIndex) => {
+  // opts.silent: beim Ausschneiden wird die Stunde nur verschoben – dort
+  // wäre eine Lösch-Meldung mit "Rückgängig" irreführend.
+  const deleteLessonAt = (weekStart, dayIndex, slotIndex, opts = {}) => {
     const k = keyOf(dayIndex, slotIndex);
     try { draftLessonCacheRef.current.delete(`${weekStart}|${dayIndex}|${slotIndex}`); } catch {}
+    const before = db;
     const nextDb = deepClone(db);
     const w = nextDb.weeks?.[weekStart];
     if (!w || !w.lessons) return;
-    if (k in w.lessons) {
-      delete w.lessons[k];
-      persist(nextDb);
-    }
+    if (!(k in w.lessons)) return;
+    delete w.lessons[k];
+    if (opts.silent) { persist(nextDb); return; }
+    runUndoable('Stunde gelöscht', before, ()=>persist(nextDb));
   };
 
   // --- Stunden: Copy/Cut/Paste + Drag&Drop ---
@@ -1613,14 +2792,19 @@ useEffect(()=>{
     const l = normalizeLesson(deepClone(persisted));
     l.phases = normalizePhases((l.phases || []).map(p => ({ ...p, id: uid() })));
     setLessonClipboard({ lesson: l, source: { weekStart, dayIndex, slotIndex }, cut: true, copiedAt: Date.now() });
-    deleteLessonAt(weekStart, dayIndex, slotIndex);
+    deleteLessonAt(weekStart, dayIndex, slotIndex, { silent: true });
   };
 
-  const pasteLessonFromClipboard = (weekStart, dayIndex, slotIndex) => {
+  const pasteLessonFromClipboard = async (weekStart, dayIndex, slotIndex) => {
     if (!lessonClipboard?.lesson) return;
     const targetHas = !!(db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, slotIndex)]);
     if (targetHas) {
-      const ok = window.confirm('Zielstunde ist bereits belegt. Überschreiben?');
+      const ok = await askConfirm({
+        title: 'Zielstunde ist bereits belegt',
+        body: 'Die dort geplante Stunde wird durch den Inhalt der Zwischenablage ersetzt. Das lässt sich nicht rückgängig machen.',
+        confirmLabel: 'Überschreiben',
+        tone: 'danger',
+      });
       if (!ok) return;
     }
     const l = normalizeLesson(deepClone(lessonClipboard.lesson));
@@ -1629,7 +2813,7 @@ useEffect(()=>{
     if (lessonClipboard.cut) setLessonClipboard(null);
   };
 
-  const moveOrCopyLessonByDnd = ({ from, to, mode = 'move' }) => {
+  const moveOrCopyLessonByDnd = async ({ from, to, mode = 'move' }) => {
     const f = from || {};
     const t = to || {};
     if (!f.weekStart || !t.weekStart) return;
@@ -1669,7 +2853,12 @@ useEffect(()=>{
 
     if (mode === 'copy') {
       if (toW.lessons?.[toKey]) {
-        const ok = window.confirm('Zielstunde ist bereits belegt. Überschreiben?');
+        const ok = await askConfirm({
+          title: 'Zielstunde ist bereits belegt',
+          body: 'Die dort geplante Stunde wird durch die kopierte ersetzt. Das lässt sich nicht rückgängig machen.',
+          confirmLabel: 'Überschreiben',
+          tone: 'danger',
+        });
         if (!ok) return;
       }
       const cloned = normalizeLesson(deepClone(src));
@@ -1716,25 +2905,55 @@ useEffect(()=>{
   };
 
   const deleteDutyAt = (weekStart, dayIndex, pos) => {
+    const before = db;
     const key = `${dayIndex}-${pos}`;
     const nextDb = deepClone(db);
     const w = nextDb.weeks?.[weekStart];
     if (!w || !w.duties) return;
     if (key in w.duties) {
       delete w.duties[key];
-      persist(nextDb);
+      runUndoable('Aufsicht gelöscht', before, ()=>persist(nextDb));
     }
   };
 
 
+/* Heisser Pfad: läuft bei jeder Eingabe in der Einzelstunde.
+
+   Früher wurde hier die vollständige Datenbank geklont. Bei 40 Wochen à
+   50 Stunden kostet dieser Klon rund 55 ms – bei jedem Tastenanschlag,
+   synchron, vor dem eigentlichen Speichern. Das ist derselbe Fehler wie
+   beim Gesamtblob, nur im Arbeitsspeicher.
+
+   Jetzt wird nur der geänderte Pfad kopiert. Alle übrigen Wochen behalten
+   ihre Identität – dadurch erkennt der Plattform-Adapter unveränderte
+   Wochen an der Referenz und muss sie nicht einmal serialisieren. */
 const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
-  const nextDb = deepClone(db);
-  if (!nextDb.weeks) nextDb.weeks = {};
-  const w = nextDb.weeks[weekStart] || { slotsPerDay: 6, lessons: {}, duties: {} };
-  if (!nextDb.weeks[weekStart]) nextDb.weeks[weekStart] = w;
-  if (!w.lessons) w.lessons = {};
   const l = normalizeLesson(nextLesson);
-  w.lessons[keyOf(dayIndex, slotIndex)] = { ...l, updatedAt: new Date().toISOString() };
+  const prevWeeks = db?.weeks || {};
+  const prevWeek = prevWeeks[weekStart] || { slotsPerDay: 6, lessons: {}, duties: {} };
+  const prevHidden = db?.hiddenSuggestions || {};
+
+  const nextDb = {
+    ...db,
+    classGroups: { ...(db?.classGroups || {}) },
+    subjects: { ...(db?.subjects || {}) },
+    groupColors: { ...(db?.groupColors || {}) },
+    hiddenSuggestions: {
+      ...prevHidden,
+      classGroups: { ...(prevHidden.classGroups || {}) },
+      subjects: { ...(prevHidden.subjects || {}) },
+    },
+    weeks: {
+      ...prevWeeks,
+      [weekStart]: {
+        ...prevWeek,
+        lessons: {
+          ...(prevWeek.lessons || {}),
+          [keyOf(dayIndex, slotIndex)]: { ...l, updatedAt: new Date().toISOString() },
+        },
+      },
+    },
+  };
   rememberClassGroupIn(nextDb, l.classGroup);
   rememberSubjectIn(nextDb, l.subject);
   ensureGroupColorIn(nextDb, l.classGroup, l.subject);
@@ -1847,24 +3066,42 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
   setView({ name:'week', weekStart: nextStart });
 };
 
+  /* Bei Pfadangaben gehört ein Weg zur Datei an die Meldung – sonst muss
+     man sich den Pfad merken und ihn im Dateimanager nachbauen. */
+  const toastSavedPath = (text, pathStr) => {
+    showToast(text, {
+      tone: 'success',
+      action: capabilities.revealInFolder ? {
+        label: 'Ordner öffnen',
+        onAct: async ()=>{
+          const res = await platform.revealPath(pathStr);
+          if (res && res.ok === false && res.error) showToast(`Konnte Ordner nicht öffnen: ${res.error}`, { tone: 'danger' });
+        },
+      } : null,
+    });
+  };
+
   const exportBackup = async () => {
-    if (!api) {
-      alert('Backup-Export ist nur in der Desktop-App verfügbar.');
+    // Der Hinweis gehört an die Stelle, wo er zählt: Wer exportiert, will
+    // die Planung oft in die jeweils andere Fassung übertragen.
+    showToast('Backup ist die Brücke zwischen Desktop-App und Browser-Version – beide teilen ihre Daten nicht.', { ttl: 8000 });
+    if (!capabilities.backupFiles) {
+      showToast('Backup-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
-    const path = await api.exportBackup();
-    if (path) alert(`Backup gespeichert:\n${path}`);
+    const path = await platform.exportBackup();
+    if (path) toastSavedPath('Backup gespeichert.', path);
   };
 
   const importBackup = async () => {
-    if (!api) {
-      alert('Backup-Import ist nur in der Desktop-App verfügbar.');
+    if (!capabilities.backupFiles) {
+      showToast('Backup-Import ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
-    const imported = await api.importBackup();
+    const imported = await platform.importBackup();
     if (imported) {
-      persist(imported);
-      alert('Backup importiert.');
+      persist(ensureDbShape(imported));
+      showToast('Backup importiert.', { tone: 'success' });
     }
   };
 
@@ -1874,7 +3111,7 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     const n = String(name || '').trim();
     if (!n) {
       // Previously this failed silently and felt like "not allowed".
-      alert('Bitte einen Sequenznamen eingeben.');
+      showToast('Bitte einen Sequenznamen eingeben.', { tone: 'warning' });
       return null;
     }
     const nextDb = deepClone(db);
@@ -1894,6 +3131,7 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
   };
 
   const deleteSequence = (id) => {
+    const before = db;
     const nextDb = deepClone(db);
     if (!nextDb.sequences?.[id]) return;
     delete nextDb.sequences[id];
@@ -1906,7 +3144,7 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
         if (l?.sequenceId === id) w.lessons[k] = { ...l, sequenceId: '' };
       }
     }
-    persist(nextDb);
+    runUndoable('Sequenz gelöscht', before, ()=>persist(nextDb));
   };
 
   // --- Jahresgrobplanung (Orientierungs-Balken) ---
@@ -1914,17 +3152,17 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     const p = (payload && typeof payload === 'object') ? payload : {};
     const title = String(p.title || '').trim();
     if (!title) {
-      alert('Bitte einen Titel für den Balken eingeben.');
+      showToast('Bitte einen Titel für den Balken eingeben.', { tone: 'warning' });
       return null;
     }
     const startISO = String(p.startISO || '').trim();
     const endISO = String(p.endISO || '').trim();
     if (!startISO || !endISO) {
-      alert('Bitte Start- und Enddatum wählen.');
+      showToast('Bitte Start- und Enddatum wählen.', { tone: 'warning' });
       return null;
     }
     if (endISO < startISO) {
-      alert('Enddatum muss nach dem Startdatum liegen.');
+      showToast('Enddatum muss nach dem Startdatum liegen.', { tone: 'warning' });
       return null;
     }
 
@@ -1964,9 +3202,10 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
   };
 
   const deleteYearBar = (id) => {
+    const before = db;
     const nextDb = deepClone(db);
     nextDb.yearBars = (Array.isArray(nextDb.yearBars) ? nextDb.yearBars : []).filter(b => b?.id !== id);
-    persist(nextDb);
+    runUndoable('Balken gelöscht', before, ()=>persist(nextDb));
   };
 
   const rememberCompetency = (label) => {
@@ -2062,10 +3301,10 @@ const rememberClassGroupIn = (nextDb, label) => {
   if (nextDb.hiddenSuggestions.classGroups[l]) delete nextDb.hiddenSuggestions.classGroups[l];
 
   if (!nextDb.classGroups) nextDb.classGroups = {};
+  // Ersetzen statt verändern: der Eintrag kann noch mit dem vorigen
+  // Zustand geteilt sein, wenn nur der geänderte Pfad kopiert wurde.
   const existing = nextDb.classGroups[l] || { count: 0, lastUsed: '' };
-  existing.count = (existing.count || 0) + 1;
-  existing.lastUsed = new Date().toISOString();
-  nextDb.classGroups[l] = existing;
+  nextDb.classGroups[l] = { ...existing, count: (existing.count || 0) + 1, lastUsed: new Date().toISOString() };
 };
 
 const rememberSubjectIn = (nextDb, label) => {
@@ -2077,10 +3316,10 @@ const rememberSubjectIn = (nextDb, label) => {
   if (nextDb.hiddenSuggestions.subjects[l]) delete nextDb.hiddenSuggestions.subjects[l];
 
   if (!nextDb.subjects) nextDb.subjects = {};
+  // Ersetzen statt verändern: der Eintrag kann noch mit dem vorigen
+  // Zustand geteilt sein, wenn nur der geänderte Pfad kopiert wurde.
   const existing = nextDb.subjects[l] || { count: 0, lastUsed: '' };
-  existing.count = (existing.count || 0) + 1;
-  existing.lastUsed = new Date().toISOString();
-  nextDb.subjects[l] = existing;
+  nextDb.subjects[l] = { ...existing, count: (existing.count || 0) + 1, lastUsed: new Date().toISOString() };
 };
 
 
@@ -2093,10 +3332,10 @@ const rememberSupervisionIn = (nextDb, label) => {
   if (nextDb.hiddenSuggestions.supervisionLabels[l]) delete nextDb.hiddenSuggestions.supervisionLabels[l];
 
   if (!nextDb.supervisionLabels) nextDb.supervisionLabels = {};
+  // Ersetzen statt verändern: der Eintrag kann noch mit dem vorigen
+  // Zustand geteilt sein, wenn nur der geänderte Pfad kopiert wurde.
   const existing = nextDb.supervisionLabels[l] || { count: 0, lastUsed: '' };
-  existing.count = (existing.count || 0) + 1;
-  existing.lastUsed = new Date().toISOString();
-  nextDb.supervisionLabels[l] = existing;
+  nextDb.supervisionLabels[l] = { ...existing, count: (existing.count || 0) + 1, lastUsed: new Date().toISOString() };
 };
 
 const ensureGroupColorIn = (nextDb, classGroup, subject) => {
@@ -2147,10 +3386,12 @@ const updateTodo = (id, patch) => {
 };
 
 const deleteTodo = (id) => {
+  const before = db;
   const nextDb = deepClone(db);
   const arr = Array.isArray(nextDb.todos) ? nextDb.todos : [];
+  if (!arr.some(t => t?.id === id)) return;
   nextDb.todos = arr.filter(t => t?.id !== id);
-  persist(nextDb);
+  runUndoable('To-do gelöscht', before, ()=>persist(nextDb));
 };
 
 
@@ -2176,7 +3417,7 @@ const deleteTodo = (id) => {
     }
     items.sort((a,b)=> (a.dateISO.localeCompare(b.dateISO) || (a.slotIndex-b.slotIndex)));
     if (items.length === 0) {
-      alert('In dieser Sequenz sind noch keine Stunden zugeordnet.');
+      showToast('In dieser Sequenz sind noch keine Stunden zugeordnet.', { tone: 'warning' });
       return null;
     }
 
@@ -2220,24 +3461,25 @@ const deleteTodo = (id) => {
   };
 
   const deleteTemplate = (templateId) => {
+    const before = db;
     const nextDb = deepClone(db);
     if (!nextDb.sequenceTemplates?.[templateId]) return;
     delete nextDb.sequenceTemplates[templateId];
-    persist(nextDb);
+    runUndoable('Vorlage gelöscht', before, ()=>persist(nextDb));
   };
 
   const exportTemplates = async () => {
-    if (!api) { alert('Export ist nur in der Desktop-App verfügbar.'); return; }
-    const path = await api.exportTemplates();
-    if (path) alert(`Sequenz-Vorlagen exportiert:\n${path}`);
+    if (!capabilities.templateFiles) { showToast('Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' }); return; }
+    const path = await platform.exportTemplates();
+    if (path) toastSavedPath('Sequenz-Vorlagen exportiert.', path);
   };
 
   const importTemplates = async () => {
-    if (!api) { alert('Import ist nur in der Desktop-App verfügbar.'); return; }
-    const importedDb = await api.importTemplates();
+    if (!capabilities.templateFiles) { showToast('Import ist nur in der Desktop-App verfügbar.', { tone: 'warning' }); return; }
+    const importedDb = await platform.importTemplates();
     if (importedDb) {
       persist(ensureDbShape(importedDb));
-      alert('Sequenz-Vorlagen importiert.');
+      showToast('Sequenz-Vorlagen importiert.', { tone: 'success' });
     }
   };
 
@@ -2255,12 +3497,12 @@ const deleteTodo = (id) => {
     const tpl = templates?.[templateId];
     if (!tpl) return { inserted: 0, missing: 0 };
     const group = (targetGroup || '').trim();
-    if (!group) { alert('Bitte Lerngruppe wählen.'); return { inserted: 0, missing: 0 }; }
+    if (!group) { showToast('Bitte Lerngruppe wählen.', { tone: 'warning' }); return { inserted: 0, missing: 0 }; }
     const subj = (subject || tpl.subject || '').trim();
-    if (!subj) { alert('Bitte Fach angeben.'); return { inserted: 0, missing: 0 }; }
+    if (!subj) { showToast('Bitte Fach angeben.', { tone: 'warning' }); return { inserted: 0, missing: 0 }; }
 
     const blueprints = Array.isArray(tpl.lessons) ? tpl.lessons : [];
-    if (blueprints.length === 0) { alert('Diese Vorlage enthält keine Stunden.'); return { inserted: 0, missing: 0 }; }
+    if (blueprints.length === 0) { showToast('Diese Vorlage enthält keine Stunden.', { tone: 'warning' }); return { inserted: 0, missing: 0 }; }
 
     const nextDb = deepClone(db);
     if (!nextDb.sequences) nextDb.sequences = {};
@@ -2335,25 +3577,29 @@ const deleteTodo = (id) => {
 
 
   const doExportPdf = async (html, suggestedName) => {
-    if (!api) {
-      alert('PDF-Export ist nur in der Desktop-App verfügbar.');
+    if (!capabilities.pdfExport) {
+      showToast('PDF-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
-    const saved = await api.exportPdf({ html, suggestedFileName: suggestedName });
-    if (saved) alert(`PDF gespeichert:\n${saved}`);
+    const saved = await platform.exportPdf({ html, suggestedFileName: suggestedName });
+    // Der Desktop liefert einen Pfad, der Browser öffnet den Druckdialog –
+    // dort entsteht die Datei erst durch die Wahl des Nutzers.
+    if (typeof saved === 'string') toastSavedPath('PDF gespeichert.', saved);
+    else if (saved?.printed) showToast('Druckdialog geöffnet – dort „Als PDF speichern“ wählen.');
   };
 
 
 const doExportDocx = async (html, suggestedName) => {
   // Wir exportieren bewusst als .doc (HTML), weil das auf allen Word-Versionen
   // zuverlässig öffnet. ("echtes" .docx hatte bei manchen Systemen Probleme.)
-  if (!api) {
-    alert('Word-Export ist nur in der Desktop-App verfügbar.');
+  if (!capabilities.docxExport) {
+    showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
   const safe = String(suggestedName || 'Unterrichtsstunde.doc').replace(/\.docx$/i, '.doc');
-  const saved = await api.exportDocx({ html, suggestedFileName: safe });
-  if (saved) alert(`Word-Datei gespeichert:\n${saved}`);
+  const saved = await platform.exportDocx({ html, suggestedFileName: safe });
+  if (typeof saved === 'string') toastSavedPath('Word-Datei gespeichert.', saved);
+  else if (saved) showToast('Word-Datei gespeichert.', { tone: 'success' });
 };
 
   // Render main content in a readable way (avoids a very long nested ternary inside JSX,
@@ -2415,13 +3661,17 @@ const doExportDocx = async (html, suggestedName) => {
           onDeleteSequence={deleteSequence}
           onSaveSequenceAsTemplate={(sequenceId)=>{
             const seq = sequences?.[sequenceId];
-            const def = seq?.name || '';
-            const name = window.prompt('Name der Sequenz-Vorlage:', def);
-            if (!name) return;
-            const tid = createTemplateFromSequence(sequenceId, name);
-            if (tid) {
-              alert('Vorlage gespeichert. Du findest sie in der Bibliothek.');
-            }
+            askPrompt({
+              title: 'Sequenz als Vorlage speichern',
+              label: 'Name der Vorlage',
+              placeholder: 'z. B. Einführung Perfekt',
+              initialValue: seq?.name || '',
+              confirmLabel: 'Vorlage speichern',
+            }).then((name)=>{
+              if (!name) return;
+              const tid = createTemplateFromSequence(sequenceId, name);
+              if (tid) showToast('Vorlage gespeichert – du findest sie in der Bibliothek.');
+            });
           }}
           onRememberCompetency={rememberCompetency}
           onOpenLesson={(weekStart, dayIndex, slotIndex)=>{
@@ -2466,25 +3716,32 @@ const doExportDocx = async (html, suggestedName) => {
           onHideSubjectSuggestion={(label)=>hideSuggestion('subject', label)}
           onCreateTemplateFromSequence={(sequenceId)=>{
             const seq = sequences?.[sequenceId];
-            const name = window.prompt('Name der Sequenz-Vorlage:', seq?.name || '');
-            if (!name) return;
-            const tid = createTemplateFromSequence(sequenceId, name);
-            if (tid) alert('Vorlage gespeichert.');
+            askPrompt({
+              title: 'Sequenz als Vorlage speichern',
+              label: 'Name der Vorlage',
+              placeholder: 'z. B. Einführung Perfekt',
+              initialValue: seq?.name || '',
+              confirmLabel: 'Vorlage speichern',
+            }).then((name)=>{
+              if (!name) return;
+              const tid = createTemplateFromSequence(sequenceId, name);
+              if (tid) showToast('Vorlage gespeichert – du findest sie in der Bibliothek.');
+            });
           }}
           onDeleteTemplate={(id)=>{
             const t = templates?.[id];
-            if (window.confirm(`Vorlage "${t?.name || ''}" löschen?`)) deleteTemplate(id);
+            deleteTemplate(id);
           }}
           onExportTemplates={exportTemplates}
           onImportTemplates={importTemplates}
           onInsert={(payload)=>{
             const res = insertTemplateIntoPlan(payload);
             if (res.inserted > 0) {
-              alert(`Eingefügt: ${res.inserted} Stunde(n)${res.missing ? `\nNicht platziert: ${res.missing}` : ''}`);
+              showToast(`Eingefügt: ${res.inserted} Stunde(n)` + (res.missing ? ` · nicht platziert: ${res.missing}` : ''), { tone: 'success' });
               // Jump to macro plan around start
               setView({ name:'macro', weekStart: toISODate(startOfWeekMonday(fromISODate(payload.startISO))), startISO: payload.startISO, rangeDays: 28 });
             } else {
-              alert('Keine passenden Stundenplätze gefunden. Tipp: Stelle sicher, dass der Stundenplan (Klasse/Fach/Raum) in den Zielwochen bereits angelegt ist.');
+              showToast('Keine passenden Stundenplätze gefunden. Stelle sicher, dass der Stundenplan (Klasse/Fach/Raum) in den Zielwochen schon angelegt ist.', { tone: 'warning', ttl: 9000 });
             }
           }}
         />
@@ -2502,11 +3759,43 @@ const doExportDocx = async (html, suggestedName) => {
         />
       );
     }
+    if (view.name === 'today') {
+      return (
+        <TodayView
+          heute={todayOverview(db, todayISO, toISODate(startOfWeekMonday(fromISODate(todayISO))))}
+          todayISO={todayISO}
+          getSeqProgress={(sequenceId, dayIndex, slotIndex)=> sequenceProgress(db, sequenceId, {
+            weekStart: toISODate(startOfWeekMonday(fromISODate(todayISO))), dayIndex, slotIndex,
+          })}
+          onOpenLesson={(dayIndex, slotIndex)=> setView({
+            name:'lesson', weekStart: toISODate(startOfWeekMonday(fromISODate(todayISO))), dayIndex, slotIndex,
+          })}
+          onOpenTodos={()=> setView({ name:'todos', weekStart: view.weekStart })}
+          onOpenWeek={()=> setView({ name:'week', weekStart: toISODate(startOfWeekMonday(fromISODate(todayISO))) })}
+        />
+      );
+    }
+    if (view.name === 'competencies') {
+      return <CompetencyHeatmapView daten={competencyHeatmap(db)} />;
+    }
+    if (view.name === 'settings') {
+      return (
+        <SettingsView
+          theme={themeChoice}
+          onChangeTheme={(next)=>updateAppSettings({ theme: next })}
+          storageState={storageState}
+          onExportBackup={exportBackup}
+          onImportBackup={importBackup}
+          weekReview={appSettings?.weekReview !== false}
+          onChangeWeekReview={(v)=>updateAppSettings({ weekReview: !!v })}
+        />
+      );
+    }
     if (view.name === 'help') {
       return <HelpView version={APP_VERSION} />;
     }
     if (view.name === 'execution') {
-      return <ExecutionWindow api={api} />;
+      return <ExecutionWindow />;
     }
     if (view.name === 'calendar') {
       return (
@@ -2558,6 +3847,9 @@ const doExportDocx = async (html, suggestedName) => {
           onRequestCreateSequence={openCreateSequenceModal}
         onRememberCompetency={rememberCompetency}
         onUpdateLesson={(nextLesson)=>updateLessonAt(view.weekStart, view.dayIndex, view.slotIndex, nextLesson)}
+        getSeqProgress={(sequenceId)=> sequenceProgress(db, sequenceId, {
+          weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+        })}
         onRememberSocialForm={rememberSocialForm}
         onRememberPhaseName={rememberPhaseName}
         onHideSocialFormSuggestion={(label)=>hideSuggestion('socialForm', label)}
@@ -2567,10 +3859,10 @@ const doExportDocx = async (html, suggestedName) => {
         onExportPdf={doExportPdf}
           onExportDocx={doExportDocx}
         onOpenExecution={(snapshot)=>{
-          if (api?.openExecutionWindow) {
-            api.openExecutionWindow(snapshot);
+          if (capabilities.executionWindow) {
+            platform.openExecutionWindow(snapshot);
           } else {
-            alert('Durchführungsansicht ist nur in der Desktop-App verfügbar.');
+            showToast('Durchführungsansicht ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
           }
         }}
         onDraftTopicChange={(t)=>{ lessonDraftTopicRef.current = String(t || ''); }}
@@ -2579,10 +3871,8 @@ const doExportDocx = async (html, suggestedName) => {
           setView({ name:'year', weekStart: view.weekStart, focusISO: String(focusISO || view.weekStart) });
         }}
         onDeleteLesson={() => {
-          if (window.confirm('Diese Stunde wirklich löschen?')) {
-            deleteLessonAt(view.weekStart, view.dayIndex, view.slotIndex);
-            setView({ ...lastMainView.current });
-          }
+          deleteLessonAt(view.weekStart, view.dayIndex, view.slotIndex);
+          setView({ ...lastMainView.current });
         }}
       />
     );
@@ -2595,6 +3885,7 @@ const doExportDocx = async (html, suggestedName) => {
   }
 
   return (
+    <UiContext.Provider value={uiApi}>
     <div className="app">
       <div className="topbar">
         <div className="row" style={{gap:10}}>
@@ -2617,27 +3908,11 @@ const doExportDocx = async (html, suggestedName) => {
 	
 	                setView(target);
               }}
-            >← Zurück</button>
+            ><ArrowLeft {...ICON} /> Zurück</button>
           ) : null}
           <img className="logo" src={logo} alt="Prép-ybara Logo" />
           <h1>Prép-ybara</h1>
-          <span className="badge">{
-            view.name === 'macro'
-              ? `${formatDateDE(view.startISO)} – ${formatDateDE(toISODate(addDays(fromISODate(view.startISO), (view.rangeDays||28)-1)))}`
-              : (view.name === 'year'
-                ? 'Jahresgrobplanung'
-              : (view.name === 'library'
-                ? 'Bibliothek'
-                : (view.name === 'help'
-                  ? 'Hilfe'
-                  : (view.name === 'week'
-                    ? ''
-                    : formatWeekLabel(view.weekStart)
-                  )
-                )
-              )
-              )
-          }</span>
+          <span className="badge">{viewBadgeLabel}</span>
         </div>
 
         <div className="right">
@@ -2646,25 +3921,44 @@ const doExportDocx = async (html, suggestedName) => {
           ) : null}
           {!isHelpOnlyWindow && view.name === 'week' && (
             <>
-              <button className="btn" onClick={()=>setView({ name:'year', weekStart: view.weekStart, focusISO: view.weekStart })}>Jahresgrobplanung</button>
-              <button className="btn" onClick={()=>setView({ name:'macro', weekStart: view.weekStart, startISO: view.weekStart, rangeDays: 28 })}>Makro-Plan</button>
-              <button className="btn" onClick={()=>setView({ name:'library', weekStart: view.weekStart })}>Bibliothek</button>
-              <button className="btn" onClick={()=>setView({ name:'calendar', weekStart: view.weekStart })}>Schulkalender</button>
               <div className="weeknav" style={{display:'flex', gap:6, alignItems:'center'}}>
-                <button className="btn" title="Vorherige Woche" onClick={()=>goWeekDelta(-1)}>←</button>
+                <button className="btn" title="Vorherige Woche" aria-label="Vorherige Woche" onClick={()=>goWeekDelta(-1)}><ChevronLeft {...ICON} /></button>
                 <input className="input" style={{width:170}} type="date" min={minDate} max={maxDate} value={selectedDate} onChange={(e)=>onSelectWeekDate(e.target.value)} />
-                <button className="btn" title="Nächste Woche" onClick={()=>goWeekDelta(1)}>→</button>
+                <button className="btn" title="Nächste Woche" aria-label="Nächste Woche" onClick={()=>goWeekDelta(1)}><ChevronRight {...ICON} /></button>
               </div>
               <button className="btn" onClick={()=>setShowWeekCopyDialog(true)}>In nächste Woche übernehmen</button>
-              <button className="btn" onClick={()=>exportBackup()}>Backup exportieren</button>
-              <button className="btn" onClick={()=>importBackup()}>Backup importieren</button>
+              {capabilities.backupFiles ? (
+                <>
+                  <button className="btn" onClick={()=>exportBackup()}>Backup exportieren</button>
+                  <button className="btn" onClick={()=>importBackup()}>Backup importieren</button>
+                </>
+              ) : null}
             </>
+          )}
+          {!isExecutionOnlyWindow && (
+            <ThemeSwitch
+              value={themeChoice}
+              onChange={(next)=>updateAppSettings({ theme: next })}
+            />
           )}
         </div>
       </div>
 
-      <div className="content">
-        {mainContent}
+      <div className="appBody">
+        {!isHelpOnlyWindow ? (
+          <Sidebar
+            aktiv={view.name}
+            onNavigate={(ziel)=>{
+              const ws = view.weekStart;
+              if (ziel === 'macro') setView({ name:'macro', weekStart: ws, startISO: ws, rangeDays: 28 });
+              else if (ziel === 'year') setView({ name:'year', weekStart: ws, focusISO: ws });
+              else setView({ name: ziel, weekStart: ws });
+            }}
+          />
+        ) : null}
+        <div className="content">
+          {mainContent}
+        </div>
       </div>
 
       <div className="appFooter">
@@ -2674,6 +3968,39 @@ const doExportDocx = async (html, suggestedName) => {
 
       <SplashOverlay visible={splashVisible} />
       <EasterEggOverlay visible={easterEggVisible} />
+      <ToastHost toasts={toasts} onDismiss={dismissToast} />
+      <WeekReview
+        offen={!!reviewWeek}
+        weekLabel={reviewWeek ? formatWeekLabel(reviewWeek) : ''}
+        zusammenfassung={reviewWeek && db ? weekSummary(db, reviewWeek) : null}
+        onClose={()=>setReviewWeek(null)}
+        onDisable={()=>{ updateAppSettings({ weekReview: false }); setReviewWeek(null);
+          showToast('Wochenabschluss abgeschaltet. In den Einstellungen wieder einschaltbar.'); }}
+      />
+      <CommandPalette
+        open={paletteOpen}
+        commands={paletteCommands}
+        onClose={()=>setPaletteOpen(false)}
+      />
+      <ConfirmDialog
+        open={!!confirmState}
+        title={confirmState?.title || ''}
+        body={confirmState?.body || ''}
+        confirmLabel={confirmState?.confirmLabel || 'Fortfahren'}
+        tone={confirmState?.tone || 'primary'}
+        onCancel={()=>{ confirmState?.onCancel?.(); setConfirmState(null); }}
+        onConfirm={()=>{ const c = confirmState; setConfirmState(null); c?.onConfirm?.(); }}
+      />
+      <PromptDialog
+        open={!!promptState}
+        title={promptState?.title || ''}
+        label={promptState?.label || ''}
+        placeholder={promptState?.placeholder || ''}
+        initialValue={promptState?.initialValue || ''}
+        confirmLabel={promptState?.confirmLabel || 'Übernehmen'}
+        onCancel={()=>{ promptState?.onCancel?.(); setPromptState(null); }}
+        onConfirm={(v)=>{ const c = promptState; setPromptState(null); c?.onConfirm?.(v); }}
+      />
       <TodoReminderOverlay
         visible={todoReminderVisible}
         count={todosDueTodayCount}
@@ -2736,13 +4063,17 @@ const doExportDocx = async (html, suggestedName) => {
           autoCloseOnCreate={seqManagerModal.autoCloseOnCreate}
           onSaveAsTemplate={(id)=>{
             const seq = sequences?.[id];
-            const def = seq?.name || '';
-            const name = window.prompt('Name der Sequenz-Vorlage:', def);
-            if (!name) return;
-            const tid = createTemplateFromSequence(id, name);
-            if (tid) {
-              alert('Vorlage gespeichert. Du findest sie in der Bibliothek.');
-            }
+            askPrompt({
+              title: 'Sequenz als Vorlage speichern',
+              label: 'Name der Vorlage',
+              placeholder: 'z. B. Einführung Perfekt',
+              initialValue: seq?.name || '',
+              confirmLabel: 'Vorlage speichern',
+            }).then((name)=>{
+              if (!name) return;
+              const tid = createTemplateFromSequence(id, name);
+              if (tid) showToast('Vorlage gespeichert – du findest sie in der Bibliothek.');
+            });
           }}
           onExportPdfSequence={(id)=>{
             // re-use the same export logic as in Makro-Plan
@@ -2750,7 +4081,7 @@ const doExportDocx = async (html, suggestedName) => {
               const seq = sequences?.[id];
               if (!seq) return;
               if (typeof doExportPdf !== 'function') {
-                alert('PDF-Export ist nur in der Desktop-App verfügbar.');
+                showToast('PDF-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
                 return;
               }
 
@@ -2787,7 +4118,7 @@ const doExportDocx = async (html, suggestedName) => {
               const seq = sequences?.[id];
               if (!seq) return;
               if (typeof doExportDocx !== 'function') {
-                alert('Word-Export ist nur in der Desktop-App verfügbar.');
+                showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
                 return;
               }
 
@@ -2822,6 +4153,7 @@ const doExportDocx = async (html, suggestedName) => {
         />
       )}
     </div>
+    </UiContext.Provider>
   );
 }
 
@@ -2902,7 +4234,7 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
 
   const exportWeekPdf = () => {
     if (typeof onExportPdf !== 'function') {
-      alert('PDF-Export ist nur in der Desktop-App verfügbar.');
+      showToast('PDF-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
     const html = buildWeekPdfHtml({ weekStart, week, sequences, groupColors, schoolCalendar, duties: dutyMap });
@@ -2913,7 +4245,7 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
 
 const exportWeekDocx = () => {
   if (typeof onExportDocx !== 'function') {
-    alert('Word-Export ist nur in der Desktop-App verfügbar.');
+    showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
   const html = buildWeekPdfHtml({ weekStart, week, sequences, groupColors, schoolCalendar, duties: dutyMap });
@@ -2931,8 +4263,12 @@ const exportWeekDocx = () => {
         </div>
         <div className="row" style={{gap:8}}>
           <button className="btn warning" onClick={onOpenTodos} title="To-do-Checkliste öffnen">To-dos{todayTodoCount ? ` (${todayTodoCount})` : ''}</button>
-          <button className="btn iconBtn-word" onClick={exportWeekDocx} title="Als Word-Datei speichern"><img src={wordIcon} alt="" className="btnIcon" />Word Woche</button>
-          <button className="btn iconBtn-pdf" onClick={exportWeekPdf} title="Als PDF speichern"><img src={pdfIcon} alt="" className="btnIcon" />PDF Woche</button>
+          {capabilities.docxExport ? (
+            <button className="btn iconBtn-word" onClick={exportWeekDocx} title="Als Word-Datei speichern"><FileText {...ICON_SM} /> Word Woche</button>
+          ) : null}
+          {capabilities.pdfExport ? (
+            <button className="btn iconBtn-pdf" onClick={exportWeekPdf} title="Als PDF speichern"><FileDown {...ICON_SM} /> PDF Woche</button>
+          ) : null}
           <span className="muted small">Stunden pro Tag:</span>
           <input className="input" style={{width:90}} type="number" min={1} max={12} value={slots} onChange={(e)=>onChangeSlots(Number(e.target.value||slots))} />
         </div>
@@ -2953,7 +4289,7 @@ const exportWeekDocx = () => {
               <div style={{fontWeight:700}}>{d}</div>
               <div className="muted small">{formatDateDE(dateISO)}</div>
               {tc ? (
-                <button className="todoHint" onClick={(e)=>{ e.stopPropagation(); if (onOpenTodos) onOpenTodos(); }} title="To-dos ansehen (Inhalt wird erst nach Klick gezeigt)">📝 {tc}</button>
+                <button className="todoHint" onClick={(e)=>{ e.stopPropagation(); if (onOpenTodos) onOpenTodos(); }} title="To-dos ansehen (Inhalt wird erst nach Klick gezeigt)"><NotebookPen {...ICON_SM} /> {tc}</button>
               ) : null}
               {label ? <span className="badge" style={{marginTop:4}}>{label}</span> : null}
             </div>
@@ -2977,7 +4313,10 @@ const exportWeekDocx = () => {
                 const seq = l?.sequenceId ? (sequences?.[l.sequenceId] || null) : null;
                 const gKey = l ? groupKey(l.classGroup, l.subject) : '';
                 const gColor = gKey ? (groupColors?.[gKey]?.color || defaultGroupColor(gKey)) : '';
-                const cellStyle = gColor ? { borderLeft: `7px solid ${gColor}`, background: hexToRgba(gColor, info.isOff ? 0.07 : 0.12) } : undefined;
+                const cellStyle = gColor ? {
+                  borderLeft: `7px solid ${lineColor(gColor)}`,
+                  background: hexToRgba(surfaceColor(gColor), info.isOff ? 0.07 : 0.12),
+                } : undefined;
                 return (
                   <div
                     key={k}
@@ -3028,13 +4367,13 @@ const exportWeekDocx = () => {
                               onClick={()=>onCopyLesson?.(dayIndex, slotIndex)}
                               title="Stunde kopieren (interne Zwischenablage)"
                               aria-label="Stunde kopieren"
-                            >📋</button>
+                            ><Copy {...ICON_SM} /></button>
                             <button
                               className="iconBtn cellTool"
                               onClick={()=>onCutLesson?.(dayIndex, slotIndex)}
                               title="Stunde ausschneiden (interne Zwischenablage)"
                               aria-label="Stunde ausschneiden"
-                            >✂️</button>
+                            ><Scissors {...ICON_SM} /></button>
                           </>
                         ) : null}
                         {lessonClipboard ? (
@@ -3043,7 +4382,7 @@ const exportWeekDocx = () => {
                             onClick={()=>onPasteLesson?.(dayIndex, slotIndex)}
                             title="Stunde einfügen"
                             aria-label="Stunde einfügen"
-                          >📌</button>
+                          ><ClipboardPaste {...ICON_SM} /></button>
                         ) : null}
 
                         {l ? (
@@ -3051,18 +4390,18 @@ const exportWeekDocx = () => {
                             className="iconBtn danger cellTool"
                             onClick={(e)=>{
                               e.stopPropagation();
-                              if (window.confirm('Stunde löschen?')) onDeleteLesson(dayIndex, slotIndex);
+                              onDeleteLesson(dayIndex, slotIndex);
                             }}
                             title="Stunde löschen"
                             aria-label="Stunde löschen"
-                          >🗑</button>
+                          ><Trash2 {...ICON_SM} /></button>
                         ) : null}
                       </div>
                     ) : null}
                     {gKey ? (
                       <button
                         className="groupColorChip groupColorChip--corner"
-                        style={{background: gColor}}
+                        style={{background: surfaceColor(gColor)}}
                         onClick={(e)=>{
                           e.stopPropagation();
                           onOpenGroupColorPalette?.(gKey, `${l?.classGroup || ''} · ${l?.subject || ''}`.trim());
@@ -3102,7 +4441,7 @@ const exportWeekDocx = () => {
         }}
         onDelete={()=>{
           if (!dutyEditor) return;
-          if (window.confirm('Aufsicht löschen?')) onDeleteDuty?.(dutyEditor.dayIndex, dutyEditor.pos);
+          onDeleteDuty?.(dutyEditor.dayIndex, dutyEditor.pos);
           setDutyEditor(null);
         }}
       />
@@ -3147,6 +4486,10 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
   const setSchoolYear = (patch) => {
     onUpdate((prev)=>({ ...prev, schoolYear: { ...(prev.schoolYear||{startISO:'', endISO:''}), ...patch } }));
   };
+
+  const vacNameRef = useRef(null);
+  const freeNameRef = useRef(null);
+  const evNameRef = useRef(null);
 
   const addVacation = () => {
     const name = (newVac.name || '').trim() || 'Ferien';
@@ -3368,7 +4711,13 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
         </div>
         <div style={{height:10}} />
         <div className="calendarList">
-          {vacations.length === 0 ? <div className="muted small">Noch keine Ferien eingetragen.</div> : vacations.map(v => (
+          {vacations.length === 0 ? (
+            <EmptyState
+              text="Hier stehen die Ferienzeiten deines Bundeslandes. Eingetragene Ferien werden im Wochenraster und im Makro-Plan gekennzeichnet."
+              actionLabel="Ferien eintragen"
+              onAction={()=>vacNameRef.current?.focus()}
+            />
+          ) : vacations.map(v => (
             <div key={v.id} className="calendarRow">
               <input className="input" value={v.name || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, vacations: (prev.vacations||[]).map(x=>x.id===v.id?{...x, name:e.target.value}:x) }))} />
               <input className="input" type="date" value={v.startISO || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, vacations: (prev.vacations||[]).map(x=>x.id===v.id?{...x, startISO:e.target.value}:x) }))} />
@@ -3392,7 +4741,13 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
         </div>
         <div style={{height:10}} />
         <div className="calendarList">
-          {freeDays.length === 0 ? <div className="muted small">Noch keine schulfreien Tage eingetragen.</div> : freeDays.map(f => (
+          {freeDays.length === 0 ? (
+            <EmptyState
+              text="Einzelne unterrichtsfreie Tage – bewegliche Ferientage, Feiertage, pädagogische Tage."
+              actionLabel="Schulfreien Tag eintragen"
+              onAction={()=>freeNameRef.current?.focus()}
+            />
+          ) : freeDays.map(f => (
             <div key={f.id} className="calendarRow2">
               <input className="input" value={f.name || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, freeDays: (prev.freeDays||[]).map(x=>x.id===f.id?{...x, name:e.target.value}:x) }))} />
               <input className="input" type="date" value={f.dateISO || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, freeDays: (prev.freeDays||[]).map(x=>x.id===f.id?{...x, dateISO:e.target.value}:x) }))} />
@@ -3417,7 +4772,13 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
         </div>
         <div style={{height:10}} />
         <div className="calendarList">
-          {events.length === 0 ? <div className="muted small">Noch keine Termine eingetragen.</div> : events.map(ev => (
+          {events.length === 0 ? (
+            <EmptyState
+              text="Termine wie Elternabende, Konferenzen oder Klassenfahrten. Sie erscheinen als Hinweis im Wochenraster."
+              actionLabel="Termin eintragen"
+              onAction={()=>evNameRef.current?.focus()}
+            />
+          ) : events.map(ev => (
             <div key={ev.id} className="calendarRow3">
               <input className="input" value={ev.name || ev.summary || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, events: (prev.events||[]).map(x=>x.id===ev.id?{...x, name:e.target.value}:x) }))} />
               <input className="input" type="date" value={ev.dateISO || ev.startISO || ''} onChange={(e)=>onUpdate(prev=>({ ...prev, events: (prev.events||[]).map(x=>x.id===ev.id?{...x, dateISO:e.target.value}:x) }))} />
@@ -3513,6 +4874,7 @@ function LessonView({
   lesson,
   exists,
   sequences,
+  getSeqProgress,
   appSettings,
   onUpdateAppSettings,
   schoolCalendar,
@@ -3544,6 +4906,7 @@ function LessonView({
   yearBars,
   onOpenYearPlan,
 }){
+  const ui = useUi();
   const normalizeForLocal = (l) => ({
     ...l,
     sequenceId: l.sequenceId || '',
@@ -3702,7 +5065,6 @@ const gColor = useMemo(()=>{
     setLocal(prev => ({ ...prev, [field]: value }));
   };
 
-  const api = (typeof window !== 'undefined' && window.api) ? window.api : null;
 
   const fileCopyOptIn = Boolean(appSettings?.fileCopyOptIn);
   const toggleFileCopyOptIn = () => {
@@ -3761,19 +5123,19 @@ const gColor = useMemo(()=>{
   };
 
   const addLessonFiles = async () => {
-    if (!api) {
-      alert('Dateien anhängen ist nur in der Desktop-App verfügbar.');
+    if (!capabilities.fileAttachments) {
+      ui.toast('Dateien anhängen ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
-    const picked = await api.pickFiles({ multi: true });
+    const picked = await platform.pickFiles({ multi: true });
     if (!Array.isArray(picked) || picked.length === 0) return;
 
     let copiedMap = null; // Map<sourcePath, destPath>
     let mode = 'link';
-    if (fileCopyOptIn && typeof api.copyToLibrary === 'function') {
+    if (fileCopyOptIn && typeof platform.copyToLibrary === 'function') {
       try {
         const seqName = (sequences?.[String(local.sequenceId || '').trim()]?.name || '').trim();
-        const res = await api.copyToLibrary({
+        const res = await platform.copyToLibrary({
           paths: picked,
           meta: {
             schoolYearLabel,
@@ -3788,7 +5150,7 @@ const gColor = useMemo(()=>{
           mode = 'copy';
         }
         if (res?.errors?.length) {
-          alert(`Achtung: ${res.errors.length} Datei(en) konnten nicht kopiert werden.`);
+          ui.toast(`${res.errors.length} Datei(en) konnten nicht kopiert werden.`, { tone: 'danger' });
         }
       } catch {}
     }
@@ -3824,23 +5186,23 @@ const gColor = useMemo(()=>{
   };
 
   const openFile = async (pathStr) => {
-    if (!api) return;
-    const res = await api.openPath(pathStr);
-    if (res && res.ok === false && res.error) alert(`Konnte Datei nicht öffnen: ${res.error}`);
+    if (!capabilities.openExternally) return;
+    const res = await platform.openPath(pathStr);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Datei nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const revealFile = async (pathStr) => {
-    if (!api) return;
-    const res = await api.revealPath(pathStr);
-    if (res && res.ok === false && res.error) alert(`Konnte Ordner nicht öffnen: ${res.error}`);
+    if (!capabilities.revealInFolder) return;
+    const res = await platform.revealPath(pathStr);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Ordner nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const openLibraryRoot = async () => {
-    if (!api || typeof api.getLibraryRoot !== 'function') return;
-    const root = await api.getLibraryRoot();
+    if (!capabilities.fileLibrary) return;
+    const root = await platform.getLibraryRoot();
     if (!root) return;
-    const res = await api.openPath(root);
-    if (res && res.ok === false && res.error) alert(`Konnte Ablage nicht öffnen: ${res.error}`);
+    const res = await platform.openPath(root);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Ablage nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const setPhases = (nextPhases) => {
@@ -3886,7 +5248,7 @@ const gColor = useMemo(()=>{
 
 const exportDocx = () => {
   if (typeof onExportDocx !== 'function') {
-    alert('Word-Export ist nur in der Desktop-App verfügbar.');
+    showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
   const html = buildLessonPdfHtml({ title: lessonTitle, dateISO, dayIndex, slotIndex, schoolCalendar, lesson: local });
@@ -3896,7 +5258,7 @@ const exportDocx = () => {
 
   const startExecution = () => {
     if (typeof onOpenExecution !== 'function') {
-      alert('Durchführungsansicht ist nur in der Desktop-App verfügbar.');
+      showToast('Durchführungsansicht ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
 
@@ -3938,20 +5300,26 @@ const exportDocx = () => {
           <div className="muted small">{lessonTitle}</div>
           {(dayInfo.vac || dayInfo.fd || (dayInfo.evs && dayInfo.evs.length)) ? (
             <div className="row wrap" style={{gap:6, marginTop:6}}>
-              {dayInfo.vac ? <span className="badge" style={{borderColor:'#f59e0b', color:'#b45309'}}>🏖 Ferien: {dayInfo.vac.name || ''}</span> : null}
-              {dayInfo.fd ? <span className="badge" style={{borderColor:'#ef4444', color:'#b91c1c'}}>🚫 Schulfrei: {dayInfo.fd.name || ''}</span> : null}
+              {dayInfo.vac ? <span className="badge badge--vacation"><Palmtree {...ICON_SM} /> Ferien: {dayInfo.vac.name || ''}</span> : null}
+              {dayInfo.fd ? <span className="badge badge--dayoff"><Ban {...ICON_SM} /> Schulfrei: {dayInfo.fd.name || ''}</span> : null}
               {(dayInfo.evs || []).slice(0,2).map(ev => (
-                <span key={ev.id} className="badge">📌 {ev.name || ev.summary || 'Termin'}</span>
+                <span key={ev.id} className="badge"><CalendarDays {...ICON_SM} /> {ev.name || ev.summary || 'Termin'}</span>
               ))}
               {(dayInfo.evs && dayInfo.evs.length > 2) ? <span className="badge">+{dayInfo.evs.length-2} Termine</span> : null}
             </div>
           ) : null}
         </div>
         <div className="row" style={{gap:8}}>
-          <button className="btn success" onClick={startExecution}>▶ Durchführung</button>
+          {capabilities.executionWindow ? (
+            <button className="btn success" onClick={startExecution}><Play {...ICON_SM} /> Durchführung</button>
+          ) : null}
           <button className="btn danger" onClick={onDeleteLesson}>Stunde löschen</button>
-          <button className="btn iconBtn-word" onClick={exportDocx} title="Als Word-Datei speichern"><img src={wordIcon} alt="" className="btnIcon" />Word speichern</button>
-          <button className="btn iconBtn-pdf" onClick={exportPdf} title="Als PDF speichern"><img src={pdfIcon} alt="" className="btnIcon" />PDF speichern</button>
+          {capabilities.docxExport ? (
+            <button className="btn iconBtn-word" onClick={exportDocx} title="Als Word-Datei speichern"><FileText {...ICON_SM} /> Word speichern</button>
+          ) : null}
+          {capabilities.pdfExport ? (
+            <button className="btn iconBtn-pdf" onClick={exportPdf} title="Als PDF speichern"><FileDown {...ICON_SM} /> PDF speichern</button>
+          ) : null}
         </div>
       </div>
 
@@ -3986,10 +5354,12 @@ const exportDocx = () => {
   <label className="small muted">Farbe</label>
   <button
     className="groupColorChip groupColorChip--field"
-    style={{background: gKey ? gColor : 'repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 6px, #ffffff 6px, #ffffff 12px)'}}
+    style={gKey
+      ? { background: surfaceColor(gColor) }
+      : { background: 'repeating-linear-gradient(45deg, var(--bg-subtle), var(--bg-subtle) 6px, var(--card) 6px, var(--card) 12px)' }}
     onClick={(e)=>{
       e.stopPropagation();
-      if (!gKey) { alert('Bitte zuerst Fach + Klasse/Kurs setzen, um eine Lerngruppen-Farbe festzulegen.'); return; }
+      if (!gKey) { ui.toast('Bitte zuerst Fach + Klasse/Kurs setzen, um eine Lerngruppen-Farbe festzulegen.', { tone: 'warning' }); return; }
       onOpenGroupColorPalette?.(gKey, `${local.classGroup} · ${local.subject}`.trim());
     }}
     title={gKey ? 'Lerngruppen-Farbe ändern (gilt für das ganze Schuljahr)' : 'Bitte zuerst Fach + Klasse/Kurs setzen'}
@@ -4028,6 +5398,12 @@ const exportDocx = () => {
               return id;
             }}
           />
+          {(() => {
+            // Folgt der im Entwurf gewählten Sequenz, nicht der gespeicherten –
+            // sonst hinkte die Anzeige beim Umstellen hinterher.
+            const p = local.sequenceId ? getSeqProgress?.(local.sequenceId) : null;
+            return p ? <div style={{marginTop:8}}><SequenceProgress progress={p} /></div> : null;
+          })()}
         </div>
         <div className="grow">
           <label className="small muted">Primäre Kompetenz</label>
@@ -4054,7 +5430,7 @@ const exportDocx = () => {
           <div className="yearHintList">
             {matchingYearBars.slice(0,6).map(b=> (
               <div key={b.id} className="yearHintItem">
-                <span className="yearHintDot" style={{background: b.color || '#9ca3af'}} />
+                <span className="yearHintDot" style={{background: b.color ? lineColor(b.color) : 'var(--border-strong)'}} />
                 <div className="yearHintText">
                   <div style={{fontWeight:700}}>{b.title || 'Ohne Titel'}</div>
                   <div className="muted small">{formatDateDE(b.startISO)} – {formatDateDE(b.endISO)}{(b.classGroup||b.subject) ? ` · ${[b.classGroup,b.subject].filter(Boolean).join(' · ')}` : ''}</div>
@@ -4206,7 +5582,11 @@ const exportDocx = () => {
               <div style={{height:10}} />
 
               {lessonLinks.length === 0 ? (
-                <div className="muted small">Noch keine Links hinterlegt.</div>
+                <EmptyState
+                  text="Verweise auf Material im Netz oder auf Ablagen – sie bleiben an dieser Stunde gespeichert."
+                  actionLabel="Link hinzufügen"
+                  onAction={addLink}
+                />
               ) : (
                 <div style={{display:'flex', flexDirection:'column', gap:8}}>
                   {lessonLinks.map(l => (
@@ -4253,7 +5633,7 @@ const exportDocx = () => {
                   <input type="checkbox" checked={fileCopyOptIn} onChange={toggleFileCopyOptIn} />
                   <span className="small muted">Dateien in App kopieren (opt‑in)</span>
                 </label>
-                {api && typeof api.getLibraryRoot === 'function' ? (
+                {capabilities.fileLibrary ? (
                   <button className="btn" onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</button>
                 ) : null}
               </div>
@@ -4277,7 +5657,9 @@ const exportDocx = () => {
                       </div>
                       <div className="row wrap" style={{gap:8}}>
                         <button className="btn" onClick={()=>openFile(f.path)}>Öffnen</button>
-                        <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                        {capabilities.revealInFolder ? (
+                          <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                        ) : null}
                       </div>
                     </div>
                   ))}
@@ -4287,7 +5669,11 @@ const exportDocx = () => {
             )}
 
             {lessonFiles.length === 0 ? (
-              <div className="muted small">Noch keine Dateien an dieser Einzelstunde.</div>
+              <EmptyState
+                text="Arbeitsblätter, Folien oder Hörtexte, die zu dieser Stunde gehören."
+                actionLabel="Datei hinzufügen"
+                onAction={addLessonFiles}
+              />
             ) : (
               <div style={{display:'flex', flexDirection:'column', gap:8}}>
                 {lessonFiles.map(f => (
@@ -4302,7 +5688,9 @@ const exportDocx = () => {
                     </div>
                     <div className="row wrap" style={{gap:8}}>
                       <button className="btn" onClick={()=>openFile(f.path)}>Öffnen</button>
-                      <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                      {capabilities.revealInFolder ? (
+                          <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                        ) : null}
                       <button className="btn danger" onClick={()=>removeLessonFile(f.id)}>Entfernen</button>
                     </div>
                   </div>
@@ -4441,7 +5829,7 @@ function MacroView({
     const seq = sequences?.[sequenceId];
     if (!seq) return;
     if (typeof onExportPdf !== 'function') {
-      alert('PDF-Export ist nur in der Desktop-App verfügbar.');
+      showToast('PDF-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
 
@@ -4478,7 +5866,7 @@ const exportSequenceDocx = (sequenceId) => {
   const seq = sequences?.[sequenceId];
   if (!seq) return;
   if (typeof onExportDocx !== 'function') {
-    alert('Word-Export ist nur in der Desktop-App verfügbar.');
+    showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
 
@@ -4587,7 +5975,7 @@ const exportSequenceDocx = (sequenceId) => {
                     {label && items.length === 0 ? <span className="pill" style={{marginBottom:6}}>{label}</span> : null}
                     {items.map((o) => {
                       const seq = getSeq(o.lesson.sequenceId);
-                      const border = seq?.color || '#cbd5e1';
+                      const border = seq?.color ? lineColor(seq.color) : 'var(--border)';
                       const topic = (o.lesson.topic || '').trim() || (o.lesson.subject || '').trim() || 'Ohne Thema';
                       const comp = (o.primaryCompetency || '').trim();
                       return (
@@ -4630,17 +6018,17 @@ const exportSequenceDocx = (sequenceId) => {
                               className="iconBtn danger"
                               onClick={(e)=>{
                                 e.stopPropagation();
-                                if (window.confirm('Stunde löschen?')) onDeleteLessonAt(o.weekStart, o.dayIndex, o.slotIndex);
+                                onDeleteLessonAt(o.weekStart, o.dayIndex, o.slotIndex);
                               }}
                               title="Stunde löschen"
                               aria-label="Stunde löschen"
-                            >🗑</button>
+                            ><Trash2 {...ICON_SM} /></button>
                           </div>
 
                           <div className="macroTopic">{topic}</div>
 
                           <div className="row wrap" style={{gap:6}}>
-                            {seq ? <span className="pill" style={{borderColor: seq.color, color: seq.color}}>🟦 {seq.name}</span> : <span className="pill">Ohne Sequenz</span>}
+                            {seq ? <span className="pill" style={{borderColor: lineColor(seq.color), color: lineColor(seq.color)}}><Square {...ICON_SM} fill="currentColor" /> {seq.name}</span> : <span className="pill">Ohne Sequenz</span>}
                             {comp ? <span className="pill">Kompetenz: {comp}</span> : <span className="pill">Kompetenz: —</span>}
                           </div>
                         </div>
@@ -4779,7 +6167,7 @@ function YearPlanView({
 
   const startCreate = () => {
     if (!syStart || !syEnd) {
-      alert('Bitte zuerst im Schulkalender das Schuljahr (Start/Ende) setzen.');
+      showToast('Bitte zuerst im Schulkalender das Schuljahr (Start/Ende) setzen.', { tone: 'warning' });
       return;
     }
     const startISO = normalizeToWeek(view?.focusISO || syStart);
@@ -4952,7 +6340,7 @@ function YearPlanView({
                       <div
                         key={b.id}
                         className="yearPlanBar"
-                        style={{left, width, background: hexToRgba(b.color, bgAlpha), borderColor: b.color}}
+                        style={{left, width, background: hexToRgba(surfaceColor(b.color), bgAlpha), borderColor: lineColor(b.color)}}
                         onDoubleClick={()=>startEdit(b)}
                         onMouseDown={(e)=>onMouseDownBar(e, b, 'move')}
                         title={`${b.title || ''}\n${formatDateDE(b.startISO)} – ${formatDateDE(b.endISO)}\n(Doppelklick zum Bearbeiten)`}
@@ -4995,10 +6383,8 @@ function YearPlanView({
           }}
           onDelete={()=>{
             if (modal.mode !== 'edit') return;
-            if (window.confirm('Diesen Balken löschen?')) {
-              onDeleteBar?.(modal.bar.id);
-              setModal({ open:false, mode:'create', bar:null });
-            }
+            onDeleteBar?.(modal.bar.id);
+            setModal({ open:false, mode:'create', bar:null });
           }}
         />
       )}
@@ -5199,7 +6585,9 @@ function SequenceLibraryView({
 
       <div className="templateGrid">
         {list.length === 0 ? (
-          <div className="muted small">Noch keine Vorlagen gespeichert. Tipp: Lege im Makro‑Plan eine Sequenz an und speichere sie als Vorlage.</div>
+          <EmptyState
+            text="Vorlagen sind Sequenzen, die du wiederverwenden kannst – einmal geplant, in jedem Jahrgang wieder einsetzbar. Lege im Makro-Plan eine Sequenz an und speichere sie als Vorlage."
+          />
         ) : list.map(t => (
           <div key={t.id} className="templateCard">
             <div className="row" style={{justifyContent:'space-between', alignItems:'flex-start', gap:10}}>
@@ -5344,6 +6732,7 @@ function SequenceManager({
   afterCreate,
   autoCloseOnCreate = false,
 }){
+  const ui = useUi();
   const [newName, setNewName] = useState('');
   const newNameRef = useRef(null);
   const canAdd = (newName || '').trim().length > 0;
@@ -5355,15 +6744,14 @@ function SequenceManager({
     return ()=>{ try { clearTimeout(t); } catch {} };
   }, []);
 
-  const api = (typeof window !== 'undefined' && window.api) ? window.api : null;
   const [filesSeqId, setFilesSeqId] = useState(null);
 
   const openLibraryRoot = async () => {
-    if (!api || typeof api.getLibraryRoot !== 'function') return;
-    const root = await api.getLibraryRoot();
+    if (!capabilities.fileLibrary) return;
+    const root = await platform.getLibraryRoot();
     if (!root) return;
-    const res = await api.openPath(root);
-    if (res && res.ok === false && res.error) alert(`Konnte Ablage nicht öffnen: ${res.error}`);
+    const res = await platform.openPath(root);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Ablage nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const fileCopyOptIn = Boolean(appSettings?.fileCopyOptIn);
@@ -5397,18 +6785,18 @@ function SequenceManager({
 
   const addSeqFiles = async () => {
     if (!filesSeqId) return;
-    if (!api) {
-      alert('Dateien anhängen ist nur in der Desktop-App verfügbar.');
+    if (!capabilities.fileAttachments) {
+      ui.toast('Dateien anhängen ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
-    const picked = await api.pickFiles({ multi: true });
+    const picked = await platform.pickFiles({ multi: true });
     if (!Array.isArray(picked) || picked.length === 0) return;
 
     let copiedMap = null; // Map<sourcePath, destPath>
     let mode = 'link';
-    if (fileCopyOptIn && typeof api.copyToLibrary === 'function') {
+    if (fileCopyOptIn && typeof platform.copyToLibrary === 'function') {
       try {
-        const res = await api.copyToLibrary({
+        const res = await platform.copyToLibrary({
           paths: picked,
           meta: {
             schoolYearLabel,
@@ -5422,7 +6810,7 @@ function SequenceManager({
         }
         if (res?.errors?.length) {
           // Zeige nur eine knappe Meldung; Details bleiben in res.
-          alert(`Achtung: ${res.errors.length} Datei(en) konnten nicht kopiert werden.`);
+          ui.toast(`${res.errors.length} Datei(en) konnten nicht kopiert werden.`, { tone: 'danger' });
         }
       } catch {}
     }
@@ -5459,15 +6847,15 @@ function SequenceManager({
   };
 
   const openFile = async (pathStr) => {
-    if (!api) return;
-    const res = await api.openPath(pathStr);
-    if (res && res.ok === false && res.error) alert(`Konnte Datei nicht öffnen: ${res.error}`);
+    if (!capabilities.openExternally) return;
+    const res = await platform.openPath(pathStr);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Datei nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   const revealFile = async (pathStr) => {
-    if (!api) return;
-    const res = await api.revealPath(pathStr);
-    if (res && res.ok === false && res.error) alert(`Konnte Ordner nicht öffnen: ${res.error}`);
+    if (!capabilities.revealInFolder) return;
+    const res = await platform.revealPath(pathStr);
+    if (res && res.ok === false && res.error) ui.toast(`Konnte Ordner nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
   return (
@@ -5540,7 +6928,7 @@ function SequenceManager({
                   <input type="checkbox" checked={fileCopyOptIn} onChange={toggleFileCopyOptIn} />
                   <span className="small muted">Dateien in App kopieren (opt‑in)</span>
                 </label>
-                {api && typeof api.getLibraryRoot === 'function' ? (
+                {capabilities.fileLibrary ? (
                   <button className="btn" onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</button>
                 ) : null}
               </div>
@@ -5548,7 +6936,11 @@ function SequenceManager({
               <div style={{height:12}} />
 
               {seqFiles.length === 0 ? (
-                <div className="muted small">Noch keine Dateien hinterlegt.</div>
+                <EmptyState
+                  text="Material, das für die ganze Sequenz gilt – nicht nur für eine einzelne Stunde."
+                  actionLabel="Dateien hinzufügen"
+                  onAction={addSeqFiles}
+                />
               ) : (
                 <div style={{display:'flex', flexDirection:'column', gap:8}}>
                   {seqFiles.map(f => (
@@ -5564,7 +6956,9 @@ function SequenceManager({
                         </div>
                         <div className="row wrap" style={{gap:8}}>
                           <button className="btn" onClick={()=>openFile(f.path)}>Öffnen</button>
+                          {capabilities.revealInFolder ? (
                           <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                        ) : null}
                           <button className="btn danger" onClick={()=>removeSeqFile(f.id)}>Entfernen</button>
                         </div>
                       </div>
@@ -5578,12 +6972,16 @@ function SequenceManager({
 
         <div className="seqList">
           {list.length === 0 ? (
-            <div className="muted small">Noch keine Sequenzen angelegt.</div>
+            <EmptyState
+              text="Eine Sequenz fasst die Stunden zu einem Thema zusammen und zeigt dir, wo du darin stehst."
+              actionLabel="Sequenz anlegen"
+              onAction={()=>newNameRef.current?.focus()}
+            />
           ) : list.map(s => (
             <div key={s.id} className="seqRow">
               <input
                 type="color"
-                value={s.color || '#2563eb'}
+                value={s.color || PALETTE[0]}
                 onChange={(e)=>onUpdate(s.id, { color: e.target.value })}
                 title="Farbe"
               />
@@ -5598,13 +6996,13 @@ function SequenceManager({
               }} title="Sequenz als Vorlage für spätere Schuljahre speichern">Als Vorlage speichern</button>
               <button className="btn iconBtn-pdf" onClick={()=>{
                 if (typeof onExportPdfSequence === 'function') onExportPdfSequence(s.id);
-              }} title="Sequenz als PDF speichern"><img src={pdfIcon} alt="" className="btnIcon" />PDF</button>
+              }} title="Sequenz als PDF speichern"><FileDown {...ICON_SM} /> PDF</button>
               <button className="btn iconBtn-word" onClick={()=>{
                 if (typeof onExportDocxSequence === 'function') onExportDocxSequence(s.id);
-              }} title="Sequenz als Word speichern"><img src={wordIcon} alt="" className="btnIcon" />Word</button>
+              }} title="Sequenz als Word speichern"><FileText {...ICON_SM} /> Word</button>
               <button className="btn" onClick={()=>openSeqFiles(s.id)} title="Dateien für diese Sequenz hinterlegen (nur Verweise, nicht exportiert)">Dateien</button>
               <button className="btn danger" onClick={()=>{
-                if (window.confirm(`Sequenz "${s.name}" löschen? (Zuordnungen werden entfernt)`)) onDelete(s.id);
+                onDelete(s.id);
               }}>Löschen</button>
             </div>
           ))}
@@ -5792,7 +7190,8 @@ function TypeaheadInput({
   placeholder,
   autoFocus,
   wrapStyle,
-  inputStyle
+  inputStyle,
+  inputRef
 }){
   const closeTimer = useRef(null);
   const [open, setOpen] = useState(false);
@@ -5835,6 +7234,7 @@ function TypeaheadInput({
   return (
     <div className="typeaheadWrap" style={wrapStyle}>
       <input
+        ref={inputRef}
         className="input"
         style={inputStyle}
         autoFocus={autoFocus}
@@ -5879,7 +7279,7 @@ function TypeaheadInput({
                     onHideSuggestion?.(label);
                   }}
                 >
-                  ✕
+                  <X {...ICON_SM} />
                 </button>
               </div>
             );
@@ -5973,7 +7373,7 @@ function RichTextEditor({ value, onChange, placeholder = '' }){
           try { ref.current?.focus(); } catch {}
         }}
       >
-        ✎
+        <Pencil {...ICON_SM} />
       </button>
 
       {showTools ? (
@@ -5987,7 +7387,7 @@ function RichTextEditor({ value, onChange, placeholder = '' }){
             <input
               className="rteColor"
               type="color"
-              defaultValue="#111827"
+              defaultValue={RTE_DEFAULT_INK}
               onChange={(e)=>cmd('foreColor', e.target.value)}
               onMouseDown={(e)=>e.stopPropagation()}
             />
@@ -6041,6 +7441,7 @@ function ClassGroupInput({ value, suggestions, onChange, onCommit, onHideSuggest
 }
 
 function SequenceSelect({ sequences, value, onChange, onCreate, onRequestCreateSequence }){
+  const ui = useUi();
   const list = Object.values(sequences || {}).sort((a,b)=> (a.name||'').localeCompare(b.name||''));
   return (
     <select
@@ -6056,12 +7457,17 @@ function SequenceSelect({ sequences, value, onChange, onCreate, onRequestCreateS
             }, { autoCloseOnCreate: true });
             return;
           }
-          // Fallback (should rarely happen): prompt-based creation
-          const name = window.prompt('Name der neuen Unterrichtssequenz:');
-          if (name && onCreate) {
+          // Rückfallweg, falls kein Sequenz-Manager gereicht wurde.
+          ui.askInput({
+            title: 'Neue Unterrichtssequenz',
+            label: 'Name der Sequenz',
+            placeholder: 'z. B. Le passé composé',
+            confirmLabel: 'Sequenz anlegen',
+          }).then((name)=>{
+            if (!name || !onCreate) return;
             const createdId = onCreate(name);
             if (createdId) onChange?.(createdId);
-          }
+          });
           return;
         }
         onChange?.(v);
@@ -6092,6 +7498,7 @@ function CompetencyPrimaryInput({ value, suggestions, onChange, onCommit, onHide
 
 
 function CompetencyEditor({ competencies, primary, suggestions, onChange, onRemember, onHideSuggestion }){
+  const competencyInputRef = useRef(null);
   const [draft, setDraft] = useState('');
   const id = useMemo(()=> `ct-${Math.random().toString(16).slice(2)}`, []);
 
@@ -6132,6 +7539,7 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
       <div className="row wrap" style={{gap:8}}>
         <div style={{flex:1}}>
           <TypeaheadInput
+            inputRef={competencyInputRef}
             value={draft}
             suggestions={suggestions}
             onChange={setDraft}
@@ -6149,13 +7557,17 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
 
       <div className="tagRow">
         {(competencies || []).length === 0 ? (
-          <span className="muted small">Noch keine Kompetenzen eingetragen.</span>
+          <EmptyState
+            text="Welche Kompetenzen diese Stunde bedient. Eine davon lässt sich als primär markieren – das taucht später in der Jahresübersicht auf."
+            actionLabel="Kompetenz hinzufügen"
+            onAction={()=>competencyInputRef.current?.focus()}
+          />
         ) : (
           (competencies || []).map((c)=>(
             <span key={c} className={c === primary ? 'tag tagPrimary' : 'tag'}>
-              <button className="tagBtn" onClick={()=>setAsPrimary(c)} title="Als primär markieren">★</button>
+              <button className="tagBtn" onClick={()=>setAsPrimary(c)} title="Als primär markieren"><Star {...ICON_SM} /></button>
               <span className="tagText">{c}</span>
-              <button className="tagBtn" onClick={()=>remove(c)} title="Entfernen">✕</button>
+              <button className="tagBtn" onClick={()=>remove(c)} title="Entfernen"><X {...ICON_SM} /></button>
             </span>
           ))
         )}
@@ -6309,7 +7721,7 @@ function SchoolYearRolloverDialog({
               }
             </div>
           </div>
-          <button className="btn" onClick={onClose} title="Schließen">✕</button>
+          <button className="btn" onClick={onClose} title="Schließen" aria-label="Schließen"><X {...ICON} /></button>
         </div>
 
         <div className="box" style={{marginTop:12}}>
@@ -6382,22 +7794,15 @@ function WeekCopyDialog({ visible, onClose, onConfirm, weekTodosCount = 0, futur
 
   if (!visible) return null;
 
-  const submit = () => {
-    if (!copyTodos && futureWeekTodosCount > 0){
-      const ok = window.confirm(
-        `Du hast ${futureWeekTodosCount} To-do(s) in dieser Woche mit Datum/Deadline NACH dieser Woche.
-
-Sollen sie wirklich NICHT in die nächste Woche übernommen werden?`
-      );
-      if (!ok) return;
-    }
-    onConfirm?.({ copyTodos, shiftTodoDates, copyDuties });
-  };
+  // Der Hinweis zu späteren To-dos steht unten im Dialog und wird deutlicher,
+  // sobald sie tatsächlich wegfallen. Eine zusätzliche Rückfrage würde dieselbe
+  // Information ein zweites Mal stellen – und das aus einem offenen Dialog heraus.
+  const submit = () => onConfirm?.({ copyTodos, shiftTodoDates, copyDuties });
 
   return (
     <div className="modalOverlay" role="dialog" aria-modal="true">
       <div className="modalCard">
-        <div style={{fontWeight:900, fontSize:16}}>In nächste Woche übernehmen</div>
+        <h3 className="dialogTitle">In nächste Woche übernehmen</h3>
         <div className="muted small" style={{marginTop:6}}>
           Es werden nur <b>Klasse/Kurs, Fach und Raum</b> übernommen – keine Themen, Ziele, Phasen, Notizen oder Sequenz-Zuordnung.
         </div>
@@ -6417,9 +7822,15 @@ Sollen sie wirklich NICHT in die nächste Woche übernommen werden?`
         </label>
 
         {futureWeekTodosCount ? (
-          <div className="muted small" style={{marginLeft:24, marginTop:6}}>
-            Hinweis: {futureWeekTodosCount} To-do(s) haben ein Datum/Deadline <b>nach</b> dieser Woche. Diese werden beim Kopieren nicht automatisch „mit verschoben“.
-          </div>
+          copyTodos ? (
+            <div className="muted small" style={{marginLeft:24, marginTop:6}}>
+              Hinweis: {futureWeekTodosCount} To-do(s) haben ein Datum/Deadline <b>nach</b> dieser Woche. Diese werden beim Kopieren nicht automatisch „mit verschoben“.
+            </div>
+          ) : (
+            <div className="inlineNotice inlineNotice--warning" style={{marginLeft:24, marginTop:6}}>
+              {futureWeekTodosCount} To-do(s) haben ein Datum/Deadline <b>nach</b> dieser Woche und werden <b>nicht</b> übernommen. Setze den Haken darüber, wenn du sie mitnehmen willst.
+            </div>
+          )
         ) : null}
 
         {copyTodos ? (
@@ -6551,7 +7962,7 @@ function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onB
               />
               <span className="muted">Woche</span>
             </label>
-            <button className="iconBtn danger" onClick={()=>onDeleteTodo?.(t.id)} title="To-do löschen">🗑</button>
+            <button className="iconBtn danger" onClick={()=>onDeleteTodo?.(t.id)} title="To-do löschen"><Trash2 {...ICON_SM} /></button>
           </div>
         ))}
       </div>

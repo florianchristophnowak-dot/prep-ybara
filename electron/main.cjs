@@ -14,9 +14,14 @@ app.setName('Prép-ybara');
 const store = new Store({ name: 'prepybara' });
 const legacyStore = new Store({ name: 'lehrerplan' });
 
+// Einzige Quelle für die Schema-Kennzeichnung. Muss mit SCHEMA_VERSION in
+// renderer/src/app.jsx übereinstimmen: ensureDbShape() dort hebt jede geladene
+// Datenbank auf genau diesen Wert an.
+const SCHEMA_VERSION = 8;
+
 function defaultDB() {
   return {
-    schemaVersion: 7,
+    schemaVersion: SCHEMA_VERSION,
     socialForms: {},
     competencies: {},
     sequences: {},
@@ -43,7 +48,19 @@ function defaultDB() {
   };
 }
 
-function getDB() {
+/* Zwischenspeicher mit verzögertem Schreiben.
+
+   Ohne ihn kostete jede Änderung ein vollständiges Neuschreiben der
+   Store-Datei (bei 40 Wochen à 50 Stunden rund 4,3 MB), und der Renderer
+   wartete darauf. Jetzt gilt die Änderung sofort im Speicher; auf die
+   Platte geht sie gebündelt kurz danach. Beim Beenden wird in jedem Fall
+   noch geschrieben, damit nichts verloren geht. */
+const FLUSH_DELAY_MS = 600;
+let cachedDb = null;
+let flushTimer = null;
+let dirty = false;
+
+function readStoredDb() {
   if (store.has('db')) return store.get('db');
   if (legacyStore.has('db')) {
     const legacy = legacyStore.get('db');
@@ -53,9 +70,34 @@ function getDB() {
   return defaultDB();
 }
 
-function setDB(db) {
-  store.set('db', db);
+function getDB() {
+  if (cachedDb === null) cachedDb = readStoredDb();
+  return cachedDb;
 }
+
+function flushDB() {
+  if (!dirty || cachedDb === null) return;
+  dirty = false;
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  try { store.set('db', cachedDb); }
+  catch (e) { console.error('[store] Schreiben fehlgeschlagen:', e?.message || e); dirty = true; throw e; }
+}
+
+function scheduleFlush() {
+  dirty = true;
+  if (flushTimer) clearTimeout(flushTimer);
+  flushTimer = setTimeout(()=>{ flushTimer = null; try { flushDB(); } catch {} }, FLUSH_DELAY_MS);
+}
+
+function setDB(db) {
+  cachedDb = db;
+  scheduleFlush();
+}
+
+// Beim Beenden auf jeden Fall schreiben.
+app.on('before-quit', ()=>{ try { flushDB(); } catch {} });
+app.on('will-quit', ()=>{ try { flushDB(); } catch {} });
+process.on('exit', ()=>{ try { flushDB(); } catch {} });
 
 function attachDebugLogging(win) {
   win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
@@ -194,13 +236,19 @@ let executionPayloadByWindowId = new Map();
 let executionPayloadByWebContentsId = new Map();
 
 function openExecutionWindow(snapshot){
+  /* Schmales Fenster, das im Vordergrund bleibt.
+
+     Vollbild ist für einen privaten Fortschrittsmonitor die falsche Form:
+     daneben soll ein Tafelbild, ein PDF oder die Wochenübersicht offen
+     sein können. Vollbild bleibt über die Taste F erreichbar. */
   const win = new BrowserWindow({
-    width: 1200,
-    height: 780,
-    minWidth: 900,
-    minHeight: 650,
+    width: 460,
+    height: 720,
+    minWidth: 340,
+    minHeight: 420,
+    alwaysOnTop: true,
     title: 'Prép-ybara – Durchführung',
-    backgroundColor: '#ffffff',
+    backgroundColor: '#fbf8f0',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -353,51 +401,22 @@ async function exportPdfFromHtml({ html, suggestedFileName }) {
 
 
 
-// --- DOCX export (Word) ---
-let _htmlToDocx = null;
-async function getHtmlToDocx() {
-  if (_htmlToDocx) return _htmlToDocx;
-  // html-to-docx is ESM in some builds, so use dynamic import from CJS.
-  // Hinweis: Wir verwenden in der App standardmäßig .doc (HTML), weil das
-  // auf vielen Word-Versionen zuverlässiger öffnet als ein konvertiertes .docx.
-  const mod = await import('html-to-docx');
-  _htmlToDocx = mod?.default || mod;
-  return _htmlToDocx;
-}
+/* Hinweis: Der Word-Export erzeugt für Word aufbereitetes HTML als .doc,
+   siehe word-export.mjs. An dieser Stelle standen bis hierher ein Lader für
+   html-to-docx und ein Puffer-Normalisierer – beide wurden nie aufgerufen.
+   Mit ihnen entfällt die Abhängigkeit html-to-docx samt lodash, jszip,
+   xmlbuilder2 und virtual-dom. */
 
-function buildFullHtmlDocument(html) {
-  const src = String(html || '');
-  const headMatch = src.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
-  const bodyMatch = src.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-  const styleTags = src.match(/<style[^>]*>[\s\S]*?<\/style>/ig) || [];
-
-  const headInner = headMatch ? headMatch[1] : '';
-  const bodyInner = bodyMatch ? bodyMatch[1] : src;
-
-  // Many converters expect a full HTML document. Keep styles from <head> or inline.
-  return `<!doctype html><html><head><meta charset="utf-8" />\n${headInner}\n${styleTags.join('\n')}\n</head><body>${bodyInner}</body></html>`;
-}
-
-function ensureDocxBuffer(docx) {
-  let buf = docx;
-  // Common return types: Buffer, ArrayBuffer, Uint8Array, etc.
-  if (Buffer.isBuffer(buf)) return buf;
-  if (buf instanceof ArrayBuffer) return Buffer.from(new Uint8Array(buf));
-  if (ArrayBuffer.isView(buf)) return Buffer.from(buf.buffer, buf.byteOffset, buf.byteLength);
-  if (buf && typeof buf === 'object') {
-    if (Buffer.isBuffer(buf.buffer)) return buf.buffer;
-    if (buf.buffer instanceof ArrayBuffer) return Buffer.from(new Uint8Array(buf.buffer));
-    if (ArrayBuffer.isView(buf.data)) return Buffer.from(buf.data.buffer, buf.data.byteOffset, buf.data.byteLength);
-  }
-  if (typeof buf === 'string') return Buffer.from(buf, 'binary');
-  throw new Error(`Unsupported DOCX export type: ${typeof buf}`);
+// Gemeinsames Modul, damit Haupt- und Renderer-Prozess dieselbe Datei erzeugen.
+let _wordExport = null;
+async function getWordExport() {
+  if (!_wordExport) _wordExport = await import('./word-export.mjs');
+  return _wordExport;
 }
 
 async function exportDocxFromHtml({ html, suggestedFileName }) {
   const src = String(html || '');
-  const contentHtml = buildFullHtmlDocument(src);
-
-  const isLandscape = /name=["']page-orientation["']\s+content=["']landscape["']/.test(src);
+  const { buildWordDocument } = await getWordExport();
   const defaultName = String(suggestedFileName || 'Unterrichtsstunde.doc')
     .replace(/\.docx$/i, '.doc');
 
@@ -410,47 +429,11 @@ async function exportDocxFromHtml({ html, suggestedFileName }) {
   const outPath = filePath.toLowerCase().endsWith('.doc') ? filePath : `${filePath}.doc`;
 
   // Word kann HTML in einer .doc-Datei sehr zuverlässig öffnen.
-  // Wir fügen einige mso-/@page-Hinweise hinzu (Querformat, Ränder), damit der Ausdruck passt.
-  const wrapped = wrapHtmlForWord(contentHtml, { landscape: isLandscape });
-  fs.writeFileSync(outPath, wrapped, { encoding: 'utf8' });
+  // Die mso-/@page-Hinweise (Querformat, Ränder) setzt das gemeinsame Modul.
+  fs.writeFileSync(outPath, buildWordDocument(src), { encoding: 'utf8' });
   return outPath;
 }
 
-function wrapHtmlForWord(fullHtml, { landscape }) {
-  const html = String(fullHtml || '');
-  const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
-  const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-  const headInner = headMatch ? headMatch[1] : '';
-  const bodyInner = bodyMatch ? bodyMatch[1] : html;
-
-  // A4 in pt (Word versteht pt zuverlässig):
-  // portrait: 595.28pt × 841.89pt, landscape: swap.
-  const w = landscape ? 841.89 : 595.28;
-  const h = landscape ? 595.28 : 841.89;
-
-  const wordPageCss = `
-    <style>
-      @page Section1 { size: ${w.toFixed(2)}pt ${h.toFixed(2)}pt; margin: 12mm; mso-page-orientation: ${landscape ? 'landscape' : 'portrait'}; }
-      div.Section1 { page: Section1; }
-    </style>
-  `;
-
-  return `<!doctype html>
-<html xmlns:o="urn:schemas-microsoft-com:office:office"
-      xmlns:w="urn:schemas-microsoft-com:office:word"
-      xmlns="http://www.w3.org/TR/REC-html40">
-<head>
-  <meta charset="utf-8" />
-  ${headInner}
-  ${wordPageCss}
-</head>
-<body>
-  <div class="Section1">
-    ${bodyInner}
-  </div>
-</body>
-</html>`;
-}
 
 app.whenReady().then(() => {
   const mainWin = createMainWindow();
@@ -473,7 +456,33 @@ ipcMain.handle('db:set', async (_evt, db) => {
   return true;
 });
 
+/* Teilschreibvorgang: nur geänderte Wochen und, falls nötig, der Rest.
+   Der Renderer schickt damit nicht mehr die vollständige Datenbank über
+   die Prozessgrenze, sobald irgendwo ein Zeichen getippt wird. Die Ablage
+   selbst bleibt unverändert – es wird derselbe 'db'-Eintrag gepflegt, nur
+   gezielt statt als Ganzes ersetzt. */
+ipcMain.handle('db:patch', async (_evt, patch) => {
+  const p = (patch && typeof patch === 'object') ? patch : {};
+  const db = getDB() || defaultDB();
+  if (!db.weeks || typeof db.weeks !== 'object') db.weeks = {};
+
+  if (p.meta && typeof p.meta === 'object') {
+    // Wochen bleiben unberührt; alles andere wird ersetzt.
+    const { weeks: _ignored, ...rest } = p.meta;
+    for (const key of Object.keys(rest)) db[key] = rest[key];
+  }
+  if (p.weeks && typeof p.weeks === 'object') {
+    for (const [key, value] of Object.entries(p.weeks)) db.weeks[key] = value;
+  }
+  if (Array.isArray(p.removedWeeks)) {
+    for (const key of p.removedWeeks) delete db.weeks[key];
+  }
+  setDB(db);
+  return { ok: true };
+});
+
 ipcMain.handle('backup:export', async () => {
+  try { flushDB(); } catch {}
   const db = getDB();
   const stamp = new Date().toISOString().slice(0, 10);
   const content = JSON.stringify(db, null, 2);
@@ -497,8 +506,8 @@ ipcMain.handle('backup:import', async () => {
       events: []
     };
   }
-  if (!('schemaVersion' in imported)) imported.schemaVersion = 4;
-  if (imported.schemaVersion < 4) imported.schemaVersion = 4;
+  if (!('schemaVersion' in imported)) imported.schemaVersion = SCHEMA_VERSION;
+  if (imported.schemaVersion < SCHEMA_VERSION) imported.schemaVersion = SCHEMA_VERSION;
   setDB(imported);
   return imported;
 });
@@ -555,7 +564,7 @@ ipcMain.handle('templates:import', async () => {
     while (db.sequenceTemplates[nextId]) nextId = nodeUid();
     db.sequenceTemplates[nextId] = { ...safeTpl, id: nextId, importedAt: new Date().toISOString() };
   }
-  db.schemaVersion = Math.max(Number(db.schemaVersion || 0), 4);
+  db.schemaVersion = Math.max(Number(db.schemaVersion || 0), SCHEMA_VERSION);
   setDB(db);
   return db;
 });

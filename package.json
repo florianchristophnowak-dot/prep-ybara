@@ -20,27 +20,30 @@
   "dependencies": {
     "electron-store": "^8.1.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "html-to-docx": "1.8.0"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
     "concurrently": "^9.0.1",
     "electron": "^32.2.0",
     "electron-builder": "^24.13.3",
+    "idb-keyval": "^6.3.0",
+    "lucide-react": "^1.33.0",
     "vite": "^5.4.8",
+    "vite-plugin-pwa": "^1.3.0",
     "wait-on": "^8.0.2"
   },
   "build": {
     "appId": "com.prepybara.desktop",
     "productName": "Prép-ybara",
     "files": [
-      "dist/**",
+      "dist/renderer/**",
       "electron/**",
       "package.json"
     ],
     "directories": {
-      "buildResources": "build"
+      "buildResources": "build",
+      "output": "release"
     },
     "win": {
       "publisherName": "Florian Nowak",

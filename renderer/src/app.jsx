@@ -10,7 +10,7 @@ import { setupServiceWorker } from './pwa.js';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronLeft, ChevronRight,
-  ClipboardPaste, Copy, NotebookPen, Palmtree, Pencil, Play, Scissors, Search, Settings, Square, Star, Trash2, X,
+  ClipboardPaste, Copy, Maximize2, NotebookPen, Palmtree, Pencil, Play, Scissors, Search, Settings, Square, Star, Trash2, X,
 } from 'lucide-react';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
@@ -301,12 +301,6 @@ function clamp01(x){
   return Math.max(0, Math.min(1, n));
 }
 
-function formatMMSS(totalSeconds){
-  const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
-  const mm = String(Math.floor(s / 60)).padStart(2, '0');
-  const ss = String(s % 60).padStart(2, '0');
-  return `${mm}:${ss}`;
-}
 
 /* Vorgabe des Schriftfarbwählers im Rich-Text-Editor.
 
@@ -318,50 +312,183 @@ function formatMMSS(totalSeconds){
    input[type=color] akzeptiert ausserdem kein var(). */
 const RTE_DEFAULT_INK = '#26201c';
 
-function bgFromProgress(progress){
-  const p = clamp01(progress);
-  // hue 120 (green) -> 0 (red). Light + low saturation to keep it subtle.
-  const hue = 120 * (1 - p);
-  // Nur die Helligkeit folgt der Darstellung – im Dunkelmodus wäre eine Fläche
-  // mit 93 % Helligkeit ein Blendkörper. Die Farblogik selbst bleibt unberührt.
-  return isDarkMode() ? `hsla(${hue}, 22%, 21%, 1)` : `hsla(${hue}, 55%, 93%, 1)`;
+
+/* ============================================================
+   Durchführungsansicht
+
+   Ein privater Fortschrittsmonitor für die Lehrkraft während des
+   Unterrichts. Sie beantwortet zwei Fragen: Wie liege ich in der Zeit,
+   und was kommt als Nächstes. Sie ist NICHT für den Beamer bestimmt.
+   Alles Weitere folgt daraus: kurze Blicke aus ein bis zwei Metern,
+   nebenbei, während unterrichtet wird.
+
+   HIERARCHIE – begründete Entscheidung
+   Der Countdown ist das grösste Element, der kumulierte Verzug das
+   starke zweite. Die Vorgabe schlug es umgekehrt vor; dagegen sprechen
+   drei Gründe:
+
+   1. Im kurzen Blick handelt man nach der Restzeit der laufenden Phase
+      ("jetzt zusammenfassen" oder "noch weiterarbeiten lassen"). Der
+      kumulierte Verzug ist ein Wert, den man zwischen den Phasen
+      auswertet, nicht mitten in einer.
+   2. Der Countdown IST die Verzugsanzeige geworden: er läuft ins
+      Negative weiter. Bei −2:15 sieht man den entstehenden Verzug
+      bereits an der grössten Stelle. Ihn kleiner zu setzen würde die
+      Information verstecken, nicht hervorheben.
+   3. Der Countdown ändert sich sekündlich, der Verzug nur in Sprüngen.
+      Das ständig wandernde Element zieht den Blick ohnehin an – es
+      gehört an die Stelle, die dafür vorgesehen ist.
+   ============================================================ */
+
+/* Vorzeichenbehaftete Dauer: +4:12 zu spät, −2:15 in Vorsprung. */
+function formatSignedMMSS(totalSeconds){
+  const n = Math.round(Number(totalSeconds) || 0);
+  if (Math.abs(n) < 30) return '±0 min';
+  const sign = n > 0 ? '+' : '−';
+  const a = Math.abs(n);
+  const mm = Math.floor(a / 60);
+  const ss = a % 60;
+  return `${sign}${mm}:${String(ss).padStart(2, '0')}`;
 }
 
-function ExecutionWindow(){
+/* Countdown, der ins Negative laufen darf. */
+function formatCountdown(totalSeconds){
+  const n = Math.round(Number(totalSeconds) || 0);
+  const a = Math.abs(n);
+  const mm = String(Math.floor(a / 60)).padStart(2, '0');
+  const ss = String(a % 60).padStart(2, '0');
+  return `${n < 0 ? '−' : ''}${mm}:${ss}`;
+}
+
+function parseHHMMToSec(hhmm){
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim());
+  if (!m) return null;
+  return Number(m[1]) * 3600 + Number(m[2]) * 60;
+}
+function formatSecAsClock(sec){
+  // Auf die nächste Minute runden, nicht abschneiden: ein Stundenende um
+  // 08:44:58 ist 08:45, nicht 08:44.
+  const rounded = Math.round((Number(sec) || 0) / 60) * 60;
+  const s = ((rounded % 86400) + 86400) % 86400;
+  return `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}`;
+}
+function secondsSinceMidnight(d = new Date()){
+  return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
+}
+
+/* Ab wann der Verzug sichtbar wird. Rot hängt ausschliesslich hier –
+   nicht mehr am Phasenverlauf. */
+const VERZUG_WARN_SEC = 3 * 60;
+const VERZUG_STARK_SEC = 5 * 60;
+function verzugStufe(sec){
+  const n = Number(sec) || 0;
+  if (n <= -VERZUG_WARN_SEC) return 'vor';       // deutlich in Vorsprung
+  if (n < VERZUG_WARN_SEC) return 'plan';        // im Plan
+  if (n < VERZUG_STARK_SEC) return 'warn';
+  return 'stark';
+}
+
+/* Verzug = tatsächlich verstrichene Zeit − planmässig verstrichene Zeit.
+
+   Die planmässige Zeit wächst innerhalb einer Phase nur bis zu deren
+   Dauer. Läuft die Phase über, wächst nur noch die Ist-Zeit – der Verzug
+   steigt sekündlich weiter. Wird früher gewechselt, holt der Plan die
+   volle Dauer nach und der Vorsprung erscheint als negativer Wert.
+
+   Als reine Funktion herausgezogen, damit sie ohne Warten prüfbar ist. */
+export function computeVerzugSec({ phases, idx, remainingSec, elapsedSec, nowSec, openedAtSec, isHomeworkView }){
+  const list = Array.isArray(phases) ? phases : [];
+  if (!list.length) return 0;
+  const durOf = (p)=> Math.max(0, Math.round((Number(p?.duration) || 0) * 60));
+
+  const plannedBefore = list.slice(0, Math.min(idx, list.length)).reduce((a, p)=> a + durOf(p), 0);
+  const durationSec = isHomeworkView ? 0 : durOf(list[idx]);
+  const spentInCurrent = isHomeworkView ? 0 : Math.max(0, durationSec - remainingSec);
+  const plannedElapsed = plannedBefore + Math.min(spentInCurrent, durationSec);
+
+  /* Bezugspunkt: der geplante Stundenbeginn – ausser das Fenster wurde
+     schon davor geöffnet (der Normalfall in der Pause). Dann zählt der
+     Öffnungszeitpunkt, sonst stünde vor Stundenbeginn ein Vorsprung von
+     einer halben Stunde in der Anzeige. Wird spät geöffnet, bleibt der
+     geplante Beginn massgeblich – dann IST die Stunde in Verzug. */
+  const lessonStart = parseHHMMToSec(list[0]?.start);
+  const anchor = (lessonStart !== null && Number.isFinite(openedAtSec))
+    ? Math.min(lessonStart, openedAtSec)
+    : lessonStart;
+  const actualElapsed = (anchor !== null && Number.isFinite(nowSec))
+    ? Math.max(0, nowSec - anchor)
+    : (Number(elapsedSec) || 0);
+
+  return Math.round(actualElapsed - plannedElapsed);
+}
+
+export function ExecutionWindow(){
   const [snapshot, setSnapshot] = useState(null);
   const [idx, setIdx] = useState(0);
-  const [remainingSec, setRemainingSec] = useState(0);
+  const [remainingSec, setRemainingSec] = useState(0);   // darf negativ werden
   const [isCountdownOn, setIsCountdownOn] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
+  /* Automatisches Weiterschalten ist nicht mehr die Voreinstellung: Es
+     hat den Zeitverzug verschluckt, indem es bei Minute 8 weiterrückte
+     und so tat, als liefe alles nach Plan. */
+  const [autoAdvance, setAutoAdvance] = useState(false);
+  const [elapsedSec, setElapsedSec] = useState(0);       // Ist-Zeit seit Öffnen
 
   const endTsRef = useRef(null);
   const tickRef = useRef(null);
+  const lastTickRef = useRef(null);
+  const openedAtRef = useRef(secondsSinceMidnight());
 
   const snapshotRef = useRef(null);
   const idxRef = useRef(0);
   const remainingRef = useRef(0);
   const countdownRef = useRef(true);
   const pausedRef = useRef(false);
+  const autoRef = useRef(false);
 
   useEffect(()=>{ snapshotRef.current = snapshot; }, [snapshot]);
   useEffect(()=>{ idxRef.current = idx; }, [idx]);
   useEffect(()=>{ remainingRef.current = remainingSec; }, [remainingSec]);
   useEffect(()=>{ countdownRef.current = isCountdownOn; }, [isCountdownOn]);
   useEffect(()=>{ pausedRef.current = isPaused; }, [isPaused]);
+  useEffect(()=>{ autoRef.current = autoAdvance; }, [autoAdvance]);
 
   const phases = Array.isArray(snapshot?.phases) ? snapshot.phases : [];
   const isHomeworkView = snapshot && idx >= phases.length;
   const phase = (!isHomeworkView) ? (phases[idx] || null) : null;
+  const nextPhase = phases[idx + 1] || null;
   const durationSec = Math.max(0, Math.round((Number(phase?.duration) || 0) * 60));
-  const progress = durationSec > 0 ? (1 - (remainingSec / durationSec)) : 0;
-  const bg = (!isHomeworkView && isCountdownOn && !isPaused) ? bgFromProgress(progress) : 'var(--card)';
+
+  /* ---- Zeitverzug ------------------------------------------------------
+     Verzug = tatsächlich verstrichene Zeit − planmässig verstrichene Zeit.
+
+     Die planmässige Zeit wächst innerhalb einer Phase nur bis zu deren
+     Dauer. Läuft die Phase über, wächst nur noch die Ist-Zeit – der
+     Verzug steigt sekündlich. Wird früher gewechselt, holt der Plan die
+     volle Dauer nach und der Vorsprung erscheint als negativer Wert. */
+  const verzugSec = useMemo(()=> computeVerzugSec({
+    phases, idx, remainingSec, elapsedSec,
+    nowSec: secondsSinceMidnight(), openedAtSec: openedAtRef.current, isHomeworkView,
+  }), [phases, idx, remainingSec, elapsedSec, isHomeworkView]);
+
+  /* Erwartetes Stundenende: geplantes Ende plus Verzug. */
+  const erwartetesEnde = useMemo(()=>{
+    if (!phases.length) return null;
+    const plannedEndClock = parseHHMMToSec(phases[phases.length - 1]?.end);
+    if (plannedEndClock !== null) return formatSecAsClock(plannedEndClock + verzugSec);
+    // Ohne Stundenzeiten: jetzt plus verbleibende Soll-Zeit.
+    const restPlanned = phases.slice(idx + 1)
+      .reduce((a, p)=> a + Math.max(0, Math.round((Number(p?.duration) || 0) * 60)), 0)
+      + Math.max(0, remainingSec);
+    return formatSecAsClock(secondsSinceMidnight() + restPlanned);
+  }, [phases, idx, remainingSec, verzugSec]);
+
+  const stufe = verzugStufe(verzugSec);
 
   const resetPhaseTime = (nextIdx) => {
-    // Homework view sits AFTER the last phase
     if (nextIdx >= phases.length) {
       endTsRef.current = null;
       setRemainingSec(0);
-      // keep paused so nothing restarts unexpectedly
       setIsPaused(true);
       return;
     }
@@ -374,7 +501,6 @@ function ExecutionWindow(){
   const goPrev = () => {
     setIdx((cur)=>{
       const next = Math.max(0, cur - 1);
-      // reset time to that phase
       setTimeout(()=>resetPhaseTime(next), 0);
       return next;
     });
@@ -389,31 +515,27 @@ function ExecutionWindow(){
 
   const toggleFullscreen = async () => {
     try {
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-      } else {
-        await document.documentElement.requestFullscreen();
-      }
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
     } catch {}
   };
 
-  // Receive snapshot from main process
+  // Snapshot beziehen
   useEffect(()=>{
     let off = () => {};
-
     const applySnapshot = (payload) => {
       const snap = (payload && typeof payload === 'object') ? payload : null;
       setSnapshot(snap);
       setIdx(0);
       setIsCountdownOn(true);
       setIsPaused(false);
+      setElapsedSec(0);
+      openedAtRef.current = secondsSinceMidnight();
       endTsRef.current = null;
+      lastTickRef.current = null;
       const first = Array.isArray(snap?.phases) ? snap.phases[0] : null;
-      const d = Math.max(0, Math.round((Number(first?.duration) || 0) * 60));
-      setRemainingSec(d);
+      setRemainingSec(Math.max(0, Math.round((Number(first?.duration) || 0) * 60)));
     };
-
-    // Preferred: fetch payload on demand (prevents race with early IPC send)
     (async () => {
       try {
         if (capabilities.executionWindow) {
@@ -422,91 +544,75 @@ function ExecutionWindow(){
         }
       } catch {}
     })();
-
-    // Backwards/fallback: listen for push init
     if (capabilities.executionWindow) {
       off = platform.onExecutionInit((payload)=>applySnapshot(payload));
     }
     return () => off && off();
   }, []);
 
-  // Main ticker loop (drift-free)
+  // Taktgeber
   useEffect(()=>{
     const loop = () => {
       const snap = snapshotRef.current;
       const i = idxRef.current;
-      const isOn = countdownRef.current;
-      const isP = pausedRef.current;
       const phasesNow = Array.isArray(snap?.phases) ? snap.phases : [];
-      // Homework view: index == phasesNow.length
-      if (!snap || !phasesNow.length) {
+      const now = performance.now();
+
+      if (!snap || !phasesNow.length || i >= phasesNow.length) {
+        endTsRef.current = null;
+        lastTickRef.current = null;
+        tickRef.current = requestAnimationFrame(loop);
+        return;
+      }
+      if (!countdownRef.current || pausedRef.current) {
+        endTsRef.current = null;
+        lastTickRef.current = null;
         tickRef.current = requestAnimationFrame(loop);
         return;
       }
 
-      if (i >= phasesNow.length) {
-        // Homework screen: keep timer stopped
-        endTsRef.current = null;
-        if (remainingRef.current !== 0) setRemainingSec(0);
-        tickRef.current = requestAnimationFrame(loop);
-        return;
+      // Ist-Zeit mitzählen, solange tatsächlich gelaufen wird.
+      if (lastTickRef.current !== null) {
+        const delta = (now - lastTickRef.current) / 1000;
+        if (delta > 0 && delta < 5) setElapsedSec((e)=> e + delta);
       }
+      lastTickRef.current = now;
 
       const ph = phasesNow[i] || null;
-
-      if (!isOn || isP) {
-        // When countdown is off or paused, keep time static.
-        endTsRef.current = null;
-        tickRef.current = requestAnimationFrame(loop);
-        return;
-      }
-
       const dur = Math.max(0, Math.round((Number(ph?.duration) || 0) * 60));
-      const rem = Math.max(0, Number(remainingRef.current) || 0);
-      if (endTsRef.current == null) {
-        endTsRef.current = performance.now() + rem * 1000;
-      }
-      const msLeft = endTsRef.current - performance.now();
-      const secLeft = Math.max(0, Math.ceil(msLeft / 1000));
+      const rem = Number(remainingRef.current) || 0;
+      if (endTsRef.current == null) endTsRef.current = now + rem * 1000;
+
+      // Bewusst OHNE untere Schranke: die Phase läuft ins Negative weiter.
+      const secLeft = Math.ceil((endTsRef.current - now) / 1000);
       if (secLeft !== rem) setRemainingSec(secLeft);
 
-      if (secLeft <= 0) {
+      if (secLeft <= 0 && autoRef.current) {
         endTsRef.current = null;
         if (i < phasesNow.length - 1) {
           const next = i + 1;
           setIdx(next);
           const nextP = phasesNow[next] || null;
-          const nextDur = Math.max(0, Math.round((Number(nextP?.duration) || 0) * 60));
-          setRemainingSec(nextDur);
+          setRemainingSec(Math.max(0, Math.round((Number(nextP?.duration) || 0) * 60)));
         } else {
-          // last phase finished -> go to homework view (one step after last phase)
           setIdx(phasesNow.length);
           setIsPaused(true);
           setRemainingSec(0);
         }
       }
-
-      // If duration changed (shouldn't during execution), ensure remaining isn't above duration.
       if (dur > 0 && remainingRef.current > dur) setRemainingSec(dur);
-
       tickRef.current = requestAnimationFrame(loop);
     };
-
     tickRef.current = requestAnimationFrame(loop);
-    return () => {
-      if (tickRef.current) cancelAnimationFrame(tickRef.current);
-    };
+    return () => { if (tickRef.current) cancelAnimationFrame(tickRef.current); };
   }, []);
 
-  // Keyboard shortcuts
+  // Tastenkürzel – unverändert gegenüber der bisherigen Fassung.
   useEffect(()=>{
     const onKey = (e) => {
       if (e.key === 'ArrowLeft') goPrev();
       if (e.key === 'ArrowRight') goNext();
-      if (e.key === ' ') {
-        e.preventDefault();
-        setIsPaused(p=>!p);
-      }
+      if (e.key === ' ') { e.preventDefault(); setIsPaused(p=>!p); }
       if (String(e.key || '').toLowerCase() === 'c') setIsCountdownOn(v=>!v);
       if (String(e.key || '').toLowerCase() === 'f') toggleFullscreen();
       if (e.key === 'Escape') window.close?.();
@@ -515,38 +621,47 @@ function ExecutionWindow(){
     return ()=>window.removeEventListener('keydown', onKey);
   }, [phases.length]);
 
-  const pct = Math.round(clamp01(progress) * 100);
-  const contentLen = (
-    String(phase?.content || '').length +
-    String(phase?.materialsMedia || '').length +
-    String(phase?.remarks || '').length
-  );
-  // If the phase has a lot of text, tighten the layout a bit to reduce scrolling.
-  const isDense = contentLen > 900;
+  /* Fortschritt über die GANZE Stunde, segmentiert nach geplanter Dauer.
+     Vorher zeigte der Balken den Verlauf innerhalb einer Phase und sprang
+     bei jedem Wechsel auf null zurück. */
+  const segmente = useMemo(()=> phases.map((p, i)=>{
+    const d = Math.max(1, Math.round((Number(p?.duration) || 0) * 60));
+    let fuellung = 0;
+    if (i < idx) fuellung = 1;
+    else if (i === idx && !isHomeworkView) fuellung = clamp01((d - Math.max(0, remainingSec)) / d);
+    return { key: p?.id || i, titel: p?.title || `Phase ${i + 1}`, gewicht: d, fuellung };
+  }), [phases, idx, remainingSec, isHomeworkView]);
+
+  const verzugText = stufe === 'plan' ? 'im Plan' : formatSignedMMSS(verzugSec);
 
   return (
-    <div className={`execRoot ${isDense ? 'dense' : ''}`} style={{ background: bg, transition: 'background 320ms linear' }}>
+    <div className="execRoot">
       <div className="execTopbar">
         <div className="execTitle">
           <div className="execTitleMain">{snapshot?.lessonTitle || 'Durchführung'}</div>
           {snapshot?.meta ? <div className="execTitleSub">{snapshot.meta}</div> : null}
         </div>
-
         <div className="execActions">
-          <button className="btn" onClick={()=>setIsCountdownOn(v=>!v)}>
-            Countdown: {isCountdownOn ? 'An' : 'Aus'}
-          </button>
-          <button className="btn" onClick={()=>setIsPaused(p=>!p)}>
+          <button className="btn" onClick={()=>setIsPaused(p=>!p)} title="Leertaste">
             {isPaused ? 'Weiter' : 'Pause'}
           </button>
-          <button className="btn" onClick={toggleFullscreen}>Vollbild</button>
-          <button className="btn danger" onClick={()=>window.close?.()}>Schließen</button>
+          <button className="btn" onClick={toggleFullscreen} title="F" aria-label="Vollbild"><Maximize2 {...ICON_SM} /></button>
+          <button className="btn" onClick={()=>window.close?.()} title="Escape" aria-label="Schließen"><X {...ICON_SM} /></button>
         </div>
       </div>
 
-      <div className="execProgress">
-        <div className="execProgressBar" style={{ width: `${pct}%` }} />
-      </div>
+      {/* Fortschritt der ganzen Stunde */}
+      {phases.length ? (
+        <div className="execSegments" role="img"
+             aria-label={`Phase ${Math.min(idx + 1, phases.length)} von ${phases.length}`}>
+          {segmente.map((s, i)=>(
+            <div key={s.key} className={`execSegment${i === idx ? ' is-current' : ''}`}
+                 style={{ flexGrow: s.gewicht }} title={s.titel}>
+              <div className="execSegmentFill" style={{ width: `${s.fuellung * 100}%` }} />
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <div className="execMain">
         {!snapshot ? (
@@ -555,44 +670,53 @@ function ExecutionWindow(){
           <div className="muted">Keine Phasen vorhanden.</div>
         ) : isHomeworkView ? (
           <div className="execCard">
-            <div className="execPhaseTitle">Hausaufgaben</div>
-
-            <div className="execDetails execDetailsGrow">
-              <div className="execBlock">
-                <div className="execBlockTitle">Hausaufgaben</div>
-                <div className="execRich" style={{ whiteSpace: 'pre-wrap' }}>
-                  {String(snapshot?.homework || '').trim() ? String(snapshot.homework) : 'Keine Hausaufgaben hinterlegt.'}
-                </div>
+            <div className="execPhaseName">Hausaufgaben</div>
+            <div className="execBlock execDetailsGrow">
+              <div className="execRich" style={{ whiteSpace: 'pre-wrap' }}>
+                {String(snapshot?.homework || '').trim() ? String(snapshot.homework) : 'Keine Hausaufgaben hinterlegt.'}
               </div>
             </div>
-
             <div className="execNav">
               <button className="btn" onClick={goPrev} disabled={idx<=0} aria-label="Vorherige Phase"><ArrowLeft {...ICON} /></button>
-              <button className="btn" onClick={goNext} disabled={idx>=phases.length} aria-label="Nächste Phase"><ArrowRight {...ICON} /></button>
             </div>
           </div>
         ) : (
           <div className="execCard">
-            <div className="execCardHeader">
-              <div className="execCornerLeft">
-                <div className="execCornerChip">Phase {idx + 1} / {phases.length}</div>
-                <div className="execCornerChip">{Number(phase?.duration) || 0} min</div>
-                {(phase?.start || phase?.end) ? (
-                  <div className="execCornerChip">{phase?.start ? `${phase.start}` : ''}{(phase?.start && phase?.end) ? ' – ' : ''}{phase?.end ? phase.end : ''}</div>
-                ) : null}
-              </div>
-              <div className="execCornerRight" aria-label="Countdown">
-                <div className="execCornerTimer">{formatMMSS(remainingSec)}</div>
-              </div>
+            <div className="execPhaseLine">
+              <span className="execPhaseName">{phase?.title || '—'}</span>
+              {phase?.socialForm ? <span className="execPhaseSocial">{phase.socialForm}</span> : null}
+              <span className="execPhaseCount">{idx + 1}/{phases.length}</span>
             </div>
 
-            <div className="execCenterHeader">
-              <div className="execPhaseTitle">{phase?.title || '—'}</div>
-              {phase?.socialForm ? (
-                <div className="execSocialProminent" aria-label={`Sozialform: ${phase.socialForm}`}>
-                  {phase.socialForm}
-                </div>
-              ) : null}
+            {/* Grösstes Element: die Restzeit der laufenden Phase. */}
+            <div className={`execTimer${remainingSec < 0 ? ' is-over' : ''}${isPaused ? ' is-paused' : ''}`}
+                 aria-label="Restzeit dieser Phase">
+              {isCountdownOn ? formatCountdown(remainingSec) : '—'}
+            </div>
+
+            {/* Starkes zweites Element: kumulierter Verzug und erwartetes Ende. */}
+            <div className={`execVerzug execVerzug--${stufe}`}>
+              <span className="execVerzugWert">{verzugText}</span>
+              {erwartetesEnde ? <span className="execVerzugEnde">Ende ~{erwartetesEnde}</span> : null}
+            </div>
+
+            {/* Immer sichtbar, gedämpft: was als Nächstes kommt. */}
+            <div className="execNext">
+              {nextPhase ? (
+                <>
+                  <span className="execNextLabel">Danach</span>
+                  <span className="execNextName">{nextPhase.title || '—'}</span>
+                  <span className="execNextMeta">
+                    {Number(nextPhase.duration) || 0} min
+                    {nextPhase.socialForm ? ` · ${nextPhase.socialForm}` : ''}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="execNextLabel">Danach</span>
+                  <span className="execNextName">Hausaufgaben</span>
+                </>
+              )}
             </div>
 
             {(phase?.content || phase?.materialsMedia || phase?.remarks) ? (
@@ -603,14 +727,12 @@ function ExecutionWindow(){
                     <div className="execRich" dangerouslySetInnerHTML={{ __html: String(phase.content) }} />
                   </div>
                 ) : null}
-
                 {phase?.materialsMedia ? (
                   <div className="execBlock">
-                    <div className="execBlockTitle">Materialien & Medien</div>
+                    <div className="execBlockTitle">Materialien &amp; Medien</div>
                     <div className="execRich" dangerouslySetInnerHTML={{ __html: String(phase.materialsMedia) }} />
                   </div>
                 ) : null}
-
                 {phase?.remarks ? (
                   <div className="execBlock">
                     <div className="execBlockTitle">Bemerkungen</div>
@@ -622,7 +744,11 @@ function ExecutionWindow(){
 
             <div className="execNav">
               <button className="btn" onClick={goPrev} disabled={idx<=0} aria-label="Vorherige Phase"><ArrowLeft {...ICON} /></button>
-              <button className="btn" onClick={goNext} disabled={idx>=phases.length} aria-label="Nächste Phase"><ArrowRight {...ICON} /></button>
+              <label className="execAuto" title="Bei 0 automatisch zur nächsten Phase springen">
+                <input type="checkbox" checked={autoAdvance} onChange={(e)=>setAutoAdvance(e.target.checked)} />
+                <span>Automatisch weiter</span>
+              </label>
+              <button className="btn primary" onClick={goNext} aria-label="Nächste Phase"><ArrowRight {...ICON} /></button>
             </div>
           </div>
         ))}

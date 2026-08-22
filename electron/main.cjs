@@ -236,13 +236,19 @@ let executionPayloadByWindowId = new Map();
 let executionPayloadByWebContentsId = new Map();
 
 function openExecutionWindow(snapshot){
+  /* Schmales Fenster, das im Vordergrund bleibt.
+
+     Vollbild ist für einen privaten Fortschrittsmonitor die falsche Form:
+     daneben soll ein Tafelbild, ein PDF oder die Wochenübersicht offen
+     sein können. Vollbild bleibt über die Taste F erreichbar. */
   const win = new BrowserWindow({
-    width: 1200,
-    height: 780,
-    minWidth: 900,
-    minHeight: 650,
+    width: 460,
+    height: 720,
+    minWidth: 340,
+    minHeight: 420,
+    alwaysOnTop: true,
     title: 'Prép-ybara – Durchführung',
-    backgroundColor: '#ffffff',
+    backgroundColor: '#fbf8f0',
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

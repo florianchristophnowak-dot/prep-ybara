@@ -21,6 +21,9 @@ import { createStore, get, set, del, keys, getMany, setMany } from 'idb-keyval';
 import {
   exportDocxInBrowser, printHtmlAsPdf, readTextFile, saveBlob, hasFileSystemAccess,
 } from './web-files.js';
+import {
+  createExecutionBridge, requestSnapshotOverChannel, hasDocumentPip,
+} from './web-execution.js';
 
 const LEGACY_KEY = 'lehrerplan_db';
 const META_KEY = 'meta';
@@ -33,7 +36,8 @@ function splitDb(db){
   return { weeks: weeks || {}, meta };
 }
 
-export function createWebPlatform({ appVersion = '' } = {}){
+export function createWebPlatform({ appVersion = '', mountExecution = null } = {}){
+  const execution = createExecutionBridge({ onMount: mountExecution });
   let lastWeeks = new Map();
   let lastMeta = null;
 
@@ -189,8 +193,9 @@ export function createWebPlatform({ appVersion = '' } = {}){
       fileLibrary: false,
       revealInFolder: false,
       openExternally: true,
-      // Das eigene Durchführungsfenster folgt in Phase 5.
-      executionWindow: false,
+      executionWindow: true,
+      // Nur Chromium legt ein echtes, immer obenauf liegendes Fenster an.
+      executionAlwaysOnTop: hasDocumentPip(),
       // Nur der Browser kann den Speicherplatz zusichern.
       storagePersistence: true,
       installable: true,
@@ -211,8 +216,10 @@ export function createWebPlatform({ appVersion = '' } = {}){
     revealPath: notAvailable,
     getLibraryRoot: notAvailable,
     copyToLibrary: notAvailable,
-    openExecutionWindow: notAvailable,
-    getExecutionSnapshot: notAvailable,
+    openExecutionWindow: (snapshot) => execution.oeffnen(snapshot),
+    /* Im selben Kontext (Picture-in-Picture) liegt der Stand direkt vor;
+       in einem eigenen Fenster wird er über den Kanal angefordert. */
+    getExecutionSnapshot: async () => execution.snapshotHolen() || await requestSnapshotOverChannel(),
     onExecutionInit: () => ()=>{},
     onOpenHelp: () => ()=>{},
   };

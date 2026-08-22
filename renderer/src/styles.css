@@ -597,41 +597,127 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .rteBody { padding: 10px 12px; min-height: 90px; font-size: var(--fs-base); line-height: 1.6; outline: none; white-space: normal; }
 .rteBody:empty:before { content: attr(data-placeholder); color: var(--muted); opacity: 0.6; }
 
-.btn.exec { background: var(--text); border-color: var(--text); color: var(--on-primary); }
+.btn.exec { background: var(--board); border-color: var(--board); color: var(--on-board); }
 .btn.exec:hover { background: var(--board-hover); }
-.execRoot { height: 100vh; width: 100vw; display: flex; flex-direction: column; padding: 20px; gap: 16px; transition: background 400ms ease; }
-.execTopbar { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-.execTitleMain { font-size: var(--fs-xl); font-weight: var(--fw-bold); letter-spacing: -0.02em; }
-.execTitleSub { font-size: var(--fs-md); color: var(--muted); margin-top: 4px; }
-.execActions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-.execProgress { height: 8px; background: var(--bg-subtle); border-radius: var(--radius-full); overflow: hidden; }
-.execProgressBar { height: 100%; background: linear-gradient(90deg, var(--primary) 0%, var(--success) 100%); transition: width 300ms linear; border-radius: var(--radius-full); }
-.execMain { flex: 1; display: flex; justify-content: center; align-items: stretch; padding: 0 12px 12px; }
-.execCard { width: min(1100px, 96vw); max-height: calc(100vh - 140px); height: 100%; min-height: 0; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-xl); box-shadow: var(--shadow-lg); padding: 24px; display: flex; flex-direction: column; }
-.execCardHeader { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-.execCornerLeft { display: flex; flex-wrap: wrap; gap: 8px; }
-.execCornerChip { display: inline-flex; align-items: center; padding: 8px 14px; border-radius: var(--radius-full); border: 1px solid var(--border); background: var(--card); font-weight: var(--fw-bold); font-size: var(--fs-md); box-shadow: var(--shadow-sm); }
-.execCornerRight { display: flex; align-items: flex-start; justify-content: flex-end; }
-.execCornerTimer { font-size: clamp(48px, 5.5vw, 96px); font-weight: var(--fw-bold); letter-spacing: -0.02em; line-height: 1; text-align: right; font-variant-numeric: tabular-nums; }
-.execCenterHeader { text-align: center; margin-top: 12px; }
-.execSocialProminent { display: inline-flex; align-items: center; justify-content: center; padding: 12px 24px; margin-top: 10px; border-radius: var(--radius-full); border: 2px solid var(--border); background: var(--card); box-shadow: var(--shadow); font-weight: var(--fw-bold); font-size: clamp(18px, 2.2vw, 28px); }
-.execSocialPill { display: inline-flex; align-items: center; gap: 12px; width: max-content; margin: 4px auto 8px; padding: 12px 24px; border-radius: var(--radius-full); border: 2px solid var(--border); background: var(--card); box-shadow: var(--shadow); }
-.execSocialLabel { font-size: clamp(12px, 1.3vw, 14px); font-weight: var(--fw-bold); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.execSocialValue { font-size: clamp(18px, 2.2vw, 26px); font-weight: var(--fw-bold); }
-.execPhaseTitle { font-size: clamp(36px, 5.5vw, 68px); font-weight: var(--fw-bold); letter-spacing: -0.02em; line-height: 1.1; margin: 12px 0 8px; text-align: center; }
-.execTimer { font-size: clamp(64px, 7vw, 128px); font-weight: var(--fw-bold); letter-spacing: -0.02em; margin: 8px 0 6px; text-align: center; font-variant-numeric: tabular-nums; }
-.execDetails { margin-top: 16px; display: grid; gap: 12px; text-align: left; }
+
+/* ============================================================
+   Durchführungsansicht
+
+   Schmales Fenster, kurze Blicke aus ein bis zwei Metern. Genau ein
+   Element ist das grösste: die Restzeit. Rot hängt ausschliesslich am
+   Verzugswert – der Phasenverlauf färbt nichts mehr ein.
+   ============================================================ */
+.execRoot {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+.execTopbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--board);
+  border-bottom: 1px solid var(--board-edge);
+}
+.execTitleMain { font-size: var(--fs-md); font-weight: var(--fw-bold); color: var(--on-board); line-height: 1.25; }
+.execTitleSub { font-size: var(--fs-xs); color: color-mix(in srgb, var(--on-board) 72%, transparent); margin-top: 2px; }
+.execActions { display: flex; gap: 6px; flex-shrink: 0; }
+.execActions .btn {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--on-board) 38%, transparent);
+  color: var(--on-board);
+  padding: 5px 10px;
+  font-size: var(--fs-sm);
+}
+.execActions .btn:hover { background: color-mix(in srgb, var(--on-board) 14%, transparent); }
+
+/* Fortschritt der ganzen Stunde, Segmentbreite nach geplanter Dauer. */
+.execSegments { display: flex; gap: 2px; height: 8px; background: var(--bg-subtle); flex-shrink: 0; }
+.execSegment { position: relative; background: var(--border-light); overflow: hidden; min-width: 3px; }
+.execSegment.is-current { background: var(--border); }
+.execSegmentFill { height: 100%; background: var(--board); transition: width 240ms linear; }
+
+.execMain { flex: 1; min-height: 0; display: flex; padding: 14px; }
+.execCard {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--board);
+  padding: 14px 16px;
+}
+
+.execPhaseLine { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.execPhaseName { font-size: var(--fs-xl); font-weight: var(--fw-bold); letter-spacing: -0.01em; }
+.execPhaseSocial {
+  font-size: var(--fs-sm); font-weight: var(--fw-medium);
+  border: 1px solid var(--border); padding: 2px 8px; color: var(--text-secondary);
+}
+.execPhaseCount { margin-left: auto; font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Grösstes Element. */
+.execTimer {
+  font-size: clamp(56px, 17vw, 104px);
+  font-weight: var(--fw-bold);
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  margin: 2px 0;
+}
+.execTimer.is-over { color: var(--danger); }
+.execTimer.is-paused { color: var(--muted); }
+
+/* Starkes zweites Element. Nur hier gibt es Farbe für den Zustand. */
+.execVerzug {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.execVerzugWert { font-size: clamp(20px, 5.5vw, 32px); font-weight: var(--fw-bold); letter-spacing: -0.01em; }
+.execVerzugEnde { font-size: var(--fs-md); color: var(--muted); }
+.execVerzug--plan  .execVerzugWert { color: var(--text-secondary); }
+.execVerzug--vor   .execVerzugWert { color: var(--success); }
+.execVerzug--warn  .execVerzugWert { color: var(--warning); }
+.execVerzug--stark .execVerzugWert { color: var(--danger); }
+
+/* Immer sichtbar, gedämpft. */
+.execNext {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+  border-top: 1px solid var(--border-light);
+  border-bottom: 1px solid var(--border-light);
+  padding: 8px 0;
+}
+.execNextLabel { font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.execNextName { font-size: var(--fs-base); font-weight: var(--fw-medium); color: var(--text-secondary); }
+.execNextMeta { font-size: var(--fs-sm); color: var(--muted); }
+
+.execDetails { display: grid; gap: 10px; text-align: left; }
 .execDetailsGrow { flex: 1; min-height: 0; overflow: auto; padding-right: 4px; }
-.execBlock { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; box-shadow: var(--shadow-sm); }
-.execBlockTitle { font-weight: var(--fw-bold); font-size: var(--fs-xs); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
-.execRich { font-size: clamp(18px, 2.2vw, 24px); line-height: 1.5; }
-.execRich p { margin: 0 0 10px 0; }
-.execRich ul, .execRich ol { margin: 0 0 10px 24px; }
-.execNav { display: flex; justify-content: center; gap: 12px; margin-top: auto; padding-top: 16px; border-top: 1px solid var(--border); flex-shrink: 0; }
-.execRoot.dense .execRich { font-size: clamp(16px, 1.8vw, 20px); }
-.execRoot.dense .execPhaseTitle { font-size: clamp(30px, 4.8vw, 56px); }
-.execRoot.dense .execSocialProminent { font-size: clamp(16px, 2vw, 24px); padding: 10px 20px; }
-.execRoot.dense .execCornerTimer { font-size: clamp(42px, 4.8vw, 84px); }
+.execBlock { background: var(--bg-subtle); border: 1px solid var(--border-light); padding: 10px 12px; }
+.execBlockTitle {
+  font-weight: var(--fw-bold); font-size: var(--fs-2xs); color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px;
+}
+.execRich { font-size: var(--fs-base); line-height: 1.5; }
+.execRich p { margin: 0 0 8px 0; }
+.execRich ul, .execRich ol { margin: 0 0 8px 20px; }
+
+.execNav {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); flex-shrink: 0;
+}
+.execAuto { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); cursor: pointer; }
 
 @media (max-width: 768px) {
   .split { grid-template-columns: 1fr; }

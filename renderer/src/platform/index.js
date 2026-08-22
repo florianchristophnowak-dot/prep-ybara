@@ -24,10 +24,19 @@ function hasElectronBridge(){
   return typeof window !== 'undefined' && !!window.api;
 }
 
+/* Wie die Durchführungsansicht in ein Picture-in-Picture-Fenster kommt.
+   Wird vom Renderer nachgereicht, damit dieses Modul nichts über React
+   wissen muss. */
+let mountExecution = null;
+export function setExecutionMounter(fn){ mountExecution = fn; }
+
 /* Zur Laufzeit anhand der Preload-Brücke auswählen. */
 export const platform = hasElectronBridge()
   ? createElectronPlatform(window.api)
-  : createWebPlatform({ appVersion: APP_VERSION });
+  : createWebPlatform({
+      appVersion: APP_VERSION,
+      mountExecution: (wurzel, fenster)=> mountExecution?.(wurzel, fenster),
+    });
 
 /* Was diese Umgebung kann. Die Oberfläche liest hier ab, statt zu raten. */
 export const capabilities = platform.capabilities;

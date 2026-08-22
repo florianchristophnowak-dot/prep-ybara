@@ -249,6 +249,9 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; }
+/* #root muss die Höhe weiterreichen, sonst schrumpft die App auf ihren
+   Inhalt und die Fusszeile rutscht bei kurzen Ansichten nach oben. */
+#root { height: 100%; }
 body {
   margin: 0;
   font-family: var(--font-sans);
@@ -1153,3 +1156,116 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .settingsRow .themeSwitchBtn + .themeSwitchBtn { border-left-color: var(--border); }
 .settingsRow .themeSwitchBtn:hover { background: var(--bg-subtle); }
 .settingsRow .themeSwitchBtn.is-active { background: var(--primary); color: var(--on-primary); }
+
+/* ============================================================
+   Sequenzfortschritt
+   ============================================================ */
+.seqProgress { display: flex; flex-direction: column; gap: 5px; }
+.seqProgressText { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.seqProgressName { font-size: var(--fs-md); font-weight: var(--fw-medium); }
+.seqProgressZahl { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.seqProgressBahn { height: 6px; background: var(--border-light); overflow: hidden; }
+.seqProgressFuellung { height: 100%; transition: width var(--transition); }
+.seqProgress--kompakt .seqProgressName { font-size: var(--fs-sm); }
+.seqProgress--kompakt .seqProgressZahl { font-size: var(--fs-xs); }
+.seqProgress--kompakt .seqProgressBahn { height: 4px; }
+
+/* Heute-Ansicht */
+.todayList { display: flex; flex-direction: column; gap: 8px; }
+.todayLesson {
+  display: flex; align-items: flex-start; gap: 12px; width: 100%;
+  text-align: left; cursor: pointer; padding: 10px 12px;
+  background: var(--card); border: 1px solid var(--border);
+  border-left: 4px solid var(--board);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.todayLesson:hover { background: var(--bg-subtle); border-color: var(--primary); }
+.todaySlot { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: var(--fw-bold); min-width: 22px; }
+.todayMain { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.todayTopic { font-weight: var(--fw-medium); font-size: var(--fs-base); }
+.todayMeta { font-size: var(--fs-sm); color: var(--muted); }
+
+/* ============================================================
+   Kompetenz-Wärmekarte
+   ============================================================ */
+.heatScroll { overflow-x: auto; margin-top: 12px; }
+.heatTable { border-collapse: collapse; width: 100%; min-width: max-content; }
+.heatTable th, .heatTable td { border: 1px solid var(--border-light); }
+.heatRowHead {
+  text-align: left; padding: 8px 12px; font-weight: var(--fw-medium);
+  font-size: var(--fs-md); background: var(--bg-subtle); white-space: nowrap;
+  position: sticky; left: 0; z-index: 1;
+}
+.heatPrimaer { display: block; font-size: var(--fs-2xs); color: var(--muted); font-weight: var(--fw-normal); margin-top: 2px; }
+.heatMonth {
+  padding: 8px 10px; font-size: var(--fs-xs); font-weight: var(--fw-medium);
+  color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;
+  background: var(--bg-subtle); white-space: nowrap;
+}
+.heatCell {
+  position: relative; text-align: center; padding: 10px 12px; min-width: 52px;
+  font-variant-numeric: tabular-nums; font-size: var(--fs-md);
+}
+/* Die Fläche trägt die Intensität, die Zahl bleibt immer lesbar. */
+.heatFill { position: absolute; inset: 0; background: var(--board); pointer-events: none; }
+.heatZahl { position: relative; }
+.heatSum { font-weight: var(--fw-bold); background: var(--bg-subtle); }
+
+/* Wochenabschluss – die einzige Stelle mit der Bildmarke als Illustration. */
+.reviewCard { text-align: center; }
+.reviewArt { width: 72px; height: 72px; opacity: 0.85; margin: 0 auto 10px; display: block; }
+.reviewList { list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.reviewList li { display: flex; align-items: baseline; gap: 10px; justify-content: center; }
+.reviewZahl { font-size: var(--fs-2xl); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; line-height: 1; }
+.reviewText { font-size: var(--fs-base); color: var(--text-secondary); }
+.reviewSeq { border-top: 1px solid var(--border-light); padding-top: 12px; text-align: left; }
+.reviewSeq .tagRow { justify-content: flex-start; margin-top: 6px; }
+
+/* ============================================================
+   Seitenleiste – macht die Ebenen Tag → Woche → Zeitraum → Jahr sichtbar
+   ============================================================ */
+.appBody { flex: 1; min-height: 0; display: flex; }
+.sidebar {
+  width: 168px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-subtle);
+  border-right: 1px solid var(--border);
+  padding: 8px 0;
+  overflow-y: auto;
+}
+.navGroup { display: flex; flex-direction: column; }
+.navGroup--fuss { margin-top: auto; border-top: 1px solid var(--border-light); padding-top: 8px; }
+.navItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+  text-align: left;
+  /* Der Korrekturrand markiert auch hier die aktive Stelle. */
+  border-left: 3px solid transparent;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.navItem:hover { background: var(--border-light); color: var(--text); }
+.navItem.is-active {
+  background: var(--card);
+  color: var(--text);
+  border-left-color: var(--primary);
+  font-weight: var(--fw-bold);
+}
+.navItem svg { flex-shrink: 0; }
+.content { flex: 1; min-width: 0; padding: 20px; overflow: auto; }
+
+/* Schmale Fenster: nur Symbole, damit dem Raster die Breite bleibt. */
+@media (max-width: 900px) {
+  .sidebar { width: 48px; }
+  .navLabel { display: none; }
+  .navItem { justify-content: center; padding: 10px 0; gap: 0; }
+}

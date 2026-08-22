@@ -7,10 +7,15 @@ import helpMd from './assets/HELP.md?raw';
 import platform, { capabilities, platformName } from './platform/index.js';
 import { APP_VERSION } from './version.js';
 import { setupServiceWorker } from './pwa.js';
+import {
+  sequenceProgress, competencyHeatmap, todayOverview, weekSummary,
+} from './insights.js';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronLeft, ChevronRight,
-  ClipboardPaste, Copy, Maximize2, NotebookPen, Palmtree, Pencil, Play, Scissors, Search, Settings, Square, Star, Trash2, X,
+  CalendarCheck, CalendarRange, CircleHelp, ClipboardPaste, Copy, Grid3x3, Library,
+  Maximize2, NotebookPen, Palmtree, Pencil, Play, Rows3, Scissors, Search, Settings,
+  Square, Star, Sun, Trash2, X,
 } from 'lucide-react';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
@@ -1276,8 +1281,12 @@ function PromptDialog({ open, title, label, placeholder, initialValue = '', conf
 }
 
 /* Leerzustand: eine Zeile, was hierhin gehört, und ein Knopf, der genau
-   das beginnt. Die Illustration gibt es bewusst nur an einer einzigen
-   Stelle (Bibliothek) – sonst wird aus dem Muster Dekoration. */
+   das beginnt.
+
+   Die Illustration ist hier bewusst NICHT mehr gesetzt: Phase 6 gibt dem
+   Wochenabschluss den einen Auftritt der Bildmarke. Zwei dekorative
+   Stellen wären eine zu viel – die Möglichkeit bleibt als Eigenschaft
+   erhalten, falls sie einmal woanders gebraucht wird. */
 function EmptyState({ text, actionLabel, onAction, illustration = false }){
   return (
     <div className={`emptyState${illustration ? ' emptyState--art' : ''}`}>
@@ -1415,7 +1424,8 @@ function CommandPalette({ open, commands, onClose }){
    Schulleitung und Datenschutzbeauftragten belegen können, wo die Daten
    liegen. Ein Satz in der Dokumentation reicht dafür nicht.
    ============================================================ */
-function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onImportBackup }){
+function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onImportBackup,
+                        weekReview, onChangeWeekReview }){
   const istBrowser = platformName === 'browser';
   return (
     <div className="card" style={{display:'flex', flexDirection:'column', gap:18}}>
@@ -1431,6 +1441,20 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
         <div className="settingsRow">
           <span>Hell, dunkel oder wie das Betriebssystem</span>
           <ThemeSwitch value={theme} onChange={onChangeTheme} />
+        </div>
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Wochenabschluss</h3>
+        <div className="settingsRow">
+          <span className="settingsText" style={{margin:0}}>
+            Beim Verlassen einer Woche einen kurzen Rückblick zeigen.
+          </span>
+          <label className="row" style={{gap:8, flexShrink:0}}>
+            <input type="checkbox" checked={!!weekReview}
+                   onChange={(e)=>onChangeWeekReview(e.target.checked)} />
+            <span>Anzeigen</span>
+          </label>
         </div>
       </section>
 
@@ -1486,6 +1510,340 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
         </p>
       </section>
     </div>
+  );
+}
+
+/* Sequenzfortschritt: "Le passé composé – Stunde 4 von 9".
+
+   Von allen Anzeigen dieser Ebene die stärkste, weil sie gleichzeitig
+   Orientierung gibt und Fortschritt zeigt. Beides steckt bereits im
+   Datenmodell – die Zuordnung in lesson.sequenceId, die Reihenfolge im
+   Datum. Es kommt kein Feld hinzu.
+
+   Der Balken bewertet nichts: er sagt, wo man steht, nicht ob das gut
+   ist. Deshalb kein Prozentwert und kein Soll-Vergleich. */
+function SequenceProgress({ progress, kompakt = false }){
+  if (!progress || progress.position < 1) return null;
+  const anteil = progress.total > 0 ? progress.position / progress.total : 0;
+  const linie = progress.color ? lineColor(progress.color) : 'var(--board)';
+  return (
+    <div className={`seqProgress${kompakt ? ' seqProgress--kompakt' : ''}`}>
+      <div className="seqProgressText">
+        <span className="seqProgressName">{progress.name}</span>
+        <span className="seqProgressZahl">Stunde {progress.position} von {progress.total}</span>
+      </div>
+      <div className="seqProgressBahn" role="img"
+           aria-label={`${progress.name}: Stunde ${progress.position} von ${progress.total}`}>
+        <div className="seqProgressFuellung"
+             style={{ width: `${Math.round(anteil * 100)}%`, background: linie }} />
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   Heute
+
+   Ersetzt das morgendliche "Wochenraster öffnen, Tag suchen". Zeigt die
+   Stunden des laufenden Tages, Aufsichten und offene To-dos.
+
+   Die bestehende Datenschutzlogik bleibt gewahrt: Von den To-dos steht
+   hier nur die ANZAHL. Der Inhalt erscheint erst, wenn die Liste
+   geöffnet wird – wer mit dem Rechner am Pult steht, soll nicht
+   versehentlich Namen und Vermerke zeigen.
+   ============================================================ */
+function TodayView({ heute, todayISO, getSeqProgress, onOpenLesson, onOpenTodos, onOpenWeek }){
+  const datum = new Date(`${todayISO}T00:00:00`);
+  const wochentag = Number.isNaN(datum.getTime())
+    ? '' : datum.toLocaleDateString('de-DE', { weekday: 'long' });
+
+  return (
+    <div style={{display:'flex', flexDirection:'column', gap:14}}>
+      <div className="card">
+        <div className="row" style={{justifyContent:'space-between', alignItems:'flex-start', gap:12}}>
+          <div>
+            <h2 className="dialogTitle">Heute</h2>
+            <p className="muted small" style={{margin:0}}>
+              {wochentag}, {formatDateDE(todayISO)}
+            </p>
+          </div>
+          <button className="btn" onClick={onOpenWeek}>Zur Woche</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3 className="settingsHeading">Stunden</h3>
+        {heute.stunden.length === 0 ? (
+          <EmptyState
+            text="Für heute ist keine Stunde eingetragen. Im Wochenraster kannst du eine anlegen."
+            actionLabel="Wochenraster öffnen"
+            onAction={onOpenWeek}
+          />
+        ) : (
+          <div className="todayList">
+            {heute.stunden.map((s)=>{
+              const l = s.lesson || {};
+              const p = l.sequenceId ? getSeqProgress?.(l.sequenceId, s.dayIndex, s.slotIndex) : null;
+              const farbe = l.classGroup && l.subject ? null : null;
+              return (
+                <button
+                  key={s.key}
+                  type="button"
+                  className="todayLesson"
+                  onClick={()=>onOpenLesson?.(s.dayIndex, s.slotIndex)}
+                >
+                  <span className="todaySlot">{s.slotIndex + 1}.</span>
+                  <span className="todayMain">
+                    <span className="todayTopic">{String(l.topic || '').trim() || 'Noch kein Thema'}</span>
+                    <span className="todayMeta">
+                      {[l.classGroup, l.subject, l.room].filter(Boolean).join(' · ') || 'Ohne Lerngruppe'}
+                    </span>
+                    {p ? <SequenceProgress progress={p} kompakt /> : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {heute.aufsichten.length ? (
+        <div className="card">
+          <h3 className="settingsHeading">Aufsichten</h3>
+          <div className="tagRow">
+            {heute.aufsichten.map((a)=>(
+              <span key={a.key} className="badge badge--dayoff">{a.title}</span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="card">
+        <h3 className="settingsHeading">To-dos</h3>
+        {(heute.offeneHeute + heute.offeneUeberfaellig) === 0 ? (
+          <p className="settingsText muted" style={{margin:0}}>Für heute steht nichts an.</p>
+        ) : (
+          <>
+            <p className="settingsText" style={{marginBottom:8}}>
+              {heute.offeneHeute > 0
+                ? `${heute.offeneHeute} offene${heute.offeneHeute === 1 ? 's' : ''} To-do${heute.offeneHeute === 1 ? '' : 's'} für heute.`
+                : 'Für heute selbst steht nichts an.'}
+              {heute.offeneUeberfaellig > 0
+                ? ` ${heute.offeneUeberfaellig} mit abgelaufener Frist.`
+                : ''}
+              {' '}Die Inhalte werden aus Datenschutzgründen erst in der Liste angezeigt.
+            </p>
+            <button className="btn primary" onClick={onOpenTodos}>To-dos öffnen</button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   Kompetenz-Wärmekarte
+
+   Verwandelt Pflichtdokumentation in eine Auswertung: welche Kompetenz
+   wurde wie oft und wann bedient. Die Daten liegen bereits vor –
+   competencies je Stunde, eine davon als primäre markiert.
+
+   Bewusst ohne Soll-Vergleich und ohne Lücken-Warnung. Die Karte zeigt
+   die Verteilung; ob sie stimmt, weiss nur die Lehrkraft.
+   ============================================================ */
+function CompetencyHeatmapView({ daten, onBack }){
+  const monatsName = (m)=>{
+    const [j, mo] = String(m).split('-');
+    const d = new Date(Number(j), Number(mo) - 1, 1);
+    return Number.isNaN(d.getTime()) ? m : d.toLocaleDateString('de-DE', { month: 'short' });
+  };
+
+  if (!daten.zeilen.length) {
+    return (
+      <div className="card">
+        <h2 className="dialogTitle">Kompetenzen im Jahr</h2>
+        <EmptyState
+          text="Sobald du Stunden Kompetenzen zuordnest, entsteht hier eine Übersicht darüber, welche Kompetenz du wann und wie oft bedient hast."
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="card">
+      <div className="row" style={{justifyContent:'space-between', alignItems:'flex-start', gap:12}}>
+        <div>
+          <h2 className="dialogTitle">Kompetenzen im Jahr</h2>
+          <p className="muted small" style={{margin:0}}>
+            Wie oft welche Kompetenz in welchem Monat vorkam. {daten.gesamt} Zuordnungen insgesamt.
+          </p>
+        </div>
+      </div>
+
+      <div className="heatScroll">
+        <table className="heatTable">
+          <thead>
+            <tr>
+              <th scope="col" className="heatRowHead">Kompetenz</th>
+              {daten.monate.map(m => <th key={m} scope="col" className="heatMonth">{monatsName(m)}</th>)}
+              <th scope="col" className="heatMonth">Summe</th>
+            </tr>
+          </thead>
+          <tbody>
+            {daten.zeilen.map((z)=>(
+              <tr key={z.name}>
+                <th scope="row" className="heatRowHead">
+                  {z.name}
+                  {z.primaerSumme > 0 ? (
+                    <span className="heatPrimaer" title={`${z.primaerSumme}× als primäre Kompetenz`}>
+                      {z.primaerSumme}× primär
+                    </span>
+                  ) : null}
+                </th>
+                {z.zellen.map((c, i)=>{
+                  const anteil = daten.hoechst > 0 ? c.anzahl / daten.hoechst : 0;
+                  return (
+                    <td key={i} className="heatCell"
+                        title={`${daten.monate[i]}: ${c.anzahl}× (davon ${c.primaer}× primär)`}>
+                      {/* Deckkraft gedeckelt: darüber wäre die Zahl auf der
+                          Fläche nicht mehr mit 4.5:1 lesbar (nachgerechnet). */}
+                      <span className="heatFill" style={{ opacity: c.anzahl ? 0.12 + anteil * 0.48 : 0 }} />
+                      <span className="heatZahl">{c.anzahl || ''}</span>
+                    </td>
+                  );
+                })}
+                <td className="heatCell heatSum">{z.summe}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   Wochenabschluss
+
+   Ein ruhiger Rückblick statt eines leeren Rasters. Ausdrücklich eine
+   Zusammenfassung, keine Bewertung: kein Prozentwert, kein Vergleich mit
+   einem Soll, kein Pokal. Die Zahlen sagen, was war – nicht ob es genug
+   war. Deshalb steht dort "4 von 5 Plätzen mit einem Thema" und nicht
+   "80 % erledigt".
+
+   Hier darf das Capybara einmal auftauchen – und genau einmal in der
+   ganzen Anwendung.
+   ============================================================ */
+function WeekReview({ offen, zusammenfassung, weekLabel, onClose, onDisable }){
+  if (!offen || !zusammenfassung) return null;
+  const z = zusammenfassung;
+  return (
+    <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modalCard reviewCard" role="dialog" aria-modal="true" aria-label="Wochenabschluss"
+           onKeyDown={(e)=>{ if (e.key === 'Escape') onClose(); }}>
+        <img className="reviewArt" src={logo} alt="" aria-hidden="true" />
+        <h3 className="dialogTitle">Woche abgeschlossen</h3>
+        <p className="muted small" style={{margin:'0 0 12px'}}>{weekLabel}</p>
+
+        <ul className="reviewList">
+          <li>
+            <span className="reviewZahl">{z.geplant}</span>
+            <span className="reviewText">
+              {z.geplant === 1 ? 'Stunde mit Thema' : 'Stunden mit Thema'}
+              {z.gesamt > z.geplant ? ` · ${z.gesamt - z.geplant} noch ohne` : ''}
+            </span>
+          </li>
+          {z.lerngruppen > 0 ? (
+            <li>
+              <span className="reviewZahl">{z.lerngruppen}</span>
+              <span className="reviewText">{z.lerngruppen === 1 ? 'Lerngruppe' : 'Lerngruppen'}</span>
+            </li>
+          ) : null}
+          {z.erledigteTodos > 0 ? (
+            <li>
+              <span className="reviewZahl">{z.erledigteTodos}</span>
+              <span className="reviewText">{z.erledigteTodos === 1 ? 'To-do erledigt' : 'To-dos erledigt'}</span>
+            </li>
+          ) : null}
+        </ul>
+
+        {z.sequenzen.length ? (
+          <div className="reviewSeq">
+            <div className="settingsHeading">Fortgesetzte Sequenzen</div>
+            <div className="tagRow">
+              {z.sequenzen.map((sq)=>(
+                <span key={sq.name} className="pill"
+                      style={{borderColor: lineColor(sq.color), color: lineColor(sq.color)}}>
+                  {sq.name} · {sq.anzahl}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="dialogActions">
+          <button type="button" className="btn" onClick={onDisable}>Nicht mehr zeigen</button>
+          <button type="button" className="btn primary" onClick={onClose}>Schließen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================================================
+   Seitenleiste
+
+   Entscheidung: ja. Zwei Gründe.
+
+   Erstens war die Kopfleiste nachweislich überfüllt – in Phase 1 brach
+   der Titel um, bis white-space: nowrap gesetzt wurde. Diese Phase legt
+   zwei weitere Ansichten dazu; sie in dieselbe Zeile zu drängen hätte
+   die Leiste endgültig unlesbar gemacht.
+
+   Zweitens macht sie die Ebenen sichtbar, um die es fachlich geht:
+   Tag → Woche → Zeitraum → Jahr. Das Badge in der Kopfleiste nannte nur
+   die aktuelle Ansicht, nicht ihren Platz in dieser Folge.
+
+   Schmal gehalten und ab 900px auf Symbole reduziert, damit dem
+   Wochenraster mit seinen fünf Spalten die Breite bleibt.
+   ============================================================ */
+const NAV_EBENEN = [
+  { id: 'today',        label: 'Heute',       Icon: Sun },
+  { id: 'week',         label: 'Woche',       Icon: CalendarDays },
+  { id: 'macro',        label: 'Makro',       Icon: Rows3 },
+  { id: 'year',         label: 'Jahr',        Icon: CalendarRange },
+  { id: 'competencies', label: 'Kompetenzen', Icon: Grid3x3 },
+  { id: 'library',      label: 'Bibliothek',  Icon: Library },
+  { id: 'calendar',     label: 'Kalender',    Icon: CalendarCheck },
+];
+const NAV_FUSS = [
+  { id: 'settings', label: 'Einstellungen', Icon: Settings },
+  { id: 'help',     label: 'Hilfe',         Icon: CircleHelp },
+];
+
+function Sidebar({ aktiv, onNavigate }){
+  const eintrag = ({ id, label, Icon })=>(
+    <button
+      key={id}
+      type="button"
+      className={`navItem${aktiv === id ? ' is-active' : ''}`}
+      aria-current={aktiv === id ? 'page' : undefined}
+      onClick={()=>onNavigate(id)}
+      title={label}
+    >
+      <Icon {...ICON} />
+      <span className="navLabel">{label}</span>
+    </button>
+  );
+  return (
+    <nav className="sidebar" aria-label="Ansichten">
+      <div className="navGroup">{NAV_EBENEN.map(eintrag)}</div>
+      <div className="navGroup navGroup--fuss">{NAV_FUSS.map(eintrag)}</div>
+    </nav>
   );
 }
 
@@ -1670,6 +2028,8 @@ db.todos = (Array.isArray(db.todos) ? db.todos : []).map(t => {
   db.appSettings.fileCopyOptIn = Boolean(db.appSettings.fileCopyOptIn);
   // Darstellung: hell | dunkel | system. Unbekanntes fällt auf System zurück.
   if (!THEME_CHOICES.includes(db.appSettings.theme)) db.appSettings.theme = 'system';
+  // Wochenabschluss: standardmässig an, dauerhaft abschaltbar.
+  if (typeof db.appSettings.weekReview !== 'boolean') db.appSettings.weekReview = true;
 
 
   return db;
@@ -2115,6 +2475,26 @@ const classGroupSuggestions = useMemo(()=>{
     return ()=> window.removeEventListener('keydown', onKey);
   }, [undoLast]);
 
+  /* ---- Wochenabschluss ------------------------------------------------
+     Erscheint beim Verlassen der Woche und freitags – höchstens einmal je
+     Woche und Sitzung. Der Merker liegt nur im Speicher: er soll nicht in
+     die Datenbank, sondern beim nächsten Start wieder greifen. */
+  const [reviewWeek, setReviewWeek] = useState(null);
+  const reviewGezeigt = useRef(new Set());
+  const letzteWoche = useRef(view.weekStart);
+  useEffect(()=>{
+    const vorher = letzteWoche.current;
+    letzteWoche.current = view.weekStart;
+    if (!db || appSettings?.weekReview === false) return;
+    // Beim Verlassen der Wochenansicht
+    if (view.name === 'week') return;
+    if (!vorher || reviewGezeigt.current.has(vorher)) return;
+    const z = weekSummary(db, vorher);
+    if (!z.gesamt) return;                     // leere Woche: nichts zu berichten
+    reviewGezeigt.current.add(vorher);
+    setReviewWeek(vorher);
+  }, [view.name]);
+
   /* ---- Befehlspalette ------------------------------------------------- */
   const [paletteOpen, setPaletteOpen] = useState(false);
   useEffect(()=>{
@@ -2132,9 +2512,11 @@ const classGroupSuggestions = useMemo(()=>{
     const ws = view.weekStart || toISODate(startOfWeekMonday(new Date()));
     const go = (v)=>()=> setView(v);
     const cmds = [
+      { id:'v-today',    group:'Ansicht', label:'Heute',               run: go({ name:'today', weekStart: ws }) },
       { id:'v-week',     group:'Ansicht', label:'Wochenraster',        run: go({ name:'week', weekStart: ws }) },
       { id:'v-macro',    group:'Ansicht', label:'Makro-Plan',          run: go({ name:'macro', weekStart: ws, startISO: ws, rangeDays: 28 }) },
       { id:'v-year',     group:'Ansicht', label:'Jahresgrobplanung',   run: go({ name:'year', weekStart: ws, focusISO: ws }) },
+      { id:'v-comp',     group:'Ansicht', label:'Kompetenzen im Jahr', run: go({ name:'competencies', weekStart: ws }) },
       { id:'v-library',  group:'Ansicht', label:'Bibliothek',          run: go({ name:'library', weekStart: ws }) },
       { id:'v-calendar', group:'Ansicht', label:'Schulkalender',       run: go({ name:'calendar', weekStart: ws }) },
       { id:'v-todos',    group:'Ansicht', label:'To-dos',              run: go({ name:'todos', weekStart: ws }) },
@@ -2222,6 +2604,8 @@ const classGroupSuggestions = useMemo(()=>{
         return `${formatDateDE(view.startISO)} – ${formatDateDE(toISODate(addDays(fromISODate(view.startISO), (view.rangeDays || 28) - 1)))}`;
       case 'year':     return 'Jahresgrobplanung';
       case 'library':  return 'Bibliothek';
+      case 'today':    return 'Heute';
+      case 'competencies': return 'Kompetenzen';
       case 'settings': return 'Einstellungen';
       case 'help':     return 'Hilfe';
       case 'week':     return '';
@@ -3364,6 +3748,25 @@ const doExportDocx = async (html, suggestedName) => {
         />
       );
     }
+    if (view.name === 'today') {
+      return (
+        <TodayView
+          heute={todayOverview(db, todayISO, toISODate(startOfWeekMonday(fromISODate(todayISO))))}
+          todayISO={todayISO}
+          getSeqProgress={(sequenceId, dayIndex, slotIndex)=> sequenceProgress(db, sequenceId, {
+            weekStart: toISODate(startOfWeekMonday(fromISODate(todayISO))), dayIndex, slotIndex,
+          })}
+          onOpenLesson={(dayIndex, slotIndex)=> setView({
+            name:'lesson', weekStart: toISODate(startOfWeekMonday(fromISODate(todayISO))), dayIndex, slotIndex,
+          })}
+          onOpenTodos={()=> setView({ name:'todos', weekStart: view.weekStart })}
+          onOpenWeek={()=> setView({ name:'week', weekStart: toISODate(startOfWeekMonday(fromISODate(todayISO))) })}
+        />
+      );
+    }
+    if (view.name === 'competencies') {
+      return <CompetencyHeatmapView daten={competencyHeatmap(db)} />;
+    }
     if (view.name === 'settings') {
       return (
         <SettingsView
@@ -3372,6 +3775,8 @@ const doExportDocx = async (html, suggestedName) => {
           storageState={storageState}
           onExportBackup={exportBackup}
           onImportBackup={importBackup}
+          weekReview={appSettings?.weekReview !== false}
+          onChangeWeekReview={(v)=>updateAppSettings({ weekReview: !!v })}
         />
       );
     }
@@ -3431,6 +3836,9 @@ const doExportDocx = async (html, suggestedName) => {
           onRequestCreateSequence={openCreateSequenceModal}
         onRememberCompetency={rememberCompetency}
         onUpdateLesson={(nextLesson)=>updateLessonAt(view.weekStart, view.dayIndex, view.slotIndex, nextLesson)}
+        getSeqProgress={(sequenceId)=> sequenceProgress(db, sequenceId, {
+          weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+        })}
         onRememberSocialForm={rememberSocialForm}
         onRememberPhaseName={rememberPhaseName}
         onHideSocialFormSuggestion={(label)=>hideSuggestion('socialForm', label)}
@@ -3502,10 +3910,6 @@ const doExportDocx = async (html, suggestedName) => {
           ) : null}
           {!isHelpOnlyWindow && view.name === 'week' && (
             <>
-              <button className="btn" onClick={()=>setView({ name:'year', weekStart: view.weekStart, focusISO: view.weekStart })}>Jahresgrobplanung</button>
-              <button className="btn" onClick={()=>setView({ name:'macro', weekStart: view.weekStart, startISO: view.weekStart, rangeDays: 28 })}>Makro-Plan</button>
-              <button className="btn" onClick={()=>setView({ name:'library', weekStart: view.weekStart })}>Bibliothek</button>
-              <button className="btn" onClick={()=>setView({ name:'calendar', weekStart: view.weekStart })}>Schulkalender</button>
               <div className="weeknav" style={{display:'flex', gap:6, alignItems:'center'}}>
                 <button className="btn" title="Vorherige Woche" aria-label="Vorherige Woche" onClick={()=>goWeekDelta(-1)}><ChevronLeft {...ICON} /></button>
                 <input className="input" style={{width:170}} type="date" min={minDate} max={maxDate} value={selectedDate} onChange={(e)=>onSelectWeekDate(e.target.value)} />
@@ -3521,14 +3925,6 @@ const doExportDocx = async (html, suggestedName) => {
             </>
           )}
           {!isExecutionOnlyWindow && (
-            <button
-              className="btn"
-              title="Einstellungen"
-              aria-label="Einstellungen"
-              onClick={()=>setView({ name:'settings', weekStart: view.weekStart })}
-            ><Settings {...ICON} /></button>
-          )}
-          {!isExecutionOnlyWindow && (
             <ThemeSwitch
               value={themeChoice}
               onChange={(next)=>updateAppSettings({ theme: next })}
@@ -3537,8 +3933,21 @@ const doExportDocx = async (html, suggestedName) => {
         </div>
       </div>
 
-      <div className="content">
-        {mainContent}
+      <div className="appBody">
+        {!isHelpOnlyWindow ? (
+          <Sidebar
+            aktiv={view.name}
+            onNavigate={(ziel)=>{
+              const ws = view.weekStart;
+              if (ziel === 'macro') setView({ name:'macro', weekStart: ws, startISO: ws, rangeDays: 28 });
+              else if (ziel === 'year') setView({ name:'year', weekStart: ws, focusISO: ws });
+              else setView({ name: ziel, weekStart: ws });
+            }}
+          />
+        ) : null}
+        <div className="content">
+          {mainContent}
+        </div>
       </div>
 
       <div className="appFooter">
@@ -3549,6 +3958,14 @@ const doExportDocx = async (html, suggestedName) => {
       <SplashOverlay visible={splashVisible} />
       <EasterEggOverlay visible={easterEggVisible} />
       <ToastHost toasts={toasts} onDismiss={dismissToast} />
+      <WeekReview
+        offen={!!reviewWeek}
+        weekLabel={reviewWeek ? formatWeekLabel(reviewWeek) : ''}
+        zusammenfassung={reviewWeek && db ? weekSummary(db, reviewWeek) : null}
+        onClose={()=>setReviewWeek(null)}
+        onDisable={()=>{ updateAppSettings({ weekReview: false }); setReviewWeek(null);
+          showToast('Wochenabschluss abgeschaltet. In den Einstellungen wieder einschaltbar.'); }}
+      />
       <CommandPalette
         open={paletteOpen}
         commands={paletteCommands}
@@ -4446,6 +4863,7 @@ function LessonView({
   lesson,
   exists,
   sequences,
+  getSeqProgress,
   appSettings,
   onUpdateAppSettings,
   schoolCalendar,
@@ -4969,6 +5387,12 @@ const exportDocx = () => {
               return id;
             }}
           />
+          {(() => {
+            // Folgt der im Entwurf gewählten Sequenz, nicht der gespeicherten –
+            // sonst hinkte die Anzeige beim Umstellen hinterher.
+            const p = local.sequenceId ? getSeqProgress?.(local.sequenceId) : null;
+            return p ? <div style={{marginTop:8}}><SequenceProgress progress={p} /></div> : null;
+          })()}
         </div>
         <div className="grow">
           <label className="small muted">Primäre Kompetenz</label>
@@ -6147,7 +6571,6 @@ function SequenceLibraryView({
       <div className="templateGrid">
         {list.length === 0 ? (
           <EmptyState
-            illustration
             text="Vorlagen sind Sequenzen, die du wiederverwenden kannst – einmal geplant, in jedem Jahrgang wieder einsetzbar. Lege im Makro-Plan eine Sequenz an und speichere sie als Vorlage."
           />
         ) : list.map(t => (

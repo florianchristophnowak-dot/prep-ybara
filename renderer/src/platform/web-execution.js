@@ -1,16 +1,14 @@
 /* ============================================================
    Durchführungsfenster im Browser
 
-   Zwei Wege, beide mit demselben Ziel: ein schmales Fenster, das im
-   Vordergrund bleibt, während daneben ein Tafelbild, ein PDF oder die
-   Wochenübersicht offen ist.
+   Zwei Wege, beide mit demselben Ziel: ein eigenes Fenster in
+   Präsentationsgrösse, wie es die Desktop-Fassung öffnet.
 
    1. Document Picture-in-Picture (Chromium): ein echtes, immer
       obenauf liegendes Fenster. Die Ansicht wird dort hineingehängt,
       die Stilvorlagen werden mitkopiert.
-   2. Sonst window.open() mit kompakter Grösse. Das ist ein eigener
-      JavaScript-Kontext, deshalb läuft die Übergabe über einen
-      BroadcastChannel.
+   2. Sonst window.open(). Das ist ein eigener JavaScript-Kontext,
+      deshalb läuft die Übergabe über einen BroadcastChannel.
    ============================================================ */
 
 const CHANNEL = 'prepybara-execution';
@@ -71,7 +69,7 @@ export function createExecutionBridge({ onMount } = {}){
     if (hasDocumentPip() && typeof onMount === 'function') {
       try {
         pipFenster = await window.documentPictureInPicture.requestWindow({
-          width: 460, height: 720,
+          width: 1100, height: 720,
         });
         stileKopieren(pipFenster.document);
         pipFenster.document.title = 'Prép-ybara – Durchführung';
@@ -88,7 +86,7 @@ export function createExecutionBridge({ onMount } = {}){
     const url = new URL(window.location.href);
     url.searchParams.set('view', 'execution');
     const w = window.open(url.toString(), 'prepybara-durchfuehrung',
-      'popup=yes,width=460,height=720,menubar=no,toolbar=no,location=no,status=no');
+      'popup=yes,width=1100,height=720,menubar=no,toolbar=no,location=no,status=no');
     if (!w) return { ok: false, error: 'Das Fenster wurde vom Browser blockiert.' };
     // Der Kanal beantwortet die Anfrage des neuen Fensters.
     return { ok: true, art: 'fenster' };

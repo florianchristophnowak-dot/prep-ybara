@@ -215,6 +215,20 @@ function lineColor(hex, dark = isDarkMode()){
                   flat ? NEUTRAL_HUE : c.H);
 }
 
+/* Schriftfarbe. Eine Linie darf kräftig sein, Text muss lesbar sein –
+   dafür reicht die Linienhelligkeit nicht. Die Werte sind gegen die
+   tatsächlich vorkommenden Flächen gerechnet (Karte, App-Grund, getönte
+   Wochenzelle, Jahresbalken) und liegen im schlechtesten Farbton bei
+   5,1:1 hell und 5,7:1 dunkel. */
+function textColor(hex, dark = isDarkMode()){
+  const c = hexToLch(hex);
+  if (!c) return 'var(--text)';
+  const flat = c.C < ACHROMATIC;
+  return lchToHex(dark ? 0.760 : 0.480,
+                  flat ? 0.010 : Math.min(c.C, 0.120),
+                  flat ? NEUTRAL_HUE : c.H);
+}
+
 /* Die eine Palette. Mittlere Helligkeit, damit sich daraus sowohl
    Pastellflächen als auch kräftige Linien ableiten lassen. */
 const PALETTE = [
@@ -3912,7 +3926,7 @@ const doExportDocx = async (html, suggestedName) => {
           ) : null}
           <img className="logo" src={logo} alt="Prép-ybara Logo" />
           <h1>Prép-ybara</h1>
-          <span className="badge">{viewBadgeLabel}</span>
+          {viewBadgeLabel ? <span className="badge">{viewBadgeLabel}</span> : null}
         </div>
 
         <div className="right">
@@ -3934,12 +3948,6 @@ const doExportDocx = async (html, suggestedName) => {
                 </>
               ) : null}
             </>
-          )}
-          {!isExecutionOnlyWindow && (
-            <ThemeSwitch
-              value={themeChoice}
-              onChange={(next)=>updateAppSettings({ theme: next })}
-            />
           )}
         </div>
       </div>
@@ -4412,7 +4420,7 @@ const exportWeekDocx = () => {
                     ) : null}
                     <div className="title">{title || 'Planen…'}</div>
                     <div className="sub">{sub}</div>
-                    {seq ? <span className="badge" style={{borderColor: seq.color, color: seq.color}}>Sequenz: {seq.name}</span> : null}
+                    {seq ? <span className="badge" style={{borderColor: lineColor(seq.color), color: textColor(seq.color)}}>Sequenz: {seq.name}</span> : null}
                     {l?.topic ? <span className="badge">Thema: {l.topic}</span> : <span className="badge">Noch kein Thema</span>}
                   </div>
                 );
@@ -5290,8 +5298,8 @@ const exportDocx = () => {
           <div className="muted small">{lessonTitle}</div>
           {(dayInfo.vac || dayInfo.fd || (dayInfo.evs && dayInfo.evs.length)) ? (
             <div className="row wrap" style={{gap:6, marginTop:6}}>
-              {dayInfo.vac ? <span className="badge badge--vacation"><Palmtree {...ICON_SM} /> Ferien: {dayInfo.vac.name || ''}</span> : null}
-              {dayInfo.fd ? <span className="badge badge--dayoff"><Ban {...ICON_SM} /> Schulfrei: {dayInfo.fd.name || ''}</span> : null}
+              {dayInfo.vac ? <span className="badge badge--vacation" title={`Ferien: ${dayInfo.vac.name || ''}`}><Palmtree {...ICON_SM} /> Ferien: {dayInfo.vac.name || ''}</span> : null}
+              {dayInfo.fd ? <span className="badge badge--dayoff" title={`Schulfrei: ${dayInfo.fd.name || ''}`}><Ban {...ICON_SM} /> Schulfrei: {dayInfo.fd.name || ''}</span> : null}
               {(dayInfo.evs || []).slice(0,2).map(ev => (
                 <span key={ev.id} className="badge"><CalendarDays {...ICON_SM} /> {ev.name || ev.summary || 'Termin'}</span>
               ))}
@@ -6333,7 +6341,7 @@ function YearPlanView({
                       >
                         <div className="yearPlanBarHandle yearPlanBarHandle--left" onMouseDown={(e)=>onMouseDownBar(e, b, 'resize-left')} />
                         <div className="yearPlanBarHandle yearPlanBarHandle--right" onMouseDown={(e)=>onMouseDownBar(e, b, 'resize-right')} />
-                        <div className="yearPlanBarTitle" style={{color: b.color}}>
+                        <div className="yearPlanBarTitle" style={{color: textColor(b.color)}}>
                           <span className="yearPlanDot" style={{background:b.color}} />
                           {b.title || 'Ohne Titel'}
                         </div>

@@ -4487,10 +4487,6 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
     onUpdate((prev)=>({ ...prev, schoolYear: { ...(prev.schoolYear||{startISO:'', endISO:''}), ...patch } }));
   };
 
-  const vacNameRef = useRef(null);
-  const freeNameRef = useRef(null);
-  const evNameRef = useRef(null);
-
   const addVacation = () => {
     const name = (newVac.name || '').trim() || 'Ferien';
     let startISO = (newVac.startISO || '').trim();
@@ -4714,8 +4710,6 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
           {vacations.length === 0 ? (
             <EmptyState
               text="Hier stehen die Ferienzeiten deines Bundeslandes. Eingetragene Ferien werden im Wochenraster und im Makro-Plan gekennzeichnet."
-              actionLabel="Ferien eintragen"
-              onAction={()=>vacNameRef.current?.focus()}
             />
           ) : vacations.map(v => (
             <div key={v.id} className="calendarRow">
@@ -4744,8 +4738,6 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
           {freeDays.length === 0 ? (
             <EmptyState
               text="Einzelne unterrichtsfreie Tage – bewegliche Ferientage, Feiertage, pädagogische Tage."
-              actionLabel="Schulfreien Tag eintragen"
-              onAction={()=>freeNameRef.current?.focus()}
             />
           ) : freeDays.map(f => (
             <div key={f.id} className="calendarRow2">
@@ -4775,8 +4767,6 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
           {events.length === 0 ? (
             <EmptyState
               text="Termine wie Elternabende, Konferenzen oder Klassenfahrten. Sie erscheinen als Hinweis im Wochenraster."
-              actionLabel="Termin eintragen"
-              onAction={()=>evNameRef.current?.focus()}
             />
           ) : events.map(ev => (
             <div key={ev.id} className="calendarRow3">
@@ -5584,8 +5574,6 @@ const exportDocx = () => {
               {lessonLinks.length === 0 ? (
                 <EmptyState
                   text="Verweise auf Material im Netz oder auf Ablagen – sie bleiben an dieser Stunde gespeichert."
-                  actionLabel="Link hinzufügen"
-                  onAction={addLink}
                 />
               ) : (
                 <div style={{display:'flex', flexDirection:'column', gap:8}}>
@@ -5671,8 +5659,6 @@ const exportDocx = () => {
             {lessonFiles.length === 0 ? (
               <EmptyState
                 text="Arbeitsblätter, Folien oder Hörtexte, die zu dieser Stunde gehören."
-                actionLabel="Datei hinzufügen"
-                onAction={addLessonFiles}
               />
             ) : (
               <div style={{display:'flex', flexDirection:'column', gap:8}}>
@@ -6938,8 +6924,6 @@ function SequenceManager({
               {seqFiles.length === 0 ? (
                 <EmptyState
                   text="Material, das für die ganze Sequenz gilt – nicht nur für eine einzelne Stunde."
-                  actionLabel="Dateien hinzufügen"
-                  onAction={addSeqFiles}
                 />
               ) : (
                 <div style={{display:'flex', flexDirection:'column', gap:8}}>
@@ -6974,8 +6958,6 @@ function SequenceManager({
           {list.length === 0 ? (
             <EmptyState
               text="Eine Sequenz fasst die Stunden zu einem Thema zusammen und zeigt dir, wo du darin stehst."
-              actionLabel="Sequenz anlegen"
-              onAction={()=>newNameRef.current?.focus()}
             />
           ) : list.map(s => (
             <div key={s.id} className="seqRow">
@@ -7190,8 +7172,7 @@ function TypeaheadInput({
   placeholder,
   autoFocus,
   wrapStyle,
-  inputStyle,
-  inputRef
+  inputStyle
 }){
   const closeTimer = useRef(null);
   const [open, setOpen] = useState(false);
@@ -7234,7 +7215,6 @@ function TypeaheadInput({
   return (
     <div className="typeaheadWrap" style={wrapStyle}>
       <input
-        ref={inputRef}
         className="input"
         style={inputStyle}
         autoFocus={autoFocus}
@@ -7498,7 +7478,6 @@ function CompetencyPrimaryInput({ value, suggestions, onChange, onCommit, onHide
 
 
 function CompetencyEditor({ competencies, primary, suggestions, onChange, onRemember, onHideSuggestion }){
-  const competencyInputRef = useRef(null);
   const [draft, setDraft] = useState('');
   const id = useMemo(()=> `ct-${Math.random().toString(16).slice(2)}`, []);
 
@@ -7539,7 +7518,6 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
       <div className="row wrap" style={{gap:8}}>
         <div style={{flex:1}}>
           <TypeaheadInput
-            inputRef={competencyInputRef}
             value={draft}
             suggestions={suggestions}
             onChange={setDraft}
@@ -7559,8 +7537,6 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
         {(competencies || []).length === 0 ? (
           <EmptyState
             text="Welche Kompetenzen diese Stunde bedient. Eine davon lässt sich als primär markieren – das taucht später in der Jahresübersicht auf."
-            actionLabel="Kompetenz hinzufügen"
-            onAction={()=>competencyInputRef.current?.focus()}
           />
         ) : (
           (competencies || []).map((c)=>(

@@ -258,15 +258,42 @@ function hexToRgba(hex, alpha){
 }
 
 
-function SplashOverlay({ visible }){
+/* onDismiss wird nur beim Wiederholen gesetzt. Beim Start soll das Bild
+   seine drei Sekunden stehen; wer es selbst aufruft, will es auch selbst
+   wieder wegklicken können. */
+function SplashOverlay({ visible, onDismiss = null }){
   return (
-    <div className={`splashOverlay ${visible ? '' : 'splashOverlay--hide'}`} aria-hidden={!visible}>
+    <div
+      className={`splashOverlay${visible ? '' : ' splashOverlay--hide'}${onDismiss ? ' splashOverlay--dismissable' : ''}`}
+      aria-hidden={!visible}
+      onClick={onDismiss || undefined}
+    >
       <div className="splashCard">
         <img className="splashLogo" src={logo} alt="Prép-ybara" />
         <div className="splashTitle">Prép-ybara</div>
         <div className="splashSubtitle">Unterrichtsvorbereitung, entspannt.</div>
       </div>
     </div>
+  );
+}
+
+/* Die Bildmarke in der Kopfleiste.
+
+   Sie sah bisher nach etwas aus, das man anfassen kann, tat beim Klick
+   aber nichts. Statt die Andeutung zu entfernen, löst sie jetzt ein, was
+   sie verspricht: das Startbild noch einmal. Als echter Knopf, damit sie
+   auch mit der Tastatur erreichbar ist und angesagt wird. */
+function LogoButton({ onClick }){
+  return (
+    <button
+      type="button"
+      className="logoBtn"
+      onClick={onClick}
+      title="Startbild noch einmal zeigen"
+      aria-label="Startbild noch einmal zeigen"
+    >
+      <img className="logo" src={logo} alt="" aria-hidden="true" />
+    </button>
   );
 }
 
@@ -1998,6 +2025,22 @@ export default function App(){
   // These drafts are NOT persisted until the user actually changes something.
   const draftLessonCacheRef = useRef(new Map());
 
+  /* Eigener Zustand, bewusst nicht splashVisible wiederverwendet: an
+     dessen Ende hängen der To-do-Hinweis und die Schuljahresabfrage.
+     Ein wiederholtes Startbild darf diese Abläufe nicht anstossen. */
+  const [splashReplay, setSplashReplay] = useState(false);
+  const splashReplayTimer = useRef(null);
+  const versteckeSplashReplay = ()=>{
+    if (splashReplayTimer.current) { clearTimeout(splashReplayTimer.current); splashReplayTimer.current = null; }
+    setSplashReplay(false);
+  };
+  const zeigeSplashReplay = ()=>{
+    if (splashReplayTimer.current) clearTimeout(splashReplayTimer.current);
+    setSplashReplay(true);
+    splashReplayTimer.current = setTimeout(()=>{ splashReplayTimer.current = null; setSplashReplay(false); }, 1800);
+  };
+  useEffect(()=>()=>{ if (splashReplayTimer.current) clearTimeout(splashReplayTimer.current); }, []);
+
   const triggerEasterEgg = ()=>{
     try {
       if (easterEggTimer.current) clearTimeout(easterEggTimer.current);
@@ -2614,7 +2657,7 @@ useEffect(()=>{
     return <div className="app">
       <div className="topbar">
         <div className="left">
-          <img className="logo" src={logo} alt="Prép-ybara Logo" />
+          <LogoButton onClick={zeigeSplashReplay} />
           <h1>Prép-ybara</h1>
         </div>
       </div>
@@ -2623,7 +2666,10 @@ useEffect(()=>{
         <span>Prép-ybara, Version {APP_VERSION}</span>
         <span>© Florian Nowak</span>
       </div>
-      <SplashOverlay visible={splashVisible} />
+      <SplashOverlay
+        visible={splashVisible || splashReplay}
+        onDismiss={(splashReplay && !splashVisible) ? versteckeSplashReplay : null}
+      />
 	      <EasterEggOverlay visible={easterEggVisible} />
       <TodoReminderOverlay
         visible={todoReminderVisible}
@@ -3805,7 +3851,7 @@ const doExportDocx = async (html, suggestedName) => {
               }}
             ><ArrowLeft {...ICON} /> Zurück</button>
           ) : null}
-          <img className="logo" src={logo} alt="Prép-ybara Logo" />
+          <LogoButton onClick={zeigeSplashReplay} />
           <h1>Prép-ybara</h1>
           {viewBadgeLabel ? <span className="badge">{viewBadgeLabel}</span> : null}
         </div>
@@ -3855,7 +3901,10 @@ const doExportDocx = async (html, suggestedName) => {
         <span>© Florian Nowak</span>
       </div>
 
-      <SplashOverlay visible={splashVisible} />
+      <SplashOverlay
+        visible={splashVisible || splashReplay}
+        onDismiss={(splashReplay && !splashVisible) ? versteckeSplashReplay : null}
+      />
       <EasterEggOverlay visible={easterEggVisible} />
       <ToastHost toasts={toasts} onDismiss={dismissToast} />
       <WeekReview

@@ -287,7 +287,22 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .topbar .right { display: flex; gap: 8px; align-items: center; }
 /* Die Bildmarke ist rund und bringt ihren eigenen Rand mit. Ein Kästchen
    darum herum wäre ein zweiter, widersprechender Rahmen. */
-.logo { width: 40px; height: 40px; border: none; transition: transform var(--transition); }
+/* Die Marke sitzt in einem Knopf, der selbst nichts zeichnet – sichtbar
+   ist nur das Bild. Der Fokusring folgt der runden Form. */
+.logoBtn {
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  line-height: 0;
+  display: inline-flex;
+  cursor: pointer;
+  border-radius: var(--radius-dot);
+  flex-shrink: 0;
+}
+.logo { width: 40px; height: 40px; border: none; display: block; transition: transform var(--transition); }
+.logoBtn:hover .logo { transform: scale(1.06); }
+.logoBtn:active .logo { transform: scale(0.97); }
 
 .splashOverlay {
   position: fixed;
@@ -302,6 +317,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
   transition: opacity 400ms ease, transform 400ms ease;
 }
 .splashOverlay--hide { opacity: 0; pointer-events: none; transform: scale(1.02); }
+/* Nur beim Wiederholen: ein Klick irgendwohin schliesst es. */
+.splashOverlay--dismissable { cursor: pointer; }
 .splashCard {
   display: flex;
   flex-direction: column;

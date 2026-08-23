@@ -10,6 +10,7 @@
    ============================================================ */
 
 import { alleBereiche, bereichVon } from './competencies.js';
+import { normalisiereReview, stundenRef } from './nachbereitung.js';
 
 /* Ein Stundenschlüssel ist "tag-stunde" innerhalb einer Woche. */
 export function parseLessonKey(key){
@@ -174,6 +175,61 @@ export function competencyProfile(db, { modell, fromISO, toISO } = {}){
     .filter(Boolean);
 
   return { gesamt, bereiche };
+}
+
+/* ---- Offene Punkte einer Lerngruppe -----------------------------------
+   Die kleine Inbox einer Lerngruppe: was aus früheren Stunden noch
+   aussteht. Bewusst NICHT an eine konkrete Folgestunde gebunden –
+   dadurch überlebt ein offener Punkt, dass die geplante nächste Stunde
+   gelöscht wird, der Unterricht ausfällt oder sich der Plan verschiebt.
+
+   Die Lerngruppe ist das Paar aus Klasse und Fach. Weil das Fach darin
+   steckt, kann ein Punkt aus Französisch 9b weder in 9a noch in einem
+   anderen Fach derselben Klasse auftauchen.
+
+   Gezeigt wird nur, was zeitlich VOR der fragenden Stunde liegt.
+   Sortiert: das Neueste zuerst. Die App gewichtet nichts fachlich. */
+export function offenePunkteFuer(db, { classGroup, subject, weekStart, dayIndex, slotIndex } = {}){
+  const gruppe = `${String(classGroup || '').trim()}||${String(subject || '').trim()}`;
+  if (gruppe === '||') return [];
+
+  const zielDatum = weekStart ? addDaysISO(weekStart, Number(dayIndex) || 0) : '';
+  const zielSlot = Number(slotIndex);
+  const out = [];
+
+  for (const item of allLessonsChronological(db)) {
+    const l = item.lesson || {};
+    const g = `${String(l.classGroup || '').trim()}||${String(l.subject || '').trim()}`;
+    if (g !== gruppe) continue;
+
+    // Nur frühere Stunden. Gleicher Tag zählt, wenn die Stunde davor lag.
+    if (zielDatum) {
+      if (item.dateISO > zielDatum) continue;
+      if (item.dateISO === zielDatum) {
+        if (!Number.isFinite(zielSlot) || item.slotIndex >= zielSlot) continue;
+      }
+    }
+
+    const review = normalisiereReview(l.review);
+    for (const eintrag of review.carryOverItems) {
+      if (eintrag.status !== 'open') continue;
+      out.push({
+        ...eintrag,
+        sourceRef: stundenRef(item),
+        sourceWeekStart: item.weekStart,
+        sourceDayIndex: item.dayIndex,
+        sourceSlotIndex: item.slotIndex,
+        sourceDateISO: item.dateISO,
+        sourceTopic: String(l.topic || '').trim(),
+      });
+    }
+  }
+
+  // Neueste zuerst; innerhalb eines Tages die spätere Stunde zuerst.
+  out.sort((a, b)=> b.sourceDateISO.localeCompare(a.sourceDateISO)
+    || (b.sourceSlotIndex - a.sourceSlotIndex)
+    || a.createdAt.localeCompare(b.createdAt));
+  return out;
 }
 
 /* ---- Heute -----------------------------------------------------------

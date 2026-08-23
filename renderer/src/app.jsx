@@ -7,13 +7,18 @@ import { APP_VERSION } from './version.js';
 import { setupServiceWorker } from './pwa.js';
 import {
   sequenceProgress, sequenceOccurrences, competencyHeatmap, competencyProfile,
-  todayOverview, weekSummary,
+  offenePunkteFuer, todayOverview, weekSummary,
 } from './insights.js';
 import {
   OHNE_BEREICH_ID, normalisiereModell, normalisiereEtikett,
   katalogNachBereichen, filterKatalog, alleBereiche, bereichVon,
   istSystemKompetenz, istSystemBereich,
 } from './competencies.js';
+import {
+  PHASEN_STATUS, statusZeichen, statusName,
+  normalisiereReview, leeresReview, hatNachbereitung, offeneCarryOver,
+  stundenRef, parseStundenRef, carryOverAusPhase, carryOverAusNotiz, phaseAusCarryOver,
+} from './nachbereitung.js';
 import {
   SPRECHABSICHTEN, SCAFFOLD_ARTEN, SCAFFOLD_ART_STANDARD, SCAFFOLD_VORSCHLAEGE,
   UNTERSTUETZUNGSSTUFEN, scaffoldArtName, stufenName, istSystemSprechabsicht,
@@ -25,7 +30,7 @@ import {
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowDown, ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
-  CalendarCheck, CalendarRange, CircleHelp, ClipboardPaste, Copy, FileDown, FileText, Grid3x3, Library,
+  CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, FileDown, FileText, Grid3x3, Library,
   ListTree, Maximize2, NotebookPen, Palmtree, Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
   Square, Star, Sun, Trash2, X,
 } from 'lucide-react';
@@ -1039,6 +1044,11 @@ function defaultLesson(){
        sie erscheint allein in der Progressionsansicht. */
     progressionNote: '',
 
+    /* Nachbereitung. Sie gehört zur Stunde, die sie betrifft – so trägt
+       die vorhandene Wochenpersistenz sie ohne eine zweite Ablage mit.
+       Eine Stunde ohne diese Angaben ist eine gültige Stunde. */
+    review: leeresReview(),
+
     updatedAt: new Date().toISOString()
   };
 }
@@ -1102,6 +1112,22 @@ function normalizePhases(phases){
    Stunden dieselbe. Für die Hilfen darin gilt dasselbe: sie sind eigene
    Objekte mit eigener id und müssen mitgezogen werden, sonst zeigten
    Kopie und Original auf denselben Schlüssel. */
+/* Eine Kopie ist eine neue Planung, keine Fortsetzung der alten Stunde.
+
+   Nachbereitung beschreibt, was in EINER bestimmten Stunde geschehen
+   ist: welche Phase offen blieb, was aufgefallen ist, was noch aussteht.
+   Auf eine Kopie übertragen wäre das schlicht falsch – die kopierte
+   Stunde wurde nie gehalten. Schlimmer noch: die mitkopierten offenen
+   Punkte tauchten ein zweites Mal in der Lerngruppe auf.
+
+   Deshalb geht hier alles Nachbereitende verloren, absichtlich. Die
+   Planung selbst – Phasen, Inhalte, Kompetenzen, Fachdidaktik – bleibt
+   vollständig erhalten. */
+function nurPlanung(lesson){
+  const l = normalizeLesson(lesson);
+  return { ...l, review: leeresReview() };
+}
+
 function neuePhasenIds(phase){
   const p = (phase && typeof phase === 'object') ? phase : {};
   return {
@@ -1131,6 +1157,7 @@ function normalizeLesson(lesson){
     speechActs: normalisiereSprechabsichten(l.speechActs),
     languageResources: normalisiereMittel(l.languageResources),
     progressionNote: String(l.progressionNote || '').trim(),
+    review: normalisiereReview(l.review, uid),
     updatedAt: l.updatedAt || base.updatedAt
   };
 }
@@ -1942,6 +1969,364 @@ function CompetencyProfileView({ profil }){
           </details>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ============================================================
+   Offene Punkte aus vorherigen Stunden
+
+   Der Hinweis ist bewusst leise: eine Zeile, kein Dialog, kein
+   Warnsymbol. Nichts muss bearbeitet werden – wer die Stunde plant,
+   ohne hinzusehen, wird nicht aufgehalten.
+
+   Die Punkte gehören der Lerngruppe, nicht dieser Stunde. Deshalb
+   überstehen sie es, wenn eine geplante Folgestunde gelöscht wird,
+   Unterricht ausfällt oder sich der Plan verschiebt: sie warten
+   einfach auf die nächste Stunde, die es gibt.
+   ============================================================ */
+function CarryOverPanel({ punkte, onUebernehmenAlsPhase, onUebernehmenAlsNotiz, onErledigt, onIgnorieren }){
+  const [offen, setOffen] = useState(false);
+  const [auswahl, setAuswahl] = useState(()=> new Set());
+
+  if (!punkte.length) return null;
+
+  const phasenPunkte = punkte.filter(p => p.snapshot);
+  const umschalten = (id)=>{
+    setAuswahl((v)=>{
+      const n = new Set(v);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+  /* Mehrere Phasen in ihrer ursprünglichen Reihenfolge übernehmen –
+     also so, wie sie in der Stunde standen, nicht in Klickreihenfolge. */
+  const gewaehlte = phasenPunkte.filter(p => auswahl.has(p.id));
+
+  return (
+    <div className="carryBox">
+      <button type="button" className="carryKopf" onClick={()=>setOffen(v => !v)} aria-expanded={offen}>
+        {offen ? <ChevronDown {...ICON_SM} /> : <ChevronRight {...ICON_SM} />}
+        <span>
+          {punkte.length} {punkte.length === 1 ? 'offener Punkt' : 'offene Punkte'} aus vorherigen Stunden
+        </span>
+        <span className="muted small">{offen ? 'Schließen' : 'Ansehen'}</span>
+      </button>
+
+      {offen ? (
+        <div className="carryInhalt">
+          {punkte.map((p)=>(
+            <div key={p.id} className="carryPunkt">
+              <div className="carryHerkunft">
+                {p.sourceDateISO ? formatDateDE(p.sourceDateISO) : ''}
+                {p.sourceTopic ? ` · ${p.sourceTopic}` : ''}
+                {p.type === 'unfinished_phase' ? ' · offen gebliebene Phase'
+                  : p.type === 'partial_phase' ? ' · offener Teil einer Phase'
+                  : p.type === 'review_note' ? ' · Notiz aus der Nachbereitung'
+                  : ' · vorgemerkt'}
+              </div>
+              <div className="carryZeile">
+                {p.snapshot ? (
+                  <input type="checkbox" checked={auswahl.has(p.id)} onChange={()=>umschalten(p.id)}
+                         aria-label={`${p.title} auswählen`} />
+                ) : null}
+                <span className="carryTitel">{p.title}</span>
+              </div>
+              <div className="carryAktionen">
+                <button className="btn btnMini" onClick={()=>onUebernehmenAlsPhase([p])}>Als Phase übernehmen</button>
+                <button className="btn btnMini" onClick={()=>onUebernehmenAlsNotiz(p)}>Als Notiz übernehmen</button>
+                <button className="btn btnMini" onClick={()=>onErledigt(p)}>Erledigt</button>
+                <button className="btn btnMini" onClick={()=>onIgnorieren(p)}>Ignorieren</button>
+              </div>
+            </div>
+          ))}
+
+          {/* Erst ab zwei phasenbasierten Punkten – darunter wäre die
+              Mehrfachauswahl nur ein zusätzlicher Klick. */}
+          {phasenPunkte.length >= 2 ? (
+            <div className="carryMehrfach">
+              <button className="btn" disabled={gewaehlte.length === 0}
+                      onClick={()=>{ onUebernehmenAlsPhase(gewaehlte); setAuswahl(new Set()); }}>
+                {gewaehlte.length ? `${gewaehlte.length} ${gewaehlte.length === 1 ? 'Phase' : 'Phasen'} übernehmen` : 'Auswahl übernehmen'}
+              </button>
+              <button className="btn btnLeise"
+                      onClick={()=>{ onUebernehmenAlsPhase(phasenPunkte); setAuswahl(new Set()); }}>
+                Alle offenen Phasen übernehmen
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ============================================================
+   Nachbereitung einer gehaltenen Stunde
+
+   Keine zweite Unterrichtsplanung. Die Ansicht fasst die geplante
+   Stunde lesbar zusammen und fragt genau eine Sache: was ist daraus
+   geworden. Vier Zustände je Phase, ein Klick, fertig.
+
+   Die Sprache bleibt neutral. "Offen geblieben" ist kein Versäumnis,
+   und "entfallen" ist eine Entscheidung, keine Lücke. Es gibt keine
+   Fehlerfarbe, keine Warnung und keine Wertung – eine Planung ist eine
+   Annahme über den Verlauf, kein Versprechen.
+   ============================================================ */
+function LessonReviewView({
+  lesson, dateISO, dayIndex, slotIndex, languageMode,
+  onChangeReview, onOpenLesson,
+}){
+  const l = normalizeLesson(lesson);
+  const review = normalisiereReview(l.review);
+  const phasen = normalizePhases(l.phases || []);
+  const [neuerPunkt, setNeuerPunkt] = useState('');
+  const [notizVormerken, setNotizVormerken] = useState(false);
+
+  const aendern = (patch)=> onChangeReview({ ...review, ...patch });
+
+  const setzePhase = (phaseId, patch)=>{
+    const bisher = review.phaseReviews[phaseId] || { executionStatus:'', note:'', unfinishedContent:'' };
+    aendern({ phaseReviews: { ...review.phaseReviews, [phaseId]: { ...bisher, ...patch } } });
+  };
+
+  const ergaenzeCarry = (eintrag)=>{
+    if (!eintrag) return;
+    aendern({ carryOverItems: [...review.carryOverItems, eintrag], status: 'in_progress' });
+  };
+  const entferneCarry = (id)=>
+    aendern({ carryOverItems: review.carryOverItems.filter(i => i.id !== id) });
+
+  /* Ein Punkt gilt als vorgemerkt, wenn es zu dieser Phase schon einen
+     offenen Eintrag gibt – so lässt sich der Knopf nicht doppelt drücken. */
+  const vorgemerkt = (phaseId, typ)=> review.carryOverItems
+    .find(i => i.sourcePhaseId === phaseId && i.type === typ && i.status === 'open');
+
+  const offene = review.carryOverItems.filter(i => i.status === 'open');
+  const erledigte = review.carryOverItems.filter(i => i.status !== 'open');
+
+  const kopf = [
+    (l.classGroup || '').trim(),
+    (l.subject || '').trim(),
+  ].filter(Boolean).join(' · ');
+
+  const zusammenfassung = [
+    ['Thema', (l.topic || '').trim()],
+    ['Lernziele', (l.objectives || '').trim()],
+  ].filter(([, v]) => v);
+
+  const aufgabe = normalisiereAufgabe(l.communicativeTask);
+  const kompetenzen = [l.primaryCompetency, ...(l.competencies || [])]
+    .map(x => String(x || '').trim()).filter(Boolean);
+  const kompetenzListe = [...new Set(kompetenzen)];
+
+  return (
+    <div className="card">
+      <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start', gap:12}}>
+        <div>
+          <h2 className="dialogTitle">Nachbereitung</h2>
+          <p className="muted small" style={{margin:0}}>
+            {kopf}{kopf && dateISO ? ' · ' : ''}{dateISO ? formatDateDE(dateISO) : ''}
+            {Number.isFinite(slotIndex) ? ` · ${slotIndex + 1}. Stunde` : ''}
+          </p>
+        </div>
+        <button className="btn" onClick={onOpenLesson}>Zur Planung</button>
+      </div>
+
+      {(zusammenfassung.length || kompetenzListe.length || (languageMode && aufgabe.text)) ? (
+        <section className="nbZusammenfassung">
+          {zusammenfassung.map(([k, v])=>(
+            <div key={k}>
+              <div className="nbLabel">{k}</div>
+              <div className="nbWert">{v}</div>
+            </div>
+          ))}
+          {kompetenzListe.length ? (
+            <div>
+              <div className="nbLabel">Kompetenzen</div>
+              <div className="nbWert">{kompetenzListe.join(' · ')}</div>
+            </div>
+          ) : null}
+          {languageMode && aufgabe.text ? (
+            <div>
+              <div className="nbLabel">Kommunikative Aufgabe</div>
+              <div className="nbWert">{aufgabe.text}</div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      <section style={{marginTop:18}}>
+        <h3 className="settingsHeading">Verlauf</h3>
+        <div className="nbPhasen">
+          {phasen.map((p)=>{
+            const pr = review.phaseReviews[p.id] || { executionStatus:'', note:'', unfinishedContent:'' };
+            const istOffen = pr.executionStatus === 'not_completed';
+            const istTeilweise = pr.executionStatus === 'partial';
+            const ganzVorgemerkt = vorgemerkt(p.id, 'unfinished_phase');
+            const restVorgemerkt = vorgemerkt(p.id, 'partial_phase');
+            return (
+              <div key={p.id} className="nbPhase">
+                <div className="nbPhaseKopf">
+                  <span className="nbPhaseZeichen" aria-hidden="true">
+                    {statusZeichen(pr.executionStatus) || '·'}
+                  </span>
+                  <span className="nbPhaseName">{p.title || 'Phase'}</span>
+                  <span className="muted small">{p.duration} min{p.socialForm ? ` · ${p.socialForm}` : ''}</span>
+                  <div className="nbStatusWahl" role="group" aria-label={`Status von ${p.title || 'Phase'}`}>
+                    {PHASEN_STATUS.map((st)=>(
+                      <button
+                        key={st.id}
+                        type="button"
+                        className={`btn btnMini${pr.executionStatus === st.id ? ' primary' : ''}`}
+                        aria-pressed={pr.executionStatus === st.id}
+                        title={st.name}
+                        onClick={()=>setzePhase(p.id, {
+                          executionStatus: pr.executionStatus === st.id ? '' : st.id,
+                        })}
+                      >{st.zeichen} {st.kurz}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {istTeilweise ? (
+                  <div className="nbPhaseDetail">
+                    <label className="small muted">Noch offen (optional)</label>
+                    <input
+                      className="input"
+                      value={pr.unfinishedContent}
+                      onChange={(e)=>setzePhase(p.id, { unfinishedContent: e.target.value })}
+                      placeholder="z. B. gemeinsame Empfehlungen formulieren"
+                    />
+                  </div>
+                ) : null}
+
+                {(istOffen || istTeilweise) ? (
+                  <div className="nbPhaseAktionen">
+                    {/* Vormerken ist ein Klick, nicht ein Automatismus: was in
+                        die nächste Stunde geht, entscheidet die Lehrkraft. */}
+                    {istTeilweise && pr.unfinishedContent.trim() ? (
+                      restVorgemerkt ? (
+                        <span className="nbVorgemerkt">
+                          Offener Teil vorgemerkt
+                          <button className="btn btnMini" onClick={()=>entferneCarry(restVorgemerkt.id)}
+                                  title="Vormerkung zurücknehmen"><X {...ICON_SM} /></button>
+                        </span>
+                      ) : (
+                        <button className="btn btnLeise" onClick={()=>ergaenzeCarry(
+                          carryOverAusPhase(p, { nurOffenerTeil: true, offenerText: pr.unfinishedContent, neueId: uid })
+                        )}>Offenen Teil vormerken</button>
+                      )
+                    ) : null}
+
+                    {ganzVorgemerkt ? (
+                      <span className="nbVorgemerkt">
+                        Phase vorgemerkt
+                        <button className="btn btnMini" onClick={()=>entferneCarry(ganzVorgemerkt.id)}
+                                title="Vormerkung zurücknehmen"><X {...ICON_SM} /></button>
+                      </span>
+                    ) : (
+                      <button className="btn btnLeise" onClick={()=>ergaenzeCarry(
+                        carryOverAusPhase(p, { neueId: uid })
+                      )}>{istTeilweise ? 'Ganze Phase vormerken' : 'Für nächste Stunde vormerken'}</button>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section style={{marginTop:18}}>
+        <h3 className="settingsHeading">Notizen</h3>
+        <textarea
+          value={review.generalNotes}
+          onChange={(e)=>aendern({ generalNotes: e.target.value, status: review.status === 'not_reviewed' ? 'in_progress' : review.status })}
+          placeholder="z. B. Die Redemittel zum Widersprechen wurden noch wenig genutzt."
+        />
+        <div className="row wrap" style={{gap:8, marginTop:6, alignItems:'center'}}>
+          <label className="row" style={{gap:6}}>
+            <input type="checkbox" checked={notizVormerken}
+                   onChange={(e)=>setNotizVormerken(e.target.checked)} />
+            <span className="small">Für nächste Stunde vormerken</span>
+          </label>
+          <button className="btn btnLeise"
+                  disabled={!notizVormerken || !review.generalNotes.trim()}
+                  onClick={()=>{
+                    ergaenzeCarry(carryOverAusNotiz(review.generalNotes, { type:'review_note', neueId: uid }));
+                    setNotizVormerken(false);
+                  }}>Notiz vormerken</button>
+        </div>
+      </section>
+
+      <section style={{marginTop:18}}>
+        <h3 className="settingsHeading">Für nächste Stunde</h3>
+        {offene.length === 0 ? (
+          <p className="muted small" style={{margin:'0 0 8px'}}>
+            Noch nichts vorgemerkt. Was hier steht, wird bei der nächsten Stunde
+            dieser Lerngruppe angeboten – übernehmen musst du es dort.
+          </p>
+        ) : (
+          <ul className="nbPunkte">
+            {offene.map((i)=>(
+              <li key={i.id}>
+                <span>{i.title}</span>
+                <button className="btn btnMini" onClick={()=>entferneCarry(i.id)}
+                        title="Vormerkung entfernen" aria-label="Vormerkung entfernen"><X {...ICON_SM} /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="row" style={{gap:8, marginTop:8}}>
+          <input className="input" value={neuerPunkt} style={{flex:1}}
+                 onChange={(e)=>setNeuerPunkt(e.target.value)}
+                 onKeyDown={(e)=>{
+                   if (e.key !== 'Enter') return;
+                   e.preventDefault();
+                   if (!neuerPunkt.trim()) return;
+                   ergaenzeCarry(carryOverAusNotiz(neuerPunkt, { type:'manual_follow_up', neueId: uid }));
+                   setNeuerPunkt('');
+                 }}
+                 placeholder="z. B. Hausaufgabe zunächst vergleichen" />
+          <button className="btn" disabled={!neuerPunkt.trim()}
+                  onClick={()=>{
+                    ergaenzeCarry(carryOverAusNotiz(neuerPunkt, { type:'manual_follow_up', neueId: uid }));
+                    setNeuerPunkt('');
+                  }}>Punkt hinzufügen</button>
+        </div>
+
+        {erledigte.length ? (
+          <details className="nbErledigt">
+            <summary>{erledigte.length} {erledigte.length === 1 ? 'abgeschlossener Punkt' : 'abgeschlossene Punkte'}</summary>
+            <ul className="nbPunkte">
+              {erledigte.map((i)=>(
+                <li key={i.id}>
+                  <span className="muted">{i.title}</span>
+                  <span className="muted small">
+                    {i.status === 'transferred' ? 'übernommen' : i.status === 'completed' ? 'erledigt' : 'verworfen'}
+                    {i.resolvedAt ? ` · ${formatDateDE(i.resolvedAt.slice(0,10))}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
+      </section>
+
+      <div className="row" style={{justifyContent:'flex-end', marginTop:18}}>
+        {review.status === 'reviewed' ? (
+          <span className="muted small" style={{alignSelf:'center'}}>
+            Abgeschlossen{review.reviewedAt ? ` am ${formatDateDE(review.reviewedAt.slice(0,10))}` : ''} –
+            weiterhin bearbeitbar.
+          </span>
+        ) : (
+          <button className="btn primary" onClick={()=>aendern({
+            status: 'reviewed', reviewedAt: new Date().toISOString(),
+          })}>Nachbereitung abschließen</button>
+        )}
+      </div>
     </div>
   );
 }
@@ -3142,12 +3527,30 @@ const classGroupSuggestions = useMemo(()=>{
       case 'today':    return 'Heute';
       case 'competencies': return 'Kompetenzen';
       case 'progression':  return 'Progression';
+      case 'review':       return 'Nachbereitung';
       case 'settings': return 'Einstellungen';
       case 'help':     return 'Hilfe';
       case 'week':     return '';
       default:         return formatWeekLabel(view.weekStart);
     }
   }, [view]);
+
+  /* Die offenen Punkte für die gerade geöffnete Stunde. Sie werden über
+     die Lerngruppe gesucht, nicht über eine feste Verknüpfung – deshalb
+     stimmt die Liste auch dann, wenn zwischenzeitlich Stunden entstanden
+     oder verschwunden sind. */
+  const offenePunkteDerStunde = useMemo(()=>{
+    if (!db || view.name !== 'lesson') return [];
+    const l = db.weeks?.[view.weekStart]?.lessons?.[keyOf(view.dayIndex, view.slotIndex)];
+    const gruppe = l || {};
+    const classGroup = String(gruppe.classGroup || '').trim();
+    const subject = String(gruppe.subject || '').trim();
+    if (!classGroup || !subject) return [];
+    return offenePunkteFuer(db, {
+      classGroup, subject,
+      weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+    });
+  }, [db, view]);
 
   const themeChoice = THEME_CHOICES.includes(appSettings?.theme) ? appSettings.theme : 'system';
   const darkActive = themeChoice === 'dark' || (themeChoice === 'system' && systemPrefersDark);
@@ -3308,7 +3711,7 @@ useEffect(()=>{
       // Wenn es nur ein Draft ist (leerer Slot), nicht in die Zwischenablage.
       if (!l || isLessonEmpty(l)) return;
     }
-    const cloned = normalizeLesson(deepClone(l));
+    const cloned = nurPlanung(deepClone(l));
     // Neue IDs für Phasen, damit du beim Kopieren nicht versehentlich identische IDs hast.
     cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)));
     setLessonClipboard({ lesson: cloned, source: { weekStart, dayIndex, slotIndex }, cut: false, copiedAt: Date.now() });
@@ -3317,7 +3720,7 @@ useEffect(()=>{
   const cutLessonToClipboard = (weekStart, dayIndex, slotIndex) => {
     const persisted = db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, slotIndex)] || null;
     if (!persisted) return;
-    const l = normalizeLesson(deepClone(persisted));
+    const l = nurPlanung(deepClone(persisted));
     l.phases = normalizePhases((l.phases || []).map(p => neuePhasenIds(p)));
     setLessonClipboard({ lesson: l, source: { weekStart, dayIndex, slotIndex }, cut: true, copiedAt: Date.now() });
     deleteLessonAt(weekStart, dayIndex, slotIndex, { silent: true });
@@ -3389,7 +3792,7 @@ useEffect(()=>{
         });
         if (!ok) return;
       }
-      const cloned = normalizeLesson(deepClone(src));
+      const cloned = nurPlanung(deepClone(src));
       cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)));
       upsertIn(toW, toKey, cloned);
       persist(nextDb);
@@ -3980,6 +4383,32 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
   };
   const rememberScaffoldLabel = (label) => rememberIn('scaffoldLabels', label, 2);
 
+  /* Einen offenen Punkt abschliessen. Er wird nicht gelöscht, sondern
+     bekommt einen Status – so bleibt in der Nachbereitung der
+     Ursprungsstunde sichtbar, was aus ihm geworden ist, und ein
+     versehentliches "Erledigt" ist über Rückgängig zu holen. */
+  const resolveCarryOver = (punkt, status) => {
+    const ref = punkt?.sourceRef ? parseStundenRef(punkt.sourceRef) : null;
+    if (!ref || !punkt?.id) return;
+    const before = db;
+    const nextDb = deepClone(db);
+    const stunde = nextDb.weeks?.[ref.weekStart]?.lessons?.[keyOf(ref.dayIndex, ref.slotIndex)];
+    if (!stunde) return;
+    const review = normalisiereReview(stunde.review, uid);
+    review.carryOverItems = review.carryOverItems.map(i => i.id === punkt.id ? {
+      ...i,
+      status,
+      resolvedAt: new Date().toISOString(),
+      targetRef: status === 'transferred' && view.name === 'lesson'
+        ? stundenRef({ weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex })
+        : i.targetRef,
+    } : i);
+    stunde.review = review;
+    const beschriftung = status === 'transferred' ? 'Punkt übernommen'
+      : status === 'completed' ? 'Punkt erledigt' : 'Punkt verworfen';
+    runUndoable(beschriftung, before, ()=>persist(nextDb));
+  };
+
   const rememberSocialForm = (label) => {
     const l = (label || '').trim();
     if (!l) return;
@@ -4407,6 +4836,7 @@ const doExportDocx = async (html, suggestedName) => {
           onDeleteDuty={(dayIndex, pos)=>deleteDutyAt(view.weekStart, dayIndex, pos)}
           lessonClipboard={lessonClipboard}
           onCopyLesson={(dayIndex, slotIndex)=>copyLessonToClipboard(view.weekStart, dayIndex, slotIndex)}
+          onReviewLesson={(dayIndex, slotIndex)=>setView({ name:'review', weekStart: view.weekStart, dayIndex, slotIndex })}
           onCutLesson={(dayIndex, slotIndex)=>cutLessonToClipboard(view.weekStart, dayIndex, slotIndex)}
           onPasteLesson={(dayIndex, slotIndex)=>pasteLessonFromClipboard(view.weekStart, dayIndex, slotIndex)}
           onLessonDnd={(payload)=>moveOrCopyLessonByDnd(payload)}
@@ -4559,6 +4989,26 @@ const doExportDocx = async (html, suggestedName) => {
         />
       );
     }
+    if (view.name === 'review') {
+      const l = getLessonAt(view.weekStart, view.dayIndex, view.slotIndex);
+      const dateISO = toISODate(addDays(fromISODate(view.weekStart), view.dayIndex));
+      return (
+        <LessonReviewView
+          lesson={l}
+          dateISO={dateISO}
+          dayIndex={view.dayIndex}
+          slotIndex={view.slotIndex}
+          languageMode={languageMode}
+          onChangeReview={(next)=>{
+            const akt = getLessonAt(view.weekStart, view.dayIndex, view.slotIndex);
+            updateLessonAt(view.weekStart, view.dayIndex, view.slotIndex, { ...akt, review: next });
+          }}
+          onOpenLesson={()=>setView({
+            name:'lesson', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+          })}
+        />
+      );
+    }
     if (view.name === 'progression') {
       const seq = sequences?.[view.sequenceId] || null;
       const zeilen = seq ? sequenzProgression(sequenceOccurrences(db, view.sequenceId)) : [];
@@ -4658,6 +5108,11 @@ const doExportDocx = async (html, suggestedName) => {
         benutzteKompetenzen={benutzteKompetenzen}
         speechActSuggestions={speechActSuggestions}
         scaffoldSuggestions={scaffoldSuggestions}
+        offenePunkte={offenePunkteDerStunde}
+        onResolveCarryOver={resolveCarryOver}
+        onOpenReview={()=>setView({
+          name:'review', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+        })}
         onRememberSpeechAct={rememberSpeechAct}
         onHideSpeechActSuggestion={(label)=>hideSuggestion('speechAct', label)}
         onRememberScaffoldLabel={rememberScaffoldLabel}
@@ -5000,7 +5455,7 @@ const doExportDocx = async (html, suggestedName) => {
 }
 
 function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO, groupColors, duties, supervisionSuggestions, onHideSupervisionSuggestion = ()=>{},
-  lessonClipboard, onCopyLesson, onCutLesson, onPasteLesson, onLessonDnd,
+  lessonClipboard, onCopyLesson, onCutLesson, onPasteLesson, onLessonDnd, onReviewLesson,
   onOpenGroupColorPalette, onOpenLesson, onOpenMacro, onOpenTodos, onChangeSlots, onDeleteLesson, onUpsertDuty, onDeleteDuty, onExportPdf, onExportDocx }){
   const slots = week.slotsPerDay || 6;
   const dutyMap = duties || week.duties || {};
@@ -5216,6 +5671,12 @@ const exportWeekDocx = () => {
                               title="Stunde ausschneiden (interne Zwischenablage)"
                               aria-label="Stunde ausschneiden"
                             ><Scissors {...ICON_SM} /></button>
+                            <button
+                              className="iconBtn cellTool"
+                              onClick={()=>onReviewLesson?.(dayIndex, slotIndex)}
+                              title="Nachbereiten"
+                              aria-label="Stunde nachbereiten"
+                            ><ClipboardCheck {...ICON_SM} /></button>
                           </>
                         ) : null}
                         {lessonClipboard ? (
@@ -5256,6 +5717,22 @@ const exportWeekDocx = () => {
                     <div className="sub">{sub}</div>
                     {seq ? <span className="badge" style={{borderColor: lineColor(seq.color), color: textColor(seq.color)}}>Sequenz: {seq.name}</span> : null}
                     {l?.topic ? <span className="badge">Thema: {l.topic}</span> : <span className="badge">Noch kein Thema</span>}
+                    {(()=>{
+                      /* Dezentes Kennzeichen, kein Warnsymbol: ein Haken für
+                         nachbereitet, ein Punkt für noch Vorgemerktes. */
+                      if (!l) return null;
+                      const offen = offeneCarryOver(l.review).length;
+                      if (offen) return (
+                        <span className="nbMarke" title={`${offen} ${offen === 1 ? 'offener Punkt' : 'offene Punkte'} für die nächste Stunde`}>
+                          <span className="nbMarkePunkt" aria-hidden="true" />
+                          {offen}
+                        </span>
+                      );
+                      if (hatNachbereitung(l.review)) return (
+                        <span className="nbMarke" title="nachbereitet"><Check {...ICON_SM} /></span>
+                      );
+                      return null;
+                    })()}
                   </div>
                 );
               })}
@@ -5720,6 +6197,9 @@ function LessonView({
   onHideSpeechActSuggestion,
   onRememberScaffoldLabel,
   onHideScaffoldSuggestion,
+  offenePunkte = [],
+  onResolveCarryOver,
+  onOpenReview,
   suggestions,
   phaseNameSuggestions,
   onCreateSequence,
@@ -6092,6 +6572,34 @@ const gColor = useMemo(()=>{
     return teile.length ? teile.join(' · ') : 'noch nichts eingetragen';
   }, [local.communicativeTask, local.speechActs, local.languageResources, local.phases]);
 
+  /* Ein offener Punkt wird zu einer ganz normalen Phase am Ende der
+     Stunde. Danach lässt sie sich wie jede andere ziehen, ändern und
+     löschen – es gibt keinen Sondertyp "übernommene Phase".
+
+     Die Ursprungsstunde bleibt unverändert: kopiert, nicht verschoben.
+     Nur der Punkt selbst wird dort als übernommen vermerkt, damit er
+     nicht bei jeder weiteren Stunde erneut angeboten wird. */
+  const uebernehmeAlsPhasen = (liste)=>{
+    const punkte = (Array.isArray(liste) ? liste : []).filter(Boolean);
+    if (!punkte.length) return;
+    const neue = punkte.map(p => phaseAusCarryOver(p, uid));
+    setPhases([...(local.phases || []), ...neue]);
+    for (const p of punkte) onResolveCarryOver?.(p, 'transferred');
+    ui.toast(punkte.length === 1
+      ? 'Als Phase übernommen.'
+      : `${punkte.length} Phasen übernommen.`);
+  };
+
+  const uebernehmeAlsNotiz = (p)=>{
+    if (!p) return;
+    const bisher = String(local.notes || '').trim();
+    const zeile = String(p.title || '').trim();
+    if (!zeile) return;
+    setField('notes', bisher ? `${bisher}\n${zeile}` : zeile);
+    onResolveCarryOver?.(p, 'transferred');
+    ui.toast('Als Notiz übernommen.');
+  };
+
   const setPhases = (nextPhases) => {
     setLocal(prev => ({ ...prev, phases: normalizePhases(nextPhases) }));
   };
@@ -6141,7 +6649,7 @@ const gColor = useMemo(()=>{
 
 const exportDocx = () => {
   if (typeof onExportDocx !== 'function') {
-    showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
+    ui.toast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
   const html = buildLessonPdfHtml({ title: lessonTitle, dateISO, dayIndex, slotIndex, schoolCalendar, lesson: local });
@@ -6151,7 +6659,7 @@ const exportDocx = () => {
 
   const startExecution = () => {
     if (typeof onOpenExecution !== 'function') {
-      showToast('Durchführungsansicht ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
+      ui.toast('Durchführungsansicht ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
 
@@ -6203,6 +6711,10 @@ const exportDocx = () => {
           ) : null}
         </div>
         <div className="row" style={{gap:8}}>
+          <button className="btn" onClick={()=>onOpenReview?.()}
+                  title="Nach der Stunde festhalten, was daraus geworden ist">
+            <ClipboardCheck {...ICON_SM} /> Nachbereiten
+          </button>
           {capabilities.executionWindow ? (
             <button className="btn success" onClick={startExecution}><Play {...ICON_SM} /> Durchführung</button>
           ) : null}
@@ -6264,6 +6776,14 @@ const exportDocx = () => {
       </div>
 
       <div style={{height:10}} />
+
+      <CarryOverPanel
+        punkte={offenePunkte}
+        onUebernehmenAlsPhase={(liste)=>uebernehmeAlsPhasen(liste)}
+        onUebernehmenAlsNotiz={(p)=>uebernehmeAlsNotiz(p)}
+        onErledigt={(p)=>onResolveCarryOver?.(p, 'completed')}
+        onIgnorieren={(p)=>onResolveCarryOver?.(p, 'dismissed')}
+      />
 
       <div className="row wrap">
         <div className="grow">

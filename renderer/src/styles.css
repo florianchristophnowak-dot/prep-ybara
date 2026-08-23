@@ -628,6 +628,131 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 /* ============================================================
    Kompetenzen verwalten (Einstellungen)
    ============================================================ */
+/* ============================================================
+   Fachdidaktische Planung
+
+   Nichts davon führt eine eigene Gestaltungssprache ein: dieselben
+   Ränder, Abstände, Schriftgrössen und Bedienelemente wie überall.
+   Alles Neue ist eingeklappt oder klein, solange es leer ist – die
+   Stundenplanung bleibt so kurz wie zuvor, wenn man es nicht braucht.
+   ============================================================ */
+
+/* Ein zurückgenommener Knopf für "hier liesse sich mehr eintragen".
+   Er soll einladen, nicht auffordern. */
+.btnLeise {
+  background: none;
+  border: 1px dashed var(--border);
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  font-size: var(--fs-sm);
+  gap: 4px;
+}
+.btnLeise:hover { background: var(--bg-subtle); border-color: var(--border-strong); border-style: solid; }
+
+/* Erfolgskriterien */
+.kriterienBox { border-left: 3px solid var(--border); padding: 8px 0 4px 12px; }
+.kriterienTitel { font-weight: var(--fw-bold); font-size: var(--fs-base); }
+.kriterienZeile { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.kriterienPunkt { color: var(--muted); flex-shrink: 0; }
+
+/* Der aufklappbare Block. <details> statt eigener Zustandslogik –
+   ein Bauteil weniger, und die Tastaturbedienung kommt mit. */
+.didaktikBlock { border: 1px solid var(--border); background: var(--card); }
+.didaktikKopf {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 10px 12px; cursor: pointer; list-style: none;
+}
+.didaktikKopf::-webkit-details-marker { display: none; }
+.didaktikKopf::before {
+  content: '▸'; color: var(--muted); font-size: var(--fs-sm); flex-shrink: 0;
+}
+.didaktikBlock[open] > .didaktikKopf::before { content: '▾'; }
+.didaktikTitel { font-weight: var(--fw-bold); }
+.didaktikInhalt {
+  border-top: 1px solid var(--border-light);
+  padding: 12px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+/* Kommunikative Aufgabe */
+.aufgabeBox { display: flex; flex-direction: column; gap: 4px; }
+.aufgabeText { min-height: 60px; }
+.aufgabeDetails {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+  margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--border-light);
+}
+
+/* Sprachhandeln */
+.sprachBox { display: flex; flex-direction: column; gap: 4px; padding-top: 12px; border-top: 1px solid var(--border-light); }
+.sprachMittel {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+  margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border-light);
+}
+
+/* Hilfen an der Phase */
+.scaffoldBox { border-top: 1px solid var(--border-light); padding-top: 8px; }
+.scaffoldZeile { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.scaffoldArt { width: 150px; flex-shrink: 0; padding: 4px 8px; font-size: var(--fs-sm); }
+.scaffoldNotiz { flex: 1; min-width: 160px; }
+.scaffoldStufe { width: 110px; flex-shrink: 0; padding: 4px 8px; font-size: var(--fs-sm); }
+
+@media (max-width: 900px) {
+  .aufgabeDetails, .sprachMittel { grid-template-columns: 1fr; }
+}
+
+/* ============================================================
+   Progression einer Sequenz
+
+   Eine Tabelle wie die Wärmekarte: dieselben Linien, dieselbe
+   Kopfzeile. Keine Farbcodierung nach Niveau – die Spalte nennt, was
+   die Lehrkraft eingetragen hat, und bewertet es nicht.
+   ============================================================ */
+.zielaufgabe {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--primary);
+  background: var(--bg-subtle);
+  padding: 12px 14px;
+  margin-top: 14px;
+}
+.zielaufgabeKopf {
+  font-size: var(--fs-xs); font-weight: var(--fw-bold); color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px;
+}
+.zielaufgabeText { margin: 0; font-size: var(--fs-lg); line-height: 1.45; }
+.zielaufgabeDetails {
+  margin-top: 8px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 16px; font-size: var(--fs-sm);
+}
+
+.progScroll { overflow-x: auto; margin-top: 14px; }
+.progTable { border-collapse: collapse; width: 100%; min-width: 900px; }
+.progTable th, .progTable td {
+  border: 1px solid var(--border-light);
+  padding: 8px 10px; vertical-align: top; text-align: left;
+  font-size: var(--fs-md); font-weight: var(--fw-normal);
+}
+.progTable thead th {
+  background: var(--bg-subtle); font-weight: var(--fw-medium);
+  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-secondary); white-space: nowrap;
+}
+.progNr { width: 64px; white-space: nowrap; }
+.progNotiz { font-size: var(--fs-sm); min-width: 150px; min-height: 0; resize: vertical; line-height: 1.4; }
+.progHilfen > summary { cursor: pointer; }
+.progHilfenListe { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.progHilfenListe li { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
+
+/* Eine Zahl, die sich anklicken lässt, ohne wie ein Knopf auszusehen. */
+.linkBtn {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: var(--primary); font-weight: var(--fw-bold); font-size: var(--fs-base);
+}
+.linkBtn:hover { text-decoration: underline; }
+
+@media (max-width: 900px) {
+  .zielaufgabeDetails { grid-template-columns: 1fr; }
+}
+
 /* Kompetenzen einer Sequenz: eingerückt unter ihrer Zeile, damit die
    Zugehörigkeit ohne Rahmen erkennbar bleibt. */
 .seqKompetenzen { margin: 0 0 12px 28px; }

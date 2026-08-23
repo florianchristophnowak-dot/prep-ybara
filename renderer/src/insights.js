@@ -9,6 +9,8 @@
    zeigen, was vorbereitet und gehalten wurde – nicht, ob das genug war.
    ============================================================ */
 
+import { alleBereiche, bereichVon } from './competencies.js';
+
 /* Ein Stundenschlüssel ist "tag-stunde" innerhalb einer Woche. */
 export function parseLessonKey(key){
   const parts = String(key || '').split('-');
@@ -115,6 +117,63 @@ export function competencyHeatmap(db, { fromISO, toISO } = {}){
 
   const hoechst = zeilen.reduce((m, z)=> Math.max(m, ...z.zellen.map(c => c.anzahl)), 0);
   return { monate: monatsListe, zeilen, hoechst, gesamt };
+}
+
+/* ---- Kompetenzprofil --------------------------------------------------
+   Dieselben Zahlen wie die Wärmekarte, nur nach Bereichen gebündelt.
+   Sie beschreibt und bewertet nicht: kein Soll, keine Ampel, kein
+   Hinweis auf ein angebliches Ungleichgewicht. Was hier steht, ist
+   ausschliesslich, was in den Stunden eingetragen wurde.
+
+   Gezählt wird je Stunde und Etikett genau einmal – die primäre
+   Kompetenz zählt nicht doppelt, auch wenn sie zusätzlich in der Liste
+   steht. */
+export function competencyProfile(db, { modell, fromISO, toISO } = {}){
+  const proKompetenz = new Map();   // Etikett -> { anzahl, primaer }
+  let gesamt = 0;
+
+  for (const item of allLessonsChronological(db)) {
+    const d = item.dateISO;
+    if (fromISO && d < fromISO) continue;
+    if (toISO && d > toISO) continue;
+    const liste = Array.isArray(item.lesson?.competencies) ? item.lesson.competencies : [];
+    const primaer = String(item.lesson?.primaryCompetency || '').trim();
+    const alle = new Set(liste.map(x => String(x || '').trim()).filter(Boolean));
+    if (primaer) alle.add(primaer);
+    for (const name of alle) {
+      const cur = proKompetenz.get(name) || { anzahl: 0, primaer: 0 };
+      cur.anzahl += 1;
+      if (name === primaer) cur.primaer += 1;
+      proKompetenz.set(name, cur);
+      gesamt += 1;
+    }
+  }
+
+  const proBereich = new Map();
+  for (const [name, werte] of proKompetenz.entries()) {
+    const bereichId = bereichVon(name, modell);
+    if (!proBereich.has(bereichId)) proBereich.set(bereichId, { anzahl: 0, kompetenzen: [] });
+    const eintrag = proBereich.get(bereichId);
+    eintrag.anzahl += werte.anzahl;
+    eintrag.kompetenzen.push({ name, anzahl: werte.anzahl, primaer: werte.primaer });
+  }
+
+  const bereiche = alleBereiche(modell)
+    .map(b => {
+      const eintrag = proBereich.get(b.id);
+      if (!eintrag || !eintrag.anzahl) return null;
+      return {
+        id: b.id,
+        name: b.name,
+        anzahl: eintrag.anzahl,
+        anteil: gesamt > 0 ? eintrag.anzahl / gesamt : 0,
+        kompetenzen: eintrag.kompetenzen
+          .sort((a, b2)=> b2.anzahl - a.anzahl || a.name.localeCompare(b2.name)),
+      };
+    })
+    .filter(Boolean);
+
+  return { gesamt, bereiche };
 }
 
 /* ---- Heute -----------------------------------------------------------

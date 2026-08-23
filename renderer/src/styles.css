@@ -593,6 +593,83 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .templateCard:hover { border-color: var(--primary); background: var(--bg-subtle); }
 
 .competencyBox { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px; background: var(--card); }
+
+/* ============================================================
+   Kompetenzauswahl im Fremdsprachenmodus
+
+   Kein eigenes Gestaltungsvokabular: dieselben Ränder, dieselben
+   Abstände, dieselbe Schriftskala wie überall. Die Auswahl steht flach
+   in der Stunde – kein Dialog, kein Aufklappen –, damit eine Kompetenz
+   einen Klick kostet. Damit sie dabei nicht die halbe Seite einnimmt,
+   laufen die Einträge eines Bereichs in einer umbrechenden Zeile.
+   ============================================================ */
+.kompetenzWahl { display: flex; flex-direction: column; gap: 10px; }
+.kompetenzSuche { max-width: 320px; }
+.kompetenzWahlBereich { display: grid; grid-template-columns: 150px 1fr; gap: 10px; align-items: baseline; }
+.kompetenzWahlName {
+  font-size: var(--fs-sm); font-weight: var(--fw-bold); color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.kompetenzWahlListe { display: flex; flex-wrap: wrap; gap: 6px; }
+.kompetenzWahlEintrag {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); background: var(--card);
+  padding: 4px 10px; font-size: var(--fs-sm); cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.kompetenzWahlEintrag:hover { background: var(--bg-subtle); border-color: var(--border-strong); }
+.kompetenzWahlEintrag.is-active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-ink); }
+.kompetenzEigene { border-top: 1px solid var(--border-light); padding-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+
+@media (max-width: 900px) {
+  .kompetenzWahlBereich { grid-template-columns: 1fr; gap: 4px; }
+}
+
+/* ============================================================
+   Kompetenzen verwalten (Einstellungen)
+   ============================================================ */
+/* Kompetenzen einer Sequenz: eingerückt unter ihrer Zeile, damit die
+   Zugehörigkeit ohne Rahmen erkennbar bleibt. */
+.seqKompetenzen { margin: 0 0 12px 28px; }
+
+.kompetenzVerwaltung { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; }
+.kompetenzBereich { border: 1px solid var(--border-light); padding: 10px 12px; }
+.kompetenzBereichKopf { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.kompetenzBereichName {
+  margin: 0; font-size: var(--fs-sm); font-weight: var(--fw-bold); color: var(--text-secondary);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.kompetenzZeile {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0; border-top: 1px solid var(--border-light);
+}
+.kompetenzZeile:first-of-type { border-top: none; }
+.kompetenzSicht { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer; }
+.kompetenzName { font-size: var(--fs-base); }
+/* Ausgeblendet heisst nicht gelöscht – deshalb gedämpft, nicht durchgestrichen. */
+.kompetenzNameAus { font-size: var(--fs-base); color: var(--muted); }
+.kompetenzHerkunft { flex-shrink: 0; }
+.kompetenzBereichWahl { width: 180px; flex-shrink: 0; padding: 4px 8px; font-size: var(--fs-sm); }
+.btnMini { padding: 4px 8px; flex-shrink: 0; }
+
+/* ============================================================
+   Kompetenzprofil in der Jahresübersicht
+
+   Ein Balken je Bereich. Er zeigt einen Anteil, er bewertet ihn nicht:
+   eine Farbe für alle, keine Schwellenwerte, keine Ampel.
+   ============================================================ */
+.profilListe { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.profilZeile { display: flex; flex-direction: column; gap: 4px; }
+.profilKopf { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.profilName { font-size: var(--fs-base); font-weight: var(--fw-medium); }
+.profilZahl { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.profilBahn { height: 10px; background: var(--border-light); overflow: hidden; }
+.profilFuellung { height: 100%; background: var(--primary); transition: width var(--transition); }
+.profilDetails { margin-top: 4px; }
+.profilDetails > summary { cursor: pointer; font-size: var(--fs-sm); color: var(--muted); }
+.profilDetailListe { list-style: none; margin: 6px 0 0; padding: 0 0 0 4px; display: flex; flex-direction: column; gap: 3px; }
+.profilDetailListe li { display: flex; justify-content: space-between; gap: 10px; font-size: var(--fs-sm); }
+.profilDetailZahl { color: var(--muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .tagRow { display: flex; flex-wrap: wrap; gap: 8px; }
 .tag { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: var(--radius-full); padding: 5px 10px; font-size: var(--fs-sm); background: var(--card); font-weight: var(--fw-medium); transition: all var(--transition-fast); }
 .tag:hover { border-color: var(--primary); background: var(--primary-light); }

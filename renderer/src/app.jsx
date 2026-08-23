@@ -6,8 +6,13 @@ import platform, { capabilities, platformName } from './platform/index.js';
 import { APP_VERSION } from './version.js';
 import { setupServiceWorker } from './pwa.js';
 import {
-  sequenceProgress, competencyHeatmap, todayOverview, weekSummary,
+  sequenceProgress, competencyHeatmap, competencyProfile, todayOverview, weekSummary,
 } from './insights.js';
+import {
+  OHNE_BEREICH_ID, normalisiereModell, normalisiereEtikett,
+  katalogNachBereichen, filterKatalog, alleBereiche, bereichVon,
+  istSystemKompetenz, istSystemBereich,
+} from './competencies.js';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronLeft, ChevronRight,
@@ -1348,8 +1353,169 @@ function CommandPalette({ open, commands, onClose }){
    Schulleitung und Datenschutzbeauftragten belegen können, wo die Daten
    liegen. Ein Satz in der Dokumentation reicht dafür nicht.
    ============================================================ */
+/* ============================================================
+   Kompetenzen verwalten
+
+   Bewusst innerhalb der Einstellungen und nicht als eigene Ansicht: Es
+   ist eine Sache, die man selten anfasst. Der häufige Weg – eine eigene
+   Kompetenz anlegen – läuft direkt in der Stunde und braucht diese
+   Ansicht gar nicht.
+
+   Systemkompetenzen lassen sich ausblenden, aber nicht löschen. Eigene
+   lassen sich umbenennen, einem Bereich zuordnen und löschen. Gelöscht
+   heisst: aus der Auswahl genommen – die Stunden, in denen sie vorkam,
+   behalten sie.
+   ============================================================ */
+function CompetencyManager({
+  modell, benutzte,
+  onSetHidden, onSetArea, onRename, onDelete,
+  onAddArea, onRenameArea, onDeleteArea,
+}){
+  const [suche, setSuche] = useState('');
+  const [neuerBereich, setNeuerBereich] = useState('');
+  const [bearbeitet, setBearbeitet] = useState(null);   // { art, id, wert }
+
+  const bereiche = useMemo(
+    ()=> katalogNachBereichen({ modell, benutzte, mitAusgeblendeten: true, mitLeeren: true }),
+    [modell, benutzte]
+  );
+  const gefiltert = useMemo(()=> filterKatalog(bereiche, suche), [bereiche, suche]);
+  const zuordenbar = useMemo(()=> alleBereiche(modell), [modell]);
+
+  const bearbeiteJetzt = (art, id, wert)=> setBearbeitet({ art, id, wert });
+  const brichAb = ()=> setBearbeitet(null);
+  const uebernimm = ()=>{
+    if (!bearbeitet) return;
+    const wert = String(bearbeitet.wert || '').trim();
+    if (wert) {
+      if (bearbeitet.art === 'kompetenz') onRename?.(bearbeitet.id, wert);
+      else onRenameArea?.(bearbeitet.id, wert);
+    }
+    setBearbeitet(null);
+  };
+  const beiTaste = (e)=>{
+    if (e.key === 'Enter') { e.preventDefault(); uebernimm(); }
+    if (e.key === 'Escape') { e.preventDefault(); brichAb(); }
+  };
+
+  return (
+    <div className="kompetenzVerwaltung">
+      <div className="row wrap" style={{gap:8, alignItems:'flex-end'}}>
+        <div style={{flex:1, minWidth:200}}>
+          <label className="small muted">Kompetenz suchen</label>
+          <input className="input" value={suche} onChange={(e)=>setSuche(e.target.value)}
+                 placeholder="System- und eigene Kompetenzen…" />
+        </div>
+        <div style={{flex:1, minWidth:200}}>
+          <label className="small muted">Kompetenzbereich hinzufügen</label>
+          <div className="row" style={{gap:8}}>
+            <input className="input" value={neuerBereich}
+                   onChange={(e)=>setNeuerBereich(e.target.value)}
+                   onKeyDown={(e)=>{
+                     if (e.key !== 'Enter') return;
+                     e.preventDefault();
+                     if (neuerBereich.trim()) { onAddArea?.(neuerBereich); setNeuerBereich(''); }
+                   }}
+                   placeholder="z. B. Text- und Medienkompetenz" />
+            <button className="btn" disabled={!neuerBereich.trim()}
+                    onClick={()=>{ onAddArea?.(neuerBereich); setNeuerBereich(''); }}>Hinzufügen</button>
+          </div>
+        </div>
+      </div>
+
+      <p className="muted small" style={{margin:'10px 0 0'}}>
+        Ausgeblendete Kompetenzen verschwinden aus der Auswahl, bleiben aber in
+        vorhandenen Stunden und in der Jahresübersicht stehen. Löschen nimmt eine
+        eigene Kompetenz aus der Auswahl – die Stunden, in denen sie vorkam,
+        behalten sie.
+      </p>
+
+      {gefiltert.length === 0 ? (
+        <p className="muted small" style={{marginBottom:0}}>Keine Kompetenz gefunden.</p>
+      ) : gefiltert.map((b)=>{
+        const bearbeiteBereich = bearbeitet?.art === 'bereich' && bearbeitet.id === b.id;
+        return (
+          <div key={b.id} className="kompetenzBereich">
+            <div className="kompetenzBereichKopf">
+              {bearbeiteBereich ? (
+                <>
+                  <input className="input" autoFocus value={bearbeitet.wert}
+                         onChange={(e)=>setBearbeitet({ ...bearbeitet, wert: e.target.value })}
+                         onKeyDown={beiTaste} />
+                  <button className="btn" onClick={uebernimm}>Speichern</button>
+                  <button className="btn" onClick={brichAb}>Abbrechen</button>
+                </>
+              ) : (
+                <>
+                  <h4 className="kompetenzBereichName">{b.name}</h4>
+                  {b.source === 'custom' ? (
+                    <>
+                      <button className="btn btnMini" title="Bereich umbenennen" aria-label="Bereich umbenennen"
+                              onClick={()=>bearbeiteJetzt('bereich', b.id, b.name)}><Pencil {...ICON_SM} /></button>
+                      <button className="btn btnMini" title="Bereich löschen" aria-label="Bereich löschen"
+                              onClick={()=>onDeleteArea?.(b.id)}><Trash2 {...ICON_SM} /></button>
+                    </>
+                  ) : null}
+                </>
+              )}
+            </div>
+
+            {b.kompetenzen.map((k)=>{
+              const bearbeiteKompetenz = bearbeitet?.art === 'kompetenz' && bearbeitet.id === k.label;
+              return (
+                <div key={k.label} className="kompetenzZeile">
+                  {bearbeiteKompetenz ? (
+                    <>
+                      <input className="input" autoFocus value={bearbeitet.wert}
+                             onChange={(e)=>setBearbeitet({ ...bearbeitet, wert: e.target.value })}
+                             onKeyDown={beiTaste} />
+                      <button className="btn" onClick={uebernimm}>Speichern</button>
+                      <button className="btn" onClick={brichAb}>Abbrechen</button>
+                    </>
+                  ) : (
+                    <>
+                      <label className="kompetenzSicht" title={k.hidden ? 'Wieder einblenden' : 'Ausblenden'}>
+                        <input type="checkbox" checked={!k.hidden}
+                               onChange={(e)=>onSetHidden?.(k.label, !e.target.checked)} />
+                        <span className={k.hidden ? 'kompetenzNameAus' : 'kompetenzName'}>{k.label}</span>
+                      </label>
+
+                      {k.source === 'custom' ? (
+                        <>
+                          <select className="input kompetenzBereichWahl"
+                                  value={bereichVon(k.label, modell)}
+                                  aria-label={`Bereich von ${k.label}`}
+                                  onChange={(e)=>onSetArea?.(k.label, e.target.value)}>
+                            {zuordenbar.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
+                          </select>
+                          <button className="btn btnMini" title="Umbenennen" aria-label={`${k.label} umbenennen`}
+                                  onClick={()=>bearbeiteJetzt('kompetenz', k.label, k.label)}><Pencil {...ICON_SM} /></button>
+                          <button className="btn btnMini" title="Aus der Auswahl löschen"
+                                  aria-label={`${k.label} löschen`}
+                                  onClick={()=>onDelete?.(k.label)}><Trash2 {...ICON_SM} /></button>
+                        </>
+                      ) : (
+                        <span className="muted small kompetenzHerkunft">System</span>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onImportBackup,
-                        weekReview, onChangeWeekReview }){
+                        weekReview, onChangeWeekReview,
+                        languageMode, onChangeLanguageMode,
+                        competencyModel, benutzteKompetenzen,
+                        onSetCompetencyHidden, onSetCompetencyArea, onRenameCompetency,
+                        onDeleteCompetency, onAddCompetencyArea, onRenameCompetencyArea,
+                        onDeleteCompetencyArea }){
   const istBrowser = platformName === 'browser';
   return (
     <div className="card" style={{display:'flex', flexDirection:'column', gap:18}}>
@@ -1380,6 +1546,41 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
             <span>Anzeigen</span>
           </label>
         </div>
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Fachdidaktische Erweiterungen</h3>
+        <div className="settingsRow">
+          <span className="settingsText" style={{margin:0}}>
+            <strong>Fremdsprachenmodus.</strong> Erweitert die Kompetenzplanung um
+            fremdsprachendidaktische Kompetenzbereiche nach dem handlungsorientierten
+            Ansatz des GER. Eigene Kompetenzen können jederzeit ergänzt werden.
+          </span>
+          <label className="row" style={{gap:8, flexShrink:0}}>
+            <input type="checkbox" checked={!!languageMode}
+                   onChange={(e)=>onChangeLanguageMode(e.target.checked)} />
+            <span>Aktiv</span>
+          </label>
+        </div>
+        {languageMode ? (
+          <CompetencyManager
+            modell={competencyModel}
+            benutzte={benutzteKompetenzen}
+            onSetHidden={onSetCompetencyHidden}
+            onSetArea={onSetCompetencyArea}
+            onRename={onRenameCompetency}
+            onDelete={onDeleteCompetency}
+            onAddArea={onAddCompetencyArea}
+            onRenameArea={onRenameCompetencyArea}
+            onDeleteArea={onDeleteCompetencyArea}
+          />
+        ) : (
+          <p className="settingsText muted small" style={{marginBottom:0}}>
+            Ist der Modus aus, verhält sich die Kompetenzplanung wie bisher:
+            freie Eingabe mit Vorschlägen. Vorhandene Kompetenzen bleiben in
+            jedem Fall erhalten – auch beim späteren Abschalten.
+          </p>
+        )}
       </section>
 
       <section>
@@ -1586,7 +1787,48 @@ function TodayView({ heute, todayISO, getSeqProgress, onOpenLesson, onOpenTodos,
    Bewusst ohne Soll-Vergleich und ohne Lücken-Warnung. Die Karte zeigt
    die Verteilung; ob sie stimmt, weiss nur die Lehrkraft.
    ============================================================ */
-function CompetencyHeatmapView({ daten, onBack }){
+/* Kompetenzprofil nach Bereichen.
+
+   Ausdrücklich deskriptiv: Anteile, sonst nichts. Keine Sollwerte,
+   keine Farbcodierung nach "gut" und "schlecht", keine Hinweise auf
+   fehlende Bereiche. Die Zahlen gehören der Lehrkraft; die App
+   kommentiert sie nicht. */
+function CompetencyProfileView({ profil }){
+  if (!profil || !profil.bereiche.length) return null;
+  const prozent = (a)=> Math.round(a * 100);
+  return (
+    <div className="profilListe">
+      {profil.bereiche.map((b)=>(
+        <div key={b.id} className="profilZeile">
+          <div className="profilKopf">
+            <span className="profilName">{b.name}</span>
+            <span className="profilZahl">{prozent(b.anteil)} % · {b.anzahl} Zuordnungen</span>
+          </div>
+          <div className="profilBahn" role="img"
+               aria-label={`${b.name}: ${prozent(b.anteil)} Prozent, ${b.anzahl} Zuordnungen`}>
+            <div className="profilFuellung" style={{ width: `${b.anteil * 100}%` }} />
+          </div>
+          <details className="profilDetails">
+            <summary>{b.kompetenzen.length} {b.kompetenzen.length === 1 ? 'Kompetenz' : 'Kompetenzen'}</summary>
+            <ul className="profilDetailListe">
+              {b.kompetenzen.map((k)=>(
+                <li key={k.name}>
+                  <span>{k.name}</span>
+                  <span className="profilDetailZahl">
+                    {k.anzahl} {k.anzahl === 1 ? 'Stunde' : 'Stunden'}
+                    {k.primaer > 0 ? ` · ${k.primaer}× primär` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CompetencyHeatmapView({ daten, profil, onBack }){
   const monatsName = (m)=>{
     const [j, mo] = String(m).split('-');
     const d = new Date(Number(j), Number(mo) - 1, 1);
@@ -1614,6 +1856,17 @@ function CompetencyHeatmapView({ daten, onBack }){
           </p>
         </div>
       </div>
+
+      {profil && profil.bereiche.length ? (
+        <section style={{marginTop:14}}>
+          <h3 className="settingsHeading">Kompetenzprofil</h3>
+          <p className="muted small" style={{margin:'0 0 4px'}}>
+            Wie sich die Zuordnungen auf die Bereiche verteilen. Eine Beschreibung,
+            keine Bewertung.
+          </p>
+          <CompetencyProfileView profil={profil} />
+        </section>
+      ) : null}
 
       <div className="heatScroll">
         <table className="heatTable">
@@ -1898,6 +2151,12 @@ function ensureDbShape(raw){
     if (!s.id) s.id = id;
     if (!s.name) s.name = String(id);
     if (!s.color) s.color = SEQ_COLORS[Math.abs(hashCode(id)) % SEQ_COLORS.length];
+    /* Schwerpunkt der Sequenz – dieselbe Form wie in der Stunde, damit
+       beides mit denselben Bausteinen bearbeitet werden kann. Stunden
+       dürfen davon abweichen; die Sequenz gibt nichts vor. */
+    if (!Array.isArray(s.competencies)) s.competencies = [];
+    s.competencies = s.competencies.map(x => String(x || '').trim()).filter(Boolean);
+    s.primaryCompetency = String(s.primaryCompetency || '').trim();
   }
 
   // Normalize templates (ensure id/lessons)
@@ -1963,7 +2222,19 @@ db.todos = (Array.isArray(db.todos) ? db.todos : []).map(t => {
   if (!THEME_CHOICES.includes(db.appSettings.theme)) db.appSettings.theme = 'system';
   // Wochenabschluss: standardmässig an, dauerhaft abschaltbar.
   if (typeof db.appSettings.weekReview !== 'boolean') db.appSettings.weekReview = true;
+  /* Fremdsprachenmodus: bei bestehenden wie bei neuen Installationen aus.
+     Er schaltet ausschliesslich die Darstellung der Kompetenzauswahl um –
+     an den gespeicherten Kompetenzen ändert er nichts. */
+  if (typeof db.appSettings.languageMode !== 'boolean') db.appSettings.languageMode = false;
 
+  /* Der gespeicherte Teil des Kompetenzkatalogs.
+
+     Rein additiv: fehlt das Feld, entsteht ein leeres Modell, und die App
+     verhält sich wie zuvor. Die Kompetenzen der Stunden werden NICHT
+     angefasst – sie bleiben Etiketten, so wie sie seit der ersten Fassung
+     gespeichert sind. Damit ist dieser Schritt für sich genommen
+     verlustfrei und beliebig oft wiederholbar. */
+  db.competencyModel = normalisiereModell(db.competencyModel);
 
   return db;
 }
@@ -2305,6 +2576,24 @@ export default function App(){
     return entries.map(([label])=>label);
   }, [db?.competencies, db?.hiddenSuggestions]);
 
+  /* Der Fremdsprachenmodus und der gespeicherte Teil des Katalogs.
+     Beides wird an die Stellen durchgereicht, die Kompetenzen anzeigen –
+     die Auswahl in der Stunde, die Verwaltung, die Jahresübersicht. */
+  const languageMode = Boolean(db?.appSettings?.languageMode);
+  const competencyModel = useMemo(
+    ()=> normalisiereModell(db?.competencyModel),
+    [db?.competencyModel]
+  );
+  /* Alle je benutzten Etiketten – ohne die aus den Vorschlägen entfernten.
+     Sie sind die eigenen Kompetenzen; es braucht dafür keine eigene
+     Ablage, weil db.competencies sie seit jeher führt. */
+  const benutzteKompetenzen = competencySuggestions;
+
+  /* Ausgeblendetes gehört auch nicht in die freie Vorschlagsliste. */
+  const sichtbareKompetenzVorschlaege = useMemo(
+    ()=> competencySuggestions.filter(l => !competencyModel.hidden?.[l]),
+    [competencySuggestions, competencyModel]
+  );
 
 const classGroupSuggestions = useMemo(()=>{
   if (!db || !db.classGroups) return [];
@@ -3165,6 +3454,151 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     persist(nextDb);
   };
 
+  /* ============================================================
+     Kompetenzkatalog
+
+     Alles hier arbeitet auf Etiketten, weil die Stunden Etiketten
+     speichern. Die Funktionen fassen deshalb nie eine Stunde an – mit
+     einer begründeten Ausnahme: Umbenennen. Bliebe eine Stunde beim
+     alten Namen, hätte die Lehrkraft danach zwei Kompetenzen statt
+     einer, und die Jahresübersicht zählte getrennt. Ein Umbenennen ist
+     genau das Versprechen, dass es dieselbe Kompetenz bleibt.
+     ============================================================ */
+
+  const updateCompetencyModel = (aendern) => {
+    const nextDb = deepClone(db);
+    const modell = normalisiereModell(nextDb.competencyModel);
+    nextDb.competencyModel = normalisiereModell(aendern(modell) || modell);
+    persist(nextDb);
+  };
+
+  /* Ausblenden ist die zurückhaltende Geste: die Kompetenz verschwindet
+     aus der Auswahl, bleibt aber in allen Stunden und in der Übersicht
+     stehen und lässt sich jederzeit wieder einblenden. */
+  const setCompetencyHidden = (label, hidden) => {
+    const l = normalisiereEtikett(label);
+    if (!l) return;
+    updateCompetencyModel((m)=>{
+      const next = { ...m, hidden: { ...m.hidden } };
+      if (hidden) next.hidden[l] = true; else delete next.hidden[l];
+      return next;
+    });
+  };
+
+  const setCompetencyArea = (label, bereichId) => {
+    const l = normalisiereEtikett(label);
+    if (!l || istSystemKompetenz(l)) return;
+    updateCompetencyModel((m)=>{
+      const next = { ...m, areaOf: { ...m.areaOf } };
+      if (bereichId && bereichId !== OHNE_BEREICH_ID) next.areaOf[l] = bereichId;
+      else delete next.areaOf[l];
+      return next;
+    });
+  };
+
+  /* Umbenennen: das Etikett wird überall dort ersetzt, wo es steht –
+     im Katalog, in jeder Stunde, in jeder Sequenz und in jeder Vorlage.
+     Trifft der neue Name auf ein bereits vorhandenes Etikett, werden
+     beide zusammengeführt statt verdoppelt. */
+  const renameCompetency = (vonLabel, nachLabel) => {
+    const alt = normalisiereEtikett(vonLabel);
+    const neu = normalisiereEtikett(nachLabel);
+    if (!alt || !neu || alt === neu) return;
+    if (istSystemKompetenz(alt)) return;   // Systemnamen bleiben, wie sie sind
+
+    const before = db;
+    const nextDb = deepClone(db);
+    const tausch = (x)=> (String(x || '').trim() === alt ? neu : x);
+    const tauschListe = (arr)=> Array.from(new Set(
+      (Array.isArray(arr) ? arr : []).map(x => tausch(String(x || '').trim())).filter(Boolean)
+    ));
+
+    for (const woche of Object.values(nextDb.weeks || {})) {
+      for (const stunde of Object.values(woche?.lessons || {})) {
+        if (!stunde || typeof stunde !== 'object') continue;
+        stunde.competencies = tauschListe(stunde.competencies);
+        stunde.primaryCompetency = tausch(stunde.primaryCompetency || '');
+      }
+    }
+    for (const seq of Object.values(nextDb.sequences || {})) {
+      if (!seq || typeof seq !== 'object') continue;
+      seq.competencies = tauschListe(seq.competencies);
+      seq.primaryCompetency = tausch(seq.primaryCompetency || '');
+    }
+    for (const tpl of Object.values(nextDb.sequenceTemplates || {})) {
+      for (const l of (Array.isArray(tpl?.lessons) ? tpl.lessons : [])) {
+        if (!l || typeof l !== 'object') continue;
+        l.competencies = tauschListe(l.competencies);
+        l.primaryCompetency = tausch(l.primaryCompetency || '');
+      }
+    }
+
+    // Katalog: Nutzungszähler zusammenführen, Zuordnung und Ausblendung mitnehmen.
+    const komp = nextDb.competencies || {};
+    if (komp[alt]) {
+      const a = komp[alt];
+      const b = komp[neu] || { count: 0, lastUsed: '' };
+      komp[neu] = {
+        ...b,
+        count: (b.count || 0) + (a.count || 0),
+        lastUsed: [a.lastUsed || '', b.lastUsed || ''].sort().pop() || '',
+      };
+      delete komp[alt];
+    } else if (!komp[neu]) {
+      komp[neu] = { count: 1, lastUsed: new Date().toISOString() };
+    }
+    nextDb.competencies = komp;
+
+    const m = normalisiereModell(nextDb.competencyModel);
+    if (m.areaOf[alt]) { m.areaOf[neu] = m.areaOf[alt]; delete m.areaOf[alt]; }
+    if (m.hidden[alt]) { m.hidden[neu] = true; delete m.hidden[alt]; }
+    nextDb.competencyModel = normalisiereModell(m);
+
+    runUndoable('Kompetenz umbenannt', before, ()=>persist(nextDb));
+  };
+
+  /* Löschen nimmt die Kompetenz aus dem Katalog, NICHT aus den Stunden.
+     Eine bereits gehaltene Stunde soll zeigen, was in ihr vorkam –
+     unabhängig davon, was heute noch zur Auswahl steht. Dafür gibt es
+     bereits den Weg über hideSuggestion; er wird hier wiederverwendet. */
+  const deleteCompetency = (label) => {
+    const l = normalisiereEtikett(label);
+    if (!l || istSystemKompetenz(l)) return;
+    hideSuggestion('competency', l);
+  };
+
+  const addCompetencyArea = (name) => {
+    const n = String(name || '').trim();
+    if (!n) return;
+    updateCompetencyModel((m)=>({
+      ...m,
+      customAreas: [...m.customAreas, { id: `area-${uid()}`, name: n }],
+    }));
+  };
+
+  const renameCompetencyArea = (id, name) => {
+    const n = String(name || '').trim();
+    if (!id || !n || istSystemBereich(id)) return;
+    updateCompetencyModel((m)=>({
+      ...m,
+      customAreas: m.customAreas.map(a => a.id === id ? { ...a, name: n } : a),
+    }));
+  };
+
+  /* Einen eigenen Bereich zu löschen darf keine Kompetenz kosten: die
+     Zuordnungen fallen weg, die Etiketten bleiben und rücken in
+     „Ohne Bereich". In den Stunden ändert sich gar nichts. */
+  const deleteCompetencyArea = (id) => {
+    if (!id || istSystemBereich(id)) return;
+    updateCompetencyModel((m)=>{
+      const areaOf = { ...m.areaOf };
+      for (const [label, bereichId] of Object.entries(areaOf)) {
+        if (bereichId === id) delete areaOf[label];
+      }
+      return { ...m, customAreas: m.customAreas.filter(a => a.id !== id), areaOf };
+    });
+  };
+
   const rememberSocialForm = (label) => {
     const l = (label || '').trim();
     if (!l) return;
@@ -3717,7 +4151,15 @@ const doExportDocx = async (html, suggestedName) => {
       );
     }
     if (view.name === 'competencies') {
-      return <CompetencyHeatmapView daten={competencyHeatmap(db)} />;
+      return (
+        <CompetencyHeatmapView
+          daten={competencyHeatmap(db)}
+          /* Das Profil folgt der Gliederung des Katalogs. Ohne den
+             Fremdsprachenmodus gibt es keine Bereiche, nach denen sich
+             sinnvoll bündeln liesse – dann bleibt es bei der Wärmekarte. */
+          profil={languageMode ? competencyProfile(db, { modell: competencyModel }) : null}
+        />
+      );
     }
     if (view.name === 'settings') {
       return (
@@ -3729,6 +4171,17 @@ const doExportDocx = async (html, suggestedName) => {
           onImportBackup={importBackup}
           weekReview={appSettings?.weekReview !== false}
           onChangeWeekReview={(v)=>updateAppSettings({ weekReview: !!v })}
+          languageMode={languageMode}
+          onChangeLanguageMode={(v)=>updateAppSettings({ languageMode: !!v })}
+          competencyModel={competencyModel}
+          benutzteKompetenzen={benutzteKompetenzen}
+          onSetCompetencyHidden={setCompetencyHidden}
+          onSetCompetencyArea={setCompetencyArea}
+          onRenameCompetency={renameCompetency}
+          onDeleteCompetency={deleteCompetency}
+          onAddCompetencyArea={addCompetencyArea}
+          onRenameCompetencyArea={renameCompetencyArea}
+          onDeleteCompetencyArea={deleteCompetencyArea}
         />
       );
     }
@@ -3766,7 +4219,10 @@ const doExportDocx = async (html, suggestedName) => {
         appSettings={appSettings}
         onUpdateAppSettings={updateAppSettings}
         schoolCalendar={schoolCalendar}
-        competencySuggestions={competencySuggestions}
+        competencySuggestions={sichtbareKompetenzVorschlaege}
+        languageMode={languageMode}
+        competencyModel={competencyModel}
+        benutzteKompetenzen={benutzteKompetenzen}
         onHideCompetencySuggestion={(label)=>hideSuggestion('competency', label)}
         suggestions={socialFormSuggestions}
         phaseNameSuggestions={phaseNameSuggestions}
@@ -3997,6 +4453,11 @@ const doExportDocx = async (html, suggestedName) => {
           onCreate={(name)=>createSequence(name)}
           onUpdate={(id, patch)=>updateSequence(id, patch)}
           onDelete={(id)=>deleteSequence(id)}
+          competencySuggestions={sichtbareKompetenzVorschlaege}
+          languageMode={languageMode}
+          competencyModel={competencyModel}
+          benutzteKompetenzen={benutzteKompetenzen}
+          onRememberCompetency={rememberCompetency}
           afterCreate={seqManagerModal.afterCreate}
           autoCloseOnCreate={seqManagerModal.autoCloseOnCreate}
           onSaveAsTemplate={(id)=>{
@@ -4807,6 +5268,9 @@ function LessonView({
   onUpdateAppSettings,
   schoolCalendar,
   competencySuggestions,
+  languageMode,
+  competencyModel,
+  benutzteKompetenzen,
   suggestions,
   phaseNameSuggestions,
   onCreateSequence,
@@ -4887,6 +5351,18 @@ function LessonView({
   const localRef = useRef(local);
   useEffect(()=>{ localRef.current = local; }, [local]);
 
+  /* Auch der Speicher-Rückruf muss frisch bleiben.
+
+     Der Abschluss beim Verlassen der Ansicht unten hängt an [] und hielt
+     deshalb den Rückruf des ERSTEN Rendervorgangs fest. Der schliesst
+     über den Datenbankstand von damals. Alles, was währenddessen sonst
+     gespeichert wurde – eine gemerkte Kompetenz, eine Sozialform, eine
+     Lerngruppenfarbe –, wurde beim Verlassen wieder überschrieben, wenn
+     man schneller wegklickte als die 600 ms des verzögerten Speicherns.
+     Mit dem Ref schreibt der Abschluss auf den aktuellen Stand. */
+  const onUpdateLessonRef = useRef(onUpdateLesson);
+  useEffect(()=>{ onUpdateLessonRef.current = onUpdateLesson; });
+
   // Prevent saving a "brand-new" empty lesson just because the user opened it.
   const initialSnapshotRef = useRef(serializeForCompare(lesson));
   const skipNextSaveRef = useRef(true);
@@ -4943,7 +5419,7 @@ function LessonView({
         const latest = localRef.current;
         const curr = serializeForCompare(latest);
         if (curr !== initialSnapshotRef.current) {
-          onUpdateLesson(latest);
+          onUpdateLessonRef.current?.(latest);
           initialSnapshotRef.current = curr;
         }
       } catch {}
@@ -5382,6 +5858,9 @@ const exportDocx = () => {
         competencies={Array.isArray(local.competencies) ? local.competencies : []}
         primary={local.primaryCompetency || ''}
         suggestions={competencySuggestions}
+        languageMode={languageMode}
+        modell={competencyModel}
+        benutzte={benutzteKompetenzen}
         onChange={(nextComps, nextPrimary)=>{
           setLocal(prev => ({ ...prev, competencies: nextComps, primaryCompetency: nextPrimary }));
         }}
@@ -5672,6 +6151,10 @@ function MacroView({
 
   const [groupQuery, setGroupQuery] = useState('');
   const [sequenceFilter, setSequenceFilter] = useState('');
+  /* Kompetenzfilter: arbeitet auf dem Etikett und deckt damit System-
+     wie eigene Kompetenzen gleichermassen ab – es gibt nur eine Art
+     von Wert, nach der gefiltert werden könnte. */
+  const [competencyFilter, setCompetencyFilter] = useState('');
 
   const dates = useMemo(()=>{
     const out = [];
@@ -5728,10 +6211,32 @@ function MacroView({
     return groups.filter(g => g.toLowerCase().includes(q));
   }, [groups, groupQuery]);
 
+  /* Zur Auswahl steht, was in diesem Zeitraum wirklich vorkommt – eine
+     Liste aller je angelegten Kompetenzen wäre hier nur lang. */
+  const kompetenzenImZeitraum = useMemo(()=>{
+    const set = new Set();
+    for (const o of occurrences) {
+      for (const c of (Array.isArray(o.lesson.competencies) ? o.lesson.competencies : [])) {
+        const v = String(c || '').trim();
+        if (v) set.add(v);
+      }
+      const p = String(o.lesson.primaryCompetency || '').trim();
+      if (p) set.add(p);
+    }
+    return [...set].sort((a, b)=> a.localeCompare(b));
+  }, [occurrences]);
+
   const byGroupDate = useMemo(()=>{
     const map = new Map();
     for (const o of occurrences) {
       if (sequenceFilter && (o.lesson.sequenceId || '') !== sequenceFilter) continue;
+      if (competencyFilter && kompetenzenImZeitraum.includes(competencyFilter)) {
+        const liste = Array.isArray(o.lesson.competencies) ? o.lesson.competencies : [];
+        const alle = new Set(liste.map(x => String(x || '').trim()).filter(Boolean));
+        const primaer = String(o.lesson.primaryCompetency || '').trim();
+        if (primaer) alle.add(primaer);
+        if (!alle.has(competencyFilter)) continue;
+      }
       if (!map.has(o.group)) map.set(o.group, new Map());
       const dm = map.get(o.group);
       const arr = dm.get(o.dateISO) || [];
@@ -5739,7 +6244,7 @@ function MacroView({
       dm.set(o.dateISO, arr);
     }
     return map;
-  }, [occurrences, sequenceFilter]);
+  }, [occurrences, sequenceFilter, competencyFilter, kompetenzenImZeitraum]);
 
   const colsStyle = useMemo(()=>({
     gridTemplateColumns: `160px repeat(${dates.length}, 220px)`
@@ -5866,6 +6371,15 @@ const exportSequenceDocx = (sequenceId) => {
             {Object.values(sequences || {}).sort((a,b)=>a.name.localeCompare(b.name)).map(s => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
+          </select>
+        </div>
+        <div style={{width:260}}>
+          <label className="small muted">Kompetenz filtern</label>
+          <select className="input" value={competencyFilter}
+                  onChange={(e)=>setCompetencyFilter(e.target.value)}
+                  disabled={kompetenzenImZeitraum.length === 0}>
+            <option value="">Alle Kompetenzen</option>
+            {kompetenzenImZeitraum.map(k => <option key={k} value={k}>{k}</option>)}
           </select>
         </div>
       </div>
@@ -6710,10 +7224,19 @@ function SequenceManager({
   onSaveAsTemplate,
   onExportPdfSequence,
   onExportDocxSequence,
+  competencySuggestions = [],
+  languageMode = false,
+  competencyModel = null,
+  benutzteKompetenzen = [],
+  onRememberCompetency,
   afterCreate,
   autoCloseOnCreate = false,
 }){
   const ui = useUi();
+  /* Die Kompetenzen einer Sequenz stehen nicht dauerhaft in der Zeile –
+     sie ist bereits dicht genug. Ein Klick klappt sie unter der Sequenz
+     auf, immer nur für eine; ein zweiter schliesst sie wieder. */
+  const [kompetenzSeqId, setKompetenzSeqId] = useState('');
   const [newName, setNewName] = useState('');
   const newNameRef = useRef(null);
   const canAdd = (newName || '').trim().length > 0;
@@ -6955,7 +7478,8 @@ function SequenceManager({
               text="Eine Sequenz fasst die Stunden zu einem Thema zusammen und zeigt dir, wo du darin stehst."
             />
           ) : list.map(s => (
-            <div key={s.id} className="seqRow">
+          <React.Fragment key={s.id}>
+            <div className="seqRow">
               <input
                 type="color"
                 value={s.color || SEQ_COLORS[0]}
@@ -6978,10 +7502,36 @@ function SequenceManager({
                 if (typeof onExportDocxSequence === 'function') onExportDocxSequence(s.id);
               }} title="Sequenz als Word speichern"><FileText {...ICON_SM} /> Word</button>
               <button className="btn" onClick={()=>openSeqFiles(s.id)} title="Dateien für diese Sequenz hinterlegen (nur Verweise, nicht exportiert)">Dateien</button>
+              <button className={`btn${kompetenzSeqId === s.id ? ' primary' : ''}`}
+                      onClick={()=>setKompetenzSeqId(kompetenzSeqId === s.id ? '' : s.id)}
+                      title="Schwerpunkt der Sequenz – die Stunden dürfen davon abweichen">
+                Kompetenzen{(s.competencies || []).length ? ` (${s.competencies.length})` : ''}
+              </button>
               <button className="btn danger" onClick={()=>{
                 onDelete(s.id);
               }}>Löschen</button>
             </div>
+            {kompetenzSeqId === s.id ? (
+              <div className="seqKompetenzen">
+                <p className="muted small" style={{margin:'0 0 8px'}}>
+                  Schwerpunkt dieser Sequenz. Die einzelnen Stunden dürfen andere
+                  Kompetenzen haben – die Sequenz gibt nichts vor.
+                </p>
+                <CompetencyEditor
+                  competencies={Array.isArray(s.competencies) ? s.competencies : []}
+                  primary={s.primaryCompetency || ''}
+                  suggestions={competencySuggestions}
+                  languageMode={languageMode}
+                  modell={competencyModel}
+                  benutzte={benutzteKompetenzen}
+                  onChange={(nextComps, nextPrimary)=>{
+                    onUpdate(s.id, { competencies: nextComps, primaryCompetency: nextPrimary });
+                  }}
+                  onRemember={(v)=>onRememberCompetency?.(v)}
+                />
+              </div>
+            ) : null}
+          </React.Fragment>
           ))}
         </div>
       </div>
@@ -7472,9 +8022,45 @@ function CompetencyPrimaryInput({ value, suggestions, onChange, onCommit, onHide
 }
 
 
-function CompetencyEditor({ competencies, primary, suggestions, onChange, onRemember, onHideSuggestion }){
+/* Ab so vielen auswählbaren Kompetenzen erscheint die Suche. Der
+   Systemkatalog allein bleibt darunter – die Suche kommt also erst,
+   wenn eigene Einträge die Liste tatsächlich haben wachsen lassen. */
+const KOMPETENZ_SUCHE_AB = 24;
+
+function CompetencyEditor({
+  competencies, primary, suggestions, onChange, onRemember, onHideSuggestion,
+  languageMode = false, modell = null, benutzte = [],
+}){
   const [draft, setDraft] = useState('');
-  const id = useMemo(()=> `ct-${Math.random().toString(16).slice(2)}`, []);
+  const [suche, setSuche] = useState('');
+
+  const ausgewaehlt = useMemo(
+    ()=> Array.isArray(competencies) ? competencies : [],
+    [competencies]
+  );
+
+  /* Der Katalog für diese Stunde. `zusaetzlich` sorgt dafür, dass eine
+     bereits eingetragene Kompetenz sichtbar bleibt, auch wenn sie
+     inzwischen ausgeblendet oder aus der Auswahl gelöscht wurde –
+     sonst liesse sie sich nicht mehr abwählen. */
+  const bereiche = useMemo(()=>{
+    if (!languageMode) return [];
+    return katalogNachBereichen({
+      modell,
+      benutzte,
+      zusaetzlich: [...ausgewaehlt, primary].filter(Boolean),
+    });
+  }, [languageMode, modell, benutzte, ausgewaehlt, primary]);
+
+  const anzahlKompetenzen = useMemo(
+    ()=> bereiche.reduce((a, b)=> a + b.kompetenzen.length, 0),
+    [bereiche]
+  );
+  const zeigeSuche = anzahlKompetenzen >= KOMPETENZ_SUCHE_AB;
+  const gefiltert = useMemo(
+    ()=> zeigeSuche ? filterKatalog(bereiche, suche) : bereiche,
+    [bereiche, suche, zeigeSuche]
+  );
 
   const addValue = (raw) => {
     const v = (raw || '').trim();
@@ -7494,6 +8080,11 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
     onChange?.(next, nextPrimary);
   };
 
+  const toggle = (v) => {
+    if (ausgewaehlt.includes(v)) remove(v);
+    else addValue(v);
+  };
+
   const setAsPrimary = (v) => {
     onRemember?.(v);
     onChange?.(competencies || [], v);
@@ -7504,27 +8095,79 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
       <div className="row wrap" style={{justifyContent:'space-between'}}>
         <div>
           <div style={{fontWeight:800}}>Kompetenzen</div>
-          <div className="muted small">Füge Kompetenzen als Tags hinzu. Eine davon kann „primär“ sein.</div>
+          <div className="muted small">
+            {languageMode
+              ? 'Auswählen oder frei ergänzen. Eine davon kann „primär“ sein.'
+              : 'Füge Kompetenzen als Tags hinzu. Eine davon kann „primär“ sein.'}
+          </div>
         </div>
       </div>
 
       <div style={{height:8}} />
 
-      <div className="row wrap" style={{gap:8}}>
-        <div style={{flex:1}}>
-          <TypeaheadInput
-            value={draft}
-            suggestions={suggestions}
-            onChange={setDraft}
-            onCommit={(v)=>setDraft((v || '').toString())}
-            onEnter={(v)=>{ addValue(v); }}
-            onHideSuggestion={onHideSuggestion}
-            placeholder="Kompetenz hinzufügen…"
-            wrapStyle={{width:'100%'}}
-          />
+      {languageMode ? (
+        <div className="kompetenzWahl">
+          {zeigeSuche ? (
+            <input className="input kompetenzSuche" value={suche}
+                   onChange={(e)=>setSuche(e.target.value)}
+                   placeholder="Kompetenz suchen…" aria-label="Kompetenz suchen" />
+          ) : null}
+
+          {gefiltert.length === 0 ? (
+            <div className="muted small">Keine Kompetenz gefunden.</div>
+          ) : gefiltert.map((b)=>(
+            <div key={b.id} className="kompetenzWahlBereich">
+              <div className="kompetenzWahlName">{b.name}</div>
+              <div className="kompetenzWahlListe">
+                {b.kompetenzen.map((k)=>(
+                  <label key={k.label}
+                         className={`kompetenzWahlEintrag${ausgewaehlt.includes(k.label) ? ' is-active' : ''}`}>
+                    <input type="checkbox"
+                           checked={ausgewaehlt.includes(k.label)}
+                           onChange={()=>toggle(k.label)} />
+                    <span>{k.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {/* Eigene Kompetenz ohne Umweg über die Einstellungen: sie steht
+              sofort in dieser Stunde und ab dann in jeder weiteren. */}
+          <div className="kompetenzEigene">
+            <div className="small muted">Eigene Kompetenz</div>
+            <div className="row" style={{gap:8}}>
+              <TypeaheadInput
+                value={draft}
+                suggestions={suggestions}
+                onChange={setDraft}
+                onCommit={(v)=>setDraft((v || '').toString())}
+                onEnter={(v)=>{ addValue(v); }}
+                onHideSuggestion={onHideSuggestion}
+                placeholder="z. B. Gesprächsstrategien"
+                wrapStyle={{flex:1}}
+              />
+              <button className="btn" onClick={add} disabled={!draft.trim()}>Hinzufügen</button>
+            </div>
+          </div>
         </div>
-        <button className="btn" onClick={add}>Hinzufügen</button>
-      </div>
+      ) : (
+        <div className="row wrap" style={{gap:8}}>
+          <div style={{flex:1}}>
+            <TypeaheadInput
+              value={draft}
+              suggestions={suggestions}
+              onChange={setDraft}
+              onCommit={(v)=>setDraft((v || '').toString())}
+              onEnter={(v)=>{ addValue(v); }}
+              onHideSuggestion={onHideSuggestion}
+              placeholder="Kompetenz hinzufügen…"
+              wrapStyle={{width:'100%'}}
+            />
+          </div>
+          <button className="btn" onClick={add}>Hinzufügen</button>
+        </div>
+      )}
 
       <div style={{height:10}} />
 
@@ -7947,6 +8590,36 @@ function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalenda
   const lessonStart = getLessonStartTime(schoolCalendar, slotIndex);
   const times = computePhaseTimes(phases, lessonStart);
 
+  /* Kompetenzen im Verlaufsplan.
+
+     Sie standen bisher nur im Wochenexport, und dort nur als einzelne
+     Zeile mit der primären Kompetenz. Weil es hier um dieselben
+     Etiketten geht, trägt derselbe Block System- wie eigene
+     Kompetenzen; die primäre steht mit Stern voran. Ohne eingetragene
+     Kompetenzen entfällt der Block, damit vorhandene Ausgaben
+     unverändert aussehen. */
+  const kompetenzBlock = (()=>{
+    const primaer = String(l.primaryCompetency || '').trim();
+    const alle = new Set((Array.isArray(l.competencies) ? l.competencies : [])
+      .map(x => String(x || '').trim()).filter(Boolean));
+    if (primaer) alle.add(primaer);
+    if (!alle.size) return '';
+    const sortiert = [...alle].sort((a, b)=>{
+      if (a === primaer) return -1;
+      if (b === primaer) return 1;
+      return a.localeCompare(b);
+    });
+    const text = sortiert
+      .map(k => (k === primaer ? `★ ${k}` : k))
+      .map(escapeHtml)
+      .join(' · ');
+    return `
+    <div class="block">
+      <div class="k">Kompetenzen</div>
+      <div class="v">${text}</div>
+    </div>`;
+  })();
+
   const rows = phases.map((p, i)=>{
     const t = times[i] || { start:'', end:'' };
     const timeCell = (t.start ? `<div class="tStart"><strong>${escapeHtml(t.start)}</strong></div>` : '') +
@@ -8018,6 +8691,7 @@ function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalenda
       <div class="k">Lernziele</div>
       <div class="v">${escapeHtml(l.objectives || '').replaceAll('\n','<br/>')}</div>
     </div>
+    ${kompetenzBlock}
   </div>
 
   <table>

@@ -9,6 +9,9 @@
    zeigen, was vorbereitet und gehalten wurde – nicht, ob das genug war.
    ============================================================ */
 
+import { alleBereiche, bereichVon } from './competencies.js';
+import { normalisiereReview, stundenRef } from './nachbereitung.js';
+
 /* Ein Stundenschlüssel ist "tag-stunde" innerhalb einer Woche. */
 export function parseLessonKey(key){
   const parts = String(key || '').split('-');
@@ -115,6 +118,118 @@ export function competencyHeatmap(db, { fromISO, toISO } = {}){
 
   const hoechst = zeilen.reduce((m, z)=> Math.max(m, ...z.zellen.map(c => c.anzahl)), 0);
   return { monate: monatsListe, zeilen, hoechst, gesamt };
+}
+
+/* ---- Kompetenzprofil --------------------------------------------------
+   Dieselben Zahlen wie die Wärmekarte, nur nach Bereichen gebündelt.
+   Sie beschreibt und bewertet nicht: kein Soll, keine Ampel, kein
+   Hinweis auf ein angebliches Ungleichgewicht. Was hier steht, ist
+   ausschliesslich, was in den Stunden eingetragen wurde.
+
+   Gezählt wird je Stunde und Etikett genau einmal – die primäre
+   Kompetenz zählt nicht doppelt, auch wenn sie zusätzlich in der Liste
+   steht. */
+export function competencyProfile(db, { modell, fromISO, toISO } = {}){
+  const proKompetenz = new Map();   // Etikett -> { anzahl, primaer }
+  let gesamt = 0;
+
+  for (const item of allLessonsChronological(db)) {
+    const d = item.dateISO;
+    if (fromISO && d < fromISO) continue;
+    if (toISO && d > toISO) continue;
+    const liste = Array.isArray(item.lesson?.competencies) ? item.lesson.competencies : [];
+    const primaer = String(item.lesson?.primaryCompetency || '').trim();
+    const alle = new Set(liste.map(x => String(x || '').trim()).filter(Boolean));
+    if (primaer) alle.add(primaer);
+    for (const name of alle) {
+      const cur = proKompetenz.get(name) || { anzahl: 0, primaer: 0 };
+      cur.anzahl += 1;
+      if (name === primaer) cur.primaer += 1;
+      proKompetenz.set(name, cur);
+      gesamt += 1;
+    }
+  }
+
+  const proBereich = new Map();
+  for (const [name, werte] of proKompetenz.entries()) {
+    const bereichId = bereichVon(name, modell);
+    if (!proBereich.has(bereichId)) proBereich.set(bereichId, { anzahl: 0, kompetenzen: [] });
+    const eintrag = proBereich.get(bereichId);
+    eintrag.anzahl += werte.anzahl;
+    eintrag.kompetenzen.push({ name, anzahl: werte.anzahl, primaer: werte.primaer });
+  }
+
+  const bereiche = alleBereiche(modell)
+    .map(b => {
+      const eintrag = proBereich.get(b.id);
+      if (!eintrag || !eintrag.anzahl) return null;
+      return {
+        id: b.id,
+        name: b.name,
+        anzahl: eintrag.anzahl,
+        anteil: gesamt > 0 ? eintrag.anzahl / gesamt : 0,
+        kompetenzen: eintrag.kompetenzen
+          .sort((a, b2)=> b2.anzahl - a.anzahl || a.name.localeCompare(b2.name)),
+      };
+    })
+    .filter(Boolean);
+
+  return { gesamt, bereiche };
+}
+
+/* ---- Offene Punkte einer Lerngruppe -----------------------------------
+   Die kleine Inbox einer Lerngruppe: was aus früheren Stunden noch
+   aussteht. Bewusst NICHT an eine konkrete Folgestunde gebunden –
+   dadurch überlebt ein offener Punkt, dass die geplante nächste Stunde
+   gelöscht wird, der Unterricht ausfällt oder sich der Plan verschiebt.
+
+   Die Lerngruppe ist das Paar aus Klasse und Fach. Weil das Fach darin
+   steckt, kann ein Punkt aus Französisch 9b weder in 9a noch in einem
+   anderen Fach derselben Klasse auftauchen.
+
+   Gezeigt wird nur, was zeitlich VOR der fragenden Stunde liegt.
+   Sortiert: das Neueste zuerst. Die App gewichtet nichts fachlich. */
+export function offenePunkteFuer(db, { classGroup, subject, weekStart, dayIndex, slotIndex } = {}){
+  const gruppe = `${String(classGroup || '').trim()}||${String(subject || '').trim()}`;
+  if (gruppe === '||') return [];
+
+  const zielDatum = weekStart ? addDaysISO(weekStart, Number(dayIndex) || 0) : '';
+  const zielSlot = Number(slotIndex);
+  const out = [];
+
+  for (const item of allLessonsChronological(db)) {
+    const l = item.lesson || {};
+    const g = `${String(l.classGroup || '').trim()}||${String(l.subject || '').trim()}`;
+    if (g !== gruppe) continue;
+
+    // Nur frühere Stunden. Gleicher Tag zählt, wenn die Stunde davor lag.
+    if (zielDatum) {
+      if (item.dateISO > zielDatum) continue;
+      if (item.dateISO === zielDatum) {
+        if (!Number.isFinite(zielSlot) || item.slotIndex >= zielSlot) continue;
+      }
+    }
+
+    const review = normalisiereReview(l.review);
+    for (const eintrag of review.carryOverItems) {
+      if (eintrag.status !== 'open') continue;
+      out.push({
+        ...eintrag,
+        sourceRef: stundenRef(item),
+        sourceWeekStart: item.weekStart,
+        sourceDayIndex: item.dayIndex,
+        sourceSlotIndex: item.slotIndex,
+        sourceDateISO: item.dateISO,
+        sourceTopic: String(l.topic || '').trim(),
+      });
+    }
+  }
+
+  // Neueste zuerst; innerhalb eines Tages die spätere Stunde zuerst.
+  out.sort((a, b)=> b.sourceDateISO.localeCompare(a.sourceDateISO)
+    || (b.sourceSlotIndex - a.sourceSlotIndex)
+    || a.createdAt.localeCompare(b.createdAt));
+  return out;
 }
 
 /* ---- Heute -----------------------------------------------------------

@@ -6,13 +6,32 @@ import platform, { capabilities, platformName } from './platform/index.js';
 import { APP_VERSION } from './version.js';
 import { setupServiceWorker } from './pwa.js';
 import {
-  sequenceProgress, competencyHeatmap, todayOverview, weekSummary,
+  sequenceProgress, sequenceOccurrences, competencyHeatmap, competencyProfile,
+  offenePunkteFuer, todayOverview, weekSummary,
 } from './insights.js';
+import {
+  OHNE_BEREICH_ID, normalisiereModell, normalisiereEtikett,
+  katalogNachBereichen, filterKatalog, alleBereiche, bereichVon,
+  istSystemKompetenz, istSystemBereich,
+} from './competencies.js';
+import {
+  PHASEN_STATUS, statusZeichen, statusName,
+  normalisiereReview, leeresReview, hatNachbereitung, offeneCarryOver,
+  stundenRef, parseStundenRef, carryOverAusPhase, carryOverAusNotiz, phaseAusCarryOver,
+} from './nachbereitung.js';
+import {
+  SPRECHABSICHTEN, SCAFFOLD_ARTEN, SCAFFOLD_ART_STANDARD, SCAFFOLD_VORSCHLAEGE,
+  UNTERSTUETZUNGSSTUFEN, scaffoldArtName, stufenName, istSystemSprechabsicht,
+  normalisiereErfolgskriterien, normalisiereAufgabe, normalisiereMittel,
+  normalisiereSprechabsichten, normalisiereScaffolds,
+  istLeereAufgabe, istLeereMittel, istLeererScaffold, hatAufgabenDetails, hatFachdidaktik,
+  scaffoldsDerStunde, sequenzProgression,
+} from './didaktik.js';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
-  ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronLeft, ChevronRight,
-  CalendarCheck, CalendarRange, CircleHelp, ClipboardPaste, Copy, FileDown, FileText, Grid3x3, Library,
-  Maximize2, NotebookPen, Palmtree, Pencil, Play, Rows3, Scissors, Search, Settings,
+  ArrowDown, ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
+  CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, FileDown, FileText, Grid3x3, Library,
+  ListTree, Maximize2, NotebookPen, Palmtree, Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
   Square, Star, Sun, Trash2, X,
 } from 'lucide-react';
 
@@ -258,15 +277,42 @@ function hexToRgba(hex, alpha){
 }
 
 
-function SplashOverlay({ visible }){
+/* onDismiss wird nur beim Wiederholen gesetzt. Beim Start soll das Bild
+   seine drei Sekunden stehen; wer es selbst aufruft, will es auch selbst
+   wieder wegklicken können. */
+function SplashOverlay({ visible, onDismiss = null }){
   return (
-    <div className={`splashOverlay ${visible ? '' : 'splashOverlay--hide'}`} aria-hidden={!visible}>
+    <div
+      className={`splashOverlay${visible ? '' : ' splashOverlay--hide'}${onDismiss ? ' splashOverlay--dismissable' : ''}`}
+      aria-hidden={!visible}
+      onClick={onDismiss || undefined}
+    >
       <div className="splashCard">
         <img className="splashLogo" src={logo} alt="Prép-ybara" />
         <div className="splashTitle">Prép-ybara</div>
         <div className="splashSubtitle">Unterrichtsvorbereitung, entspannt.</div>
       </div>
     </div>
+  );
+}
+
+/* Die Bildmarke in der Kopfleiste.
+
+   Sie sah bisher nach etwas aus, das man anfassen kann, tat beim Klick
+   aber nichts. Statt die Andeutung zu entfernen, löst sie jetzt ein, was
+   sie verspricht: das Startbild noch einmal. Als echter Knopf, damit sie
+   auch mit der Tastatur erreichbar ist und angesagt wird. */
+function LogoButton({ onClick }){
+  return (
+    <button
+      type="button"
+      className="logoBtn"
+      onClick={onClick}
+      title="Startbild noch einmal zeigen"
+      aria-label="Startbild noch einmal zeigen"
+    >
+      <img className="logo" src={logo} alt="" aria-hidden="true" />
+    </button>
   );
 }
 
@@ -979,6 +1025,30 @@ function defaultLesson(){
     sequenceId: '',
     primaryCompetency: '',
     competencies: [],
+
+    /* Fachdidaktische Planung. Alles optional und leer voreingestellt;
+       eine Stunde ohne diese Felder ist unverändert eine gültige Stunde.
+
+       successCriteria steht bewusst NICHT unter der fremdsprachlichen
+       Planung: woran man erkennt, dass ein Ziel erreicht ist, ist keine
+       Frage des Fachs. Es bleibt deshalb auch bei abgeschaltetem
+       Fremdsprachenmodus sichtbar. */
+    successCriteria: [],
+    communicativeTask: { text: '', situation: '', audience: '', intention: '', outcome: '' },
+    speechActs: [],
+    languageResources: { vocabulary: '', grammar: '', pronunciation: '', other: '' },
+    /* Die Progressionsnotiz beschreibt die Stunde IN ihrer Sequenz. Sie
+       liegt trotzdem in der Stunde und nicht in der Sequenz: nur so
+       überlebt sie das Verschieben, Kopieren und Übernehmen in eine
+       Vorlage. In der normalen Stundenplanung wird sie nicht angezeigt –
+       sie erscheint allein in der Progressionsansicht. */
+    progressionNote: '',
+
+    /* Nachbereitung. Sie gehört zur Stunde, die sie betrifft – so trägt
+       die vorhandene Wochenpersistenz sie ohne eine zweite Ablage mit.
+       Eine Stunde ohne diese Angaben ist eine gültige Stunde. */
+    review: leeresReview(),
+
     updatedAt: new Date().toISOString()
   };
 }
@@ -996,7 +1066,11 @@ function normalizePhases(phases){
       content: (src.content || ''),
       materialsMedia: (src.materialsMedia || ''),
       remarks: (src.remarks || ''),
-      duration: Math.max(MIN_PHASE_MIN, Math.round(src.duration || 0))
+      duration: Math.max(MIN_PHASE_MIN, Math.round(src.duration || 0)),
+      /* Hilfen dieser Phase. Keine zweite Phasenstruktur – sie hängen
+         an der Phase, die es ohnehin gibt. Fehlt das Feld, entsteht die
+         leere Liste; vorhandene Phasen ändern sich dadurch nicht. */
+      scaffolds: normalisiereScaffolds(src.scaffolds, uid)
     };
   });
   /* Ohne Phasen gibt es nichts zu verteilen.
@@ -1034,6 +1108,36 @@ function normalizePhases(phases){
 }
 
 
+/* Beim Kopieren bekommt eine Phase eine neue id – sonst trügen zwei
+   Stunden dieselbe. Für die Hilfen darin gilt dasselbe: sie sind eigene
+   Objekte mit eigener id und müssen mitgezogen werden, sonst zeigten
+   Kopie und Original auf denselben Schlüssel. */
+/* Eine Kopie ist eine neue Planung, keine Fortsetzung der alten Stunde.
+
+   Nachbereitung beschreibt, was in EINER bestimmten Stunde geschehen
+   ist: welche Phase offen blieb, was aufgefallen ist, was noch aussteht.
+   Auf eine Kopie übertragen wäre das schlicht falsch – die kopierte
+   Stunde wurde nie gehalten. Schlimmer noch: die mitkopierten offenen
+   Punkte tauchten ein zweites Mal in der Lerngruppe auf.
+
+   Deshalb geht hier alles Nachbereitende verloren, absichtlich. Die
+   Planung selbst – Phasen, Inhalte, Kompetenzen, Fachdidaktik – bleibt
+   vollständig erhalten. */
+function nurPlanung(lesson){
+  const l = normalizeLesson(lesson);
+  return { ...l, review: leeresReview() };
+}
+
+function neuePhasenIds(phase){
+  const p = (phase && typeof phase === 'object') ? phase : {};
+  return {
+    ...p,
+    id: uid(),
+    scaffolds: (Array.isArray(p.scaffolds) ? p.scaffolds : [])
+      .map(sc => ({ ...sc, id: uid() })),
+  };
+}
+
 function normalizeLesson(lesson){
   const base = defaultLesson();
   const l = (lesson && typeof lesson === 'object') ? lesson : {};
@@ -1047,6 +1151,13 @@ function normalizeLesson(lesson){
     files: Array.isArray(l.files) ? l.files : [],
     links: Array.isArray(l.links) ? l.links : [],
     phases,
+    // Fachdidaktik: fehlt ein Feld, entsteht die leere Form.
+    successCriteria: normalisiereErfolgskriterien(l.successCriteria),
+    communicativeTask: normalisiereAufgabe(l.communicativeTask),
+    speechActs: normalisiereSprechabsichten(l.speechActs),
+    languageResources: normalisiereMittel(l.languageResources),
+    progressionNote: String(l.progressionNote || '').trim(),
+    review: normalisiereReview(l.review, uid),
     updatedAt: l.updatedAt || base.updatedAt
   };
 }
@@ -1321,8 +1432,228 @@ function CommandPalette({ open, commands, onClose }){
    Schulleitung und Datenschutzbeauftragten belegen können, wo die Daten
    liegen. Ein Satz in der Dokumentation reicht dafür nicht.
    ============================================================ */
+/* ============================================================
+   Kompetenzen verwalten
+
+   Bewusst innerhalb der Einstellungen und nicht als eigene Ansicht: Es
+   ist eine Sache, die man selten anfasst. Der häufige Weg – eine eigene
+   Kompetenz anlegen – läuft direkt in der Stunde und braucht diese
+   Ansicht gar nicht.
+
+   Systemkompetenzen lassen sich ausblenden, aber nicht löschen. Eigene
+   lassen sich umbenennen, einem Bereich zuordnen und löschen. Gelöscht
+   heisst: aus der Auswahl genommen – die Stunden, in denen sie vorkam,
+   behalten sie.
+   ============================================================ */
+function CompetencyManager({
+  modell, benutzte,
+  onSetHidden, onSetArea, onRename, onDelete,
+  onAddArea, onRenameArea, onDeleteArea,
+}){
+  const [suche, setSuche] = useState('');
+  const [neuerBereich, setNeuerBereich] = useState('');
+  const [bearbeitet, setBearbeitet] = useState(null);   // { art, id, wert }
+
+  const bereiche = useMemo(
+    ()=> katalogNachBereichen({ modell, benutzte, mitAusgeblendeten: true, mitLeeren: true }),
+    [modell, benutzte]
+  );
+  const gefiltert = useMemo(()=> filterKatalog(bereiche, suche), [bereiche, suche]);
+  const zuordenbar = useMemo(()=> alleBereiche(modell), [modell]);
+
+  const bearbeiteJetzt = (art, id, wert)=> setBearbeitet({ art, id, wert });
+  const brichAb = ()=> setBearbeitet(null);
+  const uebernimm = ()=>{
+    if (!bearbeitet) return;
+    const wert = String(bearbeitet.wert || '').trim();
+    if (wert) {
+      if (bearbeitet.art === 'kompetenz') onRename?.(bearbeitet.id, wert);
+      else onRenameArea?.(bearbeitet.id, wert);
+    }
+    setBearbeitet(null);
+  };
+  const beiTaste = (e)=>{
+    if (e.key === 'Enter') { e.preventDefault(); uebernimm(); }
+    if (e.key === 'Escape') { e.preventDefault(); brichAb(); }
+  };
+
+  return (
+    <div className="kompetenzVerwaltung">
+      <div className="row wrap" style={{gap:8, alignItems:'flex-end'}}>
+        <div style={{flex:1, minWidth:200}}>
+          <label className="small muted">Kompetenz suchen</label>
+          <input className="input" value={suche} onChange={(e)=>setSuche(e.target.value)}
+                 placeholder="System- und eigene Kompetenzen…" />
+        </div>
+        <div style={{flex:1, minWidth:200}}>
+          <label className="small muted">Kompetenzbereich hinzufügen</label>
+          <div className="row" style={{gap:8}}>
+            <input className="input" value={neuerBereich}
+                   onChange={(e)=>setNeuerBereich(e.target.value)}
+                   onKeyDown={(e)=>{
+                     if (e.key !== 'Enter') return;
+                     e.preventDefault();
+                     if (neuerBereich.trim()) { onAddArea?.(neuerBereich); setNeuerBereich(''); }
+                   }}
+                   placeholder="z. B. Text- und Medienkompetenz" />
+            <button className="btn" disabled={!neuerBereich.trim()}
+                    onClick={()=>{ onAddArea?.(neuerBereich); setNeuerBereich(''); }}>Hinzufügen</button>
+          </div>
+        </div>
+      </div>
+
+      <p className="muted small" style={{margin:'10px 0 0'}}>
+        Ausgeblendete Kompetenzen verschwinden aus der Auswahl, bleiben aber in
+        vorhandenen Stunden und in der Jahresübersicht stehen. Löschen nimmt eine
+        eigene Kompetenz aus der Auswahl – die Stunden, in denen sie vorkam,
+        behalten sie.
+      </p>
+
+      {gefiltert.length === 0 ? (
+        <p className="muted small" style={{marginBottom:0}}>Keine Kompetenz gefunden.</p>
+      ) : gefiltert.map((b)=>{
+        const bearbeiteBereich = bearbeitet?.art === 'bereich' && bearbeitet.id === b.id;
+        return (
+          <div key={b.id} className="kompetenzBereich">
+            <div className="kompetenzBereichKopf">
+              {bearbeiteBereich ? (
+                <>
+                  <input className="input" autoFocus value={bearbeitet.wert}
+                         onChange={(e)=>setBearbeitet({ ...bearbeitet, wert: e.target.value })}
+                         onKeyDown={beiTaste} />
+                  <button className="btn" onClick={uebernimm}>Speichern</button>
+                  <button className="btn" onClick={brichAb}>Abbrechen</button>
+                </>
+              ) : (
+                <>
+                  <h4 className="kompetenzBereichName">{b.name}</h4>
+                  {b.source === 'custom' ? (
+                    <>
+                      <button className="btn btnMini" title="Bereich umbenennen" aria-label="Bereich umbenennen"
+                              onClick={()=>bearbeiteJetzt('bereich', b.id, b.name)}><Pencil {...ICON_SM} /></button>
+                      <button className="btn btnMini" title="Bereich löschen" aria-label="Bereich löschen"
+                              onClick={()=>onDeleteArea?.(b.id)}><Trash2 {...ICON_SM} /></button>
+                    </>
+                  ) : null}
+                </>
+              )}
+            </div>
+
+            {b.kompetenzen.map((k)=>{
+              const bearbeiteKompetenz = bearbeitet?.art === 'kompetenz' && bearbeitet.id === k.label;
+              return (
+                <div key={k.label} className="kompetenzZeile">
+                  {bearbeiteKompetenz ? (
+                    <>
+                      <input className="input" autoFocus value={bearbeitet.wert}
+                             onChange={(e)=>setBearbeitet({ ...bearbeitet, wert: e.target.value })}
+                             onKeyDown={beiTaste} />
+                      <button className="btn" onClick={uebernimm}>Speichern</button>
+                      <button className="btn" onClick={brichAb}>Abbrechen</button>
+                    </>
+                  ) : (
+                    <>
+                      <label className="kompetenzSicht" title={k.hidden ? 'Wieder einblenden' : 'Ausblenden'}>
+                        <input type="checkbox" checked={!k.hidden}
+                               onChange={(e)=>onSetHidden?.(k.label, !e.target.checked)} />
+                        <span className={k.hidden ? 'kompetenzNameAus' : 'kompetenzName'}>{k.label}</span>
+                      </label>
+
+                      {k.source === 'custom' ? (
+                        <>
+                          <select className="input kompetenzBereichWahl"
+                                  value={bereichVon(k.label, modell)}
+                                  aria-label={`Bereich von ${k.label}`}
+                                  onChange={(e)=>onSetArea?.(k.label, e.target.value)}>
+                            {zuordenbar.map(z => <option key={z.id} value={z.id}>{z.name}</option>)}
+                          </select>
+                          <button className="btn btnMini" title="Umbenennen" aria-label={`${k.label} umbenennen`}
+                                  onClick={()=>bearbeiteJetzt('kompetenz', k.label, k.label)}><Pencil {...ICON_SM} /></button>
+                          <button className="btn btnMini" title="Aus der Auswahl löschen"
+                                  aria-label={`${k.label} löschen`}
+                                  onClick={()=>onDelete?.(k.label)}><Trash2 {...ICON_SM} /></button>
+                        </>
+                      ) : (
+                        <span className="muted small kompetenzHerkunft">System</span>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* Eigene Sprechabsichten verwalten.
+
+   Bewusst schmaler als die Kompetenzverwaltung: der Startbestand ist
+   fest und braucht keine Pflege, verwaltet wird nur, was die Lehrkraft
+   selbst angelegt hat. Löschen nimmt den Eintrag aus der Auswahl – die
+   Stunden, in denen er vorkam, behalten ihn. */
+function SpeechActManager({ eigene, onRename, onDelete }){
+  const [bearbeitet, setBearbeitet] = useState(null);
+
+  if (!eigene.length) {
+    return (
+      <p className="settingsText muted small" style={{marginBottom:0}}>
+        Eigene Sprechabsichten legst du direkt in der Stunde an. Sie erscheinen
+        danach hier und stehen in jeder weiteren Stunde zur Auswahl.
+      </p>
+    );
+  }
+
+  const uebernimm = ()=>{
+    const wert = String(bearbeitet?.wert || '').trim();
+    if (wert) onRename?.(bearbeitet.id, wert);
+    setBearbeitet(null);
+  };
+
+  return (
+    <div className="kompetenzBereich" style={{marginTop:10}}>
+      <div className="kompetenzBereichKopf">
+        <h4 className="kompetenzBereichName">Eigene Sprechabsichten</h4>
+      </div>
+      {eigene.map((label)=>(
+        <div key={label} className="kompetenzZeile">
+          {bearbeitet?.id === label ? (
+            <>
+              <input className="input" autoFocus value={bearbeitet.wert}
+                     onChange={(e)=>setBearbeitet({ ...bearbeitet, wert: e.target.value })}
+                     onKeyDown={(e)=>{
+                       if (e.key === 'Enter') { e.preventDefault(); uebernimm(); }
+                       if (e.key === 'Escape') { e.preventDefault(); setBearbeitet(null); }
+                     }} />
+              <button className="btn" onClick={uebernimm}>Speichern</button>
+              <button className="btn" onClick={()=>setBearbeitet(null)}>Abbrechen</button>
+            </>
+          ) : (
+            <>
+              <span className="kompetenzName" style={{flex:1}}>{label}</span>
+              <button className="btn btnMini" title="Umbenennen" aria-label={`${label} umbenennen`}
+                      onClick={()=>setBearbeitet({ id: label, wert: label })}><Pencil {...ICON_SM} /></button>
+              <button className="btn btnMini" title="Aus der Auswahl löschen"
+                      aria-label={`${label} löschen`}
+                      onClick={()=>onDelete?.(label)}><Trash2 {...ICON_SM} /></button>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onImportBackup,
-                        weekReview, onChangeWeekReview }){
+                        weekReview, onChangeWeekReview,
+                        languageMode, onChangeLanguageMode,
+                        eigeneSprechabsichten = [], onRenameSpeechAct, onDeleteSpeechAct,
+                        competencyModel, benutzteKompetenzen,
+                        onSetCompetencyHidden, onSetCompetencyArea, onRenameCompetency,
+                        onDeleteCompetency, onAddCompetencyArea, onRenameCompetencyArea,
+                        onDeleteCompetencyArea }){
   const istBrowser = platformName === 'browser';
   return (
     <div className="card" style={{display:'flex', flexDirection:'column', gap:18}}>
@@ -1353,6 +1684,48 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
             <span>Anzeigen</span>
           </label>
         </div>
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Fachdidaktische Erweiterungen</h3>
+        <div className="settingsRow">
+          <span className="settingsText" style={{margin:0}}>
+            <strong>Fremdsprachenmodus.</strong> Erweitert die Kompetenzplanung um
+            fremdsprachendidaktische Kompetenzbereiche nach dem handlungsorientierten
+            Ansatz des GER. Eigene Kompetenzen können jederzeit ergänzt werden.
+          </span>
+          <label className="row" style={{gap:8, flexShrink:0}}>
+            <input type="checkbox" checked={!!languageMode}
+                   onChange={(e)=>onChangeLanguageMode(e.target.checked)} />
+            <span>Aktiv</span>
+          </label>
+        </div>
+        {languageMode ? (
+          <CompetencyManager
+            modell={competencyModel}
+            benutzte={benutzteKompetenzen}
+            onSetHidden={onSetCompetencyHidden}
+            onSetArea={onSetCompetencyArea}
+            onRename={onRenameCompetency}
+            onDelete={onDeleteCompetency}
+            onAddArea={onAddCompetencyArea}
+            onRenameArea={onRenameCompetencyArea}
+            onDeleteArea={onDeleteCompetencyArea}
+          />
+        ) : null}
+        {languageMode ? (
+          <SpeechActManager
+            eigene={eigeneSprechabsichten}
+            onRename={onRenameSpeechAct}
+            onDelete={onDeleteSpeechAct}
+          />
+        ) : (
+          <p className="settingsText muted small" style={{marginBottom:0}}>
+            Ist der Modus aus, verhält sich die Kompetenzplanung wie bisher:
+            freie Eingabe mit Vorschlägen. Vorhandene Kompetenzen bleiben in
+            jedem Fall erhalten – auch beim späteren Abschalten.
+          </p>
+        )}
       </section>
 
       <section>
@@ -1559,7 +1932,548 @@ function TodayView({ heute, todayISO, getSeqProgress, onOpenLesson, onOpenTodos,
    Bewusst ohne Soll-Vergleich und ohne Lücken-Warnung. Die Karte zeigt
    die Verteilung; ob sie stimmt, weiss nur die Lehrkraft.
    ============================================================ */
-function CompetencyHeatmapView({ daten, onBack }){
+/* Kompetenzprofil nach Bereichen.
+
+   Ausdrücklich deskriptiv: Anteile, sonst nichts. Keine Sollwerte,
+   keine Farbcodierung nach "gut" und "schlecht", keine Hinweise auf
+   fehlende Bereiche. Die Zahlen gehören der Lehrkraft; die App
+   kommentiert sie nicht. */
+function CompetencyProfileView({ profil }){
+  if (!profil || !profil.bereiche.length) return null;
+  const prozent = (a)=> Math.round(a * 100);
+  return (
+    <div className="profilListe">
+      {profil.bereiche.map((b)=>(
+        <div key={b.id} className="profilZeile">
+          <div className="profilKopf">
+            <span className="profilName">{b.name}</span>
+            <span className="profilZahl">{prozent(b.anteil)} % · {b.anzahl} Zuordnungen</span>
+          </div>
+          <div className="profilBahn" role="img"
+               aria-label={`${b.name}: ${prozent(b.anteil)} Prozent, ${b.anzahl} Zuordnungen`}>
+            <div className="profilFuellung" style={{ width: `${b.anteil * 100}%` }} />
+          </div>
+          <details className="profilDetails">
+            <summary>{b.kompetenzen.length} {b.kompetenzen.length === 1 ? 'Kompetenz' : 'Kompetenzen'}</summary>
+            <ul className="profilDetailListe">
+              {b.kompetenzen.map((k)=>(
+                <li key={k.name}>
+                  <span>{k.name}</span>
+                  <span className="profilDetailZahl">
+                    {k.anzahl} {k.anzahl === 1 ? 'Stunde' : 'Stunden'}
+                    {k.primaer > 0 ? ` · ${k.primaer}× primär` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ============================================================
+   Offene Punkte aus vorherigen Stunden
+
+   Der Hinweis ist bewusst leise: eine Zeile, kein Dialog, kein
+   Warnsymbol. Nichts muss bearbeitet werden – wer die Stunde plant,
+   ohne hinzusehen, wird nicht aufgehalten.
+
+   Die Punkte gehören der Lerngruppe, nicht dieser Stunde. Deshalb
+   überstehen sie es, wenn eine geplante Folgestunde gelöscht wird,
+   Unterricht ausfällt oder sich der Plan verschiebt: sie warten
+   einfach auf die nächste Stunde, die es gibt.
+   ============================================================ */
+function CarryOverPanel({ punkte, onUebernehmenAlsPhase, onUebernehmenAlsNotiz, onErledigt, onIgnorieren }){
+  const [offen, setOffen] = useState(false);
+  const [auswahl, setAuswahl] = useState(()=> new Set());
+
+  if (!punkte.length) return null;
+
+  const phasenPunkte = punkte.filter(p => p.snapshot);
+  const umschalten = (id)=>{
+    setAuswahl((v)=>{
+      const n = new Set(v);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+  /* Mehrere Phasen in ihrer ursprünglichen Reihenfolge übernehmen –
+     also so, wie sie in der Stunde standen, nicht in Klickreihenfolge. */
+  const gewaehlte = phasenPunkte.filter(p => auswahl.has(p.id));
+
+  return (
+    <div className="carryBox">
+      <button type="button" className="carryKopf" onClick={()=>setOffen(v => !v)} aria-expanded={offen}>
+        {offen ? <ChevronDown {...ICON_SM} /> : <ChevronRight {...ICON_SM} />}
+        <span>
+          {punkte.length} {punkte.length === 1 ? 'offener Punkt' : 'offene Punkte'} aus vorherigen Stunden
+        </span>
+        <span className="muted small">{offen ? 'Schließen' : 'Ansehen'}</span>
+      </button>
+
+      {offen ? (
+        <div className="carryInhalt">
+          {punkte.map((p)=>(
+            <div key={p.id} className="carryPunkt">
+              <div className="carryHerkunft">
+                {p.sourceDateISO ? formatDateDE(p.sourceDateISO) : ''}
+                {p.sourceTopic ? ` · ${p.sourceTopic}` : ''}
+                {p.type === 'unfinished_phase' ? ' · offen gebliebene Phase'
+                  : p.type === 'partial_phase' ? ' · offener Teil einer Phase'
+                  : p.type === 'review_note' ? ' · Notiz aus der Nachbereitung'
+                  : ' · vorgemerkt'}
+              </div>
+              <div className="carryZeile">
+                {p.snapshot ? (
+                  <input type="checkbox" checked={auswahl.has(p.id)} onChange={()=>umschalten(p.id)}
+                         aria-label={`${p.title} auswählen`} />
+                ) : null}
+                <span className="carryTitel">{p.title}</span>
+              </div>
+              <div className="carryAktionen">
+                <button className="btn btnMini" onClick={()=>onUebernehmenAlsPhase([p])}>Als Phase übernehmen</button>
+                <button className="btn btnMini" onClick={()=>onUebernehmenAlsNotiz(p)}>Als Notiz übernehmen</button>
+                <button className="btn btnMini" onClick={()=>onErledigt(p)}>Erledigt</button>
+                <button className="btn btnMini" onClick={()=>onIgnorieren(p)}>Ignorieren</button>
+              </div>
+            </div>
+          ))}
+
+          {/* Erst ab zwei phasenbasierten Punkten – darunter wäre die
+              Mehrfachauswahl nur ein zusätzlicher Klick. */}
+          {phasenPunkte.length >= 2 ? (
+            <div className="carryMehrfach">
+              <button className="btn" disabled={gewaehlte.length === 0}
+                      onClick={()=>{ onUebernehmenAlsPhase(gewaehlte); setAuswahl(new Set()); }}>
+                {gewaehlte.length ? `${gewaehlte.length} ${gewaehlte.length === 1 ? 'Phase' : 'Phasen'} übernehmen` : 'Auswahl übernehmen'}
+              </button>
+              <button className="btn btnLeise"
+                      onClick={()=>{ onUebernehmenAlsPhase(phasenPunkte); setAuswahl(new Set()); }}>
+                Alle offenen Phasen übernehmen
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ============================================================
+   Nachbereitung einer gehaltenen Stunde
+
+   Keine zweite Unterrichtsplanung. Die Ansicht fasst die geplante
+   Stunde lesbar zusammen und fragt genau eine Sache: was ist daraus
+   geworden. Vier Zustände je Phase, ein Klick, fertig.
+
+   Die Sprache bleibt neutral. "Offen geblieben" ist kein Versäumnis,
+   und "entfallen" ist eine Entscheidung, keine Lücke. Es gibt keine
+   Fehlerfarbe, keine Warnung und keine Wertung – eine Planung ist eine
+   Annahme über den Verlauf, kein Versprechen.
+   ============================================================ */
+function LessonReviewView({
+  lesson, dateISO, dayIndex, slotIndex, languageMode,
+  onChangeReview, onOpenLesson,
+}){
+  const l = normalizeLesson(lesson);
+  const review = normalisiereReview(l.review);
+  const phasen = normalizePhases(l.phases || []);
+  const [neuerPunkt, setNeuerPunkt] = useState('');
+  const [notizVormerken, setNotizVormerken] = useState(false);
+
+  const aendern = (patch)=> onChangeReview({ ...review, ...patch });
+
+  const setzePhase = (phaseId, patch)=>{
+    const bisher = review.phaseReviews[phaseId] || { executionStatus:'', note:'', unfinishedContent:'' };
+    aendern({ phaseReviews: { ...review.phaseReviews, [phaseId]: { ...bisher, ...patch } } });
+  };
+
+  const ergaenzeCarry = (eintrag)=>{
+    if (!eintrag) return;
+    aendern({ carryOverItems: [...review.carryOverItems, eintrag], status: 'in_progress' });
+  };
+  const entferneCarry = (id)=>
+    aendern({ carryOverItems: review.carryOverItems.filter(i => i.id !== id) });
+
+  /* Ein Punkt gilt als vorgemerkt, wenn es zu dieser Phase schon einen
+     offenen Eintrag gibt – so lässt sich der Knopf nicht doppelt drücken. */
+  const vorgemerkt = (phaseId, typ)=> review.carryOverItems
+    .find(i => i.sourcePhaseId === phaseId && i.type === typ && i.status === 'open');
+
+  const offene = review.carryOverItems.filter(i => i.status === 'open');
+  const erledigte = review.carryOverItems.filter(i => i.status !== 'open');
+
+  const kopf = [
+    (l.classGroup || '').trim(),
+    (l.subject || '').trim(),
+  ].filter(Boolean).join(' · ');
+
+  const zusammenfassung = [
+    ['Thema', (l.topic || '').trim()],
+    ['Lernziele', (l.objectives || '').trim()],
+  ].filter(([, v]) => v);
+
+  const aufgabe = normalisiereAufgabe(l.communicativeTask);
+  const kompetenzen = [l.primaryCompetency, ...(l.competencies || [])]
+    .map(x => String(x || '').trim()).filter(Boolean);
+  const kompetenzListe = [...new Set(kompetenzen)];
+
+  return (
+    <div className="card">
+      <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start', gap:12}}>
+        <div>
+          <h2 className="dialogTitle">Nachbereitung</h2>
+          <p className="muted small" style={{margin:0}}>
+            {kopf}{kopf && dateISO ? ' · ' : ''}{dateISO ? formatDateDE(dateISO) : ''}
+            {Number.isFinite(slotIndex) ? ` · ${slotIndex + 1}. Stunde` : ''}
+          </p>
+        </div>
+        <button className="btn" onClick={onOpenLesson}>Zur Planung</button>
+      </div>
+
+      {(zusammenfassung.length || kompetenzListe.length || (languageMode && aufgabe.text)) ? (
+        <section className="nbZusammenfassung">
+          {zusammenfassung.map(([k, v])=>(
+            <div key={k}>
+              <div className="nbLabel">{k}</div>
+              <div className="nbWert">{v}</div>
+            </div>
+          ))}
+          {kompetenzListe.length ? (
+            <div>
+              <div className="nbLabel">Kompetenzen</div>
+              <div className="nbWert">{kompetenzListe.join(' · ')}</div>
+            </div>
+          ) : null}
+          {languageMode && aufgabe.text ? (
+            <div>
+              <div className="nbLabel">Kommunikative Aufgabe</div>
+              <div className="nbWert">{aufgabe.text}</div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      <section style={{marginTop:18}}>
+        <h3 className="settingsHeading">Verlauf</h3>
+        <div className="nbPhasen">
+          {phasen.map((p)=>{
+            const pr = review.phaseReviews[p.id] || { executionStatus:'', note:'', unfinishedContent:'' };
+            const istOffen = pr.executionStatus === 'not_completed';
+            const istTeilweise = pr.executionStatus === 'partial';
+            const ganzVorgemerkt = vorgemerkt(p.id, 'unfinished_phase');
+            const restVorgemerkt = vorgemerkt(p.id, 'partial_phase');
+            return (
+              <div key={p.id} className="nbPhase">
+                <div className="nbPhaseKopf">
+                  <span className="nbPhaseZeichen" aria-hidden="true">
+                    {statusZeichen(pr.executionStatus) || '·'}
+                  </span>
+                  <span className="nbPhaseName">{p.title || 'Phase'}</span>
+                  <span className="muted small">{p.duration} min{p.socialForm ? ` · ${p.socialForm}` : ''}</span>
+                  <div className="nbStatusWahl" role="group" aria-label={`Status von ${p.title || 'Phase'}`}>
+                    {PHASEN_STATUS.map((st)=>(
+                      <button
+                        key={st.id}
+                        type="button"
+                        className={`btn btnMini${pr.executionStatus === st.id ? ' primary' : ''}`}
+                        aria-pressed={pr.executionStatus === st.id}
+                        title={st.name}
+                        onClick={()=>setzePhase(p.id, {
+                          executionStatus: pr.executionStatus === st.id ? '' : st.id,
+                        })}
+                      >{st.zeichen} {st.kurz}</button>
+                    ))}
+                  </div>
+                </div>
+
+                {istTeilweise ? (
+                  <div className="nbPhaseDetail">
+                    <label className="small muted">Noch offen (optional)</label>
+                    <input
+                      className="input"
+                      value={pr.unfinishedContent}
+                      onChange={(e)=>setzePhase(p.id, { unfinishedContent: e.target.value })}
+                      placeholder="z. B. gemeinsame Empfehlungen formulieren"
+                    />
+                  </div>
+                ) : null}
+
+                {(istOffen || istTeilweise) ? (
+                  <div className="nbPhaseAktionen">
+                    {/* Vormerken ist ein Klick, nicht ein Automatismus: was in
+                        die nächste Stunde geht, entscheidet die Lehrkraft. */}
+                    {istTeilweise && pr.unfinishedContent.trim() ? (
+                      restVorgemerkt ? (
+                        <span className="nbVorgemerkt">
+                          Offener Teil vorgemerkt
+                          <button className="btn btnMini" onClick={()=>entferneCarry(restVorgemerkt.id)}
+                                  title="Vormerkung zurücknehmen"><X {...ICON_SM} /></button>
+                        </span>
+                      ) : (
+                        <button className="btn btnLeise" onClick={()=>ergaenzeCarry(
+                          carryOverAusPhase(p, { nurOffenerTeil: true, offenerText: pr.unfinishedContent, neueId: uid })
+                        )}>Offenen Teil vormerken</button>
+                      )
+                    ) : null}
+
+                    {ganzVorgemerkt ? (
+                      <span className="nbVorgemerkt">
+                        Phase vorgemerkt
+                        <button className="btn btnMini" onClick={()=>entferneCarry(ganzVorgemerkt.id)}
+                                title="Vormerkung zurücknehmen"><X {...ICON_SM} /></button>
+                      </span>
+                    ) : (
+                      <button className="btn btnLeise" onClick={()=>ergaenzeCarry(
+                        carryOverAusPhase(p, { neueId: uid })
+                      )}>{istTeilweise ? 'Ganze Phase vormerken' : 'Für nächste Stunde vormerken'}</button>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      <section style={{marginTop:18}}>
+        <h3 className="settingsHeading">Notizen</h3>
+        <textarea
+          value={review.generalNotes}
+          onChange={(e)=>aendern({ generalNotes: e.target.value, status: review.status === 'not_reviewed' ? 'in_progress' : review.status })}
+          placeholder="z. B. Die Redemittel zum Widersprechen wurden noch wenig genutzt."
+        />
+        <div className="row wrap" style={{gap:8, marginTop:6, alignItems:'center'}}>
+          <label className="row" style={{gap:6}}>
+            <input type="checkbox" checked={notizVormerken}
+                   onChange={(e)=>setNotizVormerken(e.target.checked)} />
+            <span className="small">Für nächste Stunde vormerken</span>
+          </label>
+          <button className="btn btnLeise"
+                  disabled={!notizVormerken || !review.generalNotes.trim()}
+                  onClick={()=>{
+                    ergaenzeCarry(carryOverAusNotiz(review.generalNotes, { type:'review_note', neueId: uid }));
+                    setNotizVormerken(false);
+                  }}>Notiz vormerken</button>
+        </div>
+      </section>
+
+      <section style={{marginTop:18}}>
+        <h3 className="settingsHeading">Für nächste Stunde</h3>
+        {offene.length === 0 ? (
+          <p className="muted small" style={{margin:'0 0 8px'}}>
+            Noch nichts vorgemerkt. Was hier steht, wird bei der nächsten Stunde
+            dieser Lerngruppe angeboten – übernehmen musst du es dort.
+          </p>
+        ) : (
+          <ul className="nbPunkte">
+            {offene.map((i)=>(
+              <li key={i.id}>
+                <span>{i.title}</span>
+                <button className="btn btnMini" onClick={()=>entferneCarry(i.id)}
+                        title="Vormerkung entfernen" aria-label="Vormerkung entfernen"><X {...ICON_SM} /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="row" style={{gap:8, marginTop:8}}>
+          <input className="input" value={neuerPunkt} style={{flex:1}}
+                 onChange={(e)=>setNeuerPunkt(e.target.value)}
+                 onKeyDown={(e)=>{
+                   if (e.key !== 'Enter') return;
+                   e.preventDefault();
+                   if (!neuerPunkt.trim()) return;
+                   ergaenzeCarry(carryOverAusNotiz(neuerPunkt, { type:'manual_follow_up', neueId: uid }));
+                   setNeuerPunkt('');
+                 }}
+                 placeholder="z. B. Hausaufgabe zunächst vergleichen" />
+          <button className="btn" disabled={!neuerPunkt.trim()}
+                  onClick={()=>{
+                    ergaenzeCarry(carryOverAusNotiz(neuerPunkt, { type:'manual_follow_up', neueId: uid }));
+                    setNeuerPunkt('');
+                  }}>Punkt hinzufügen</button>
+        </div>
+
+        {erledigte.length ? (
+          <details className="nbErledigt">
+            <summary>{erledigte.length} {erledigte.length === 1 ? 'abgeschlossener Punkt' : 'abgeschlossene Punkte'}</summary>
+            <ul className="nbPunkte">
+              {erledigte.map((i)=>(
+                <li key={i.id}>
+                  <span className="muted">{i.title}</span>
+                  <span className="muted small">
+                    {i.status === 'transferred' ? 'übernommen' : i.status === 'completed' ? 'erledigt' : 'verworfen'}
+                    {i.resolvedAt ? ` · ${formatDateDE(i.resolvedAt.slice(0,10))}` : ''}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
+      </section>
+
+      <div className="row" style={{justifyContent:'flex-end', marginTop:18}}>
+        {review.status === 'reviewed' ? (
+          <span className="muted small" style={{alignSelf:'center'}}>
+            Abgeschlossen{review.reviewedAt ? ` am ${formatDateDE(review.reviewedAt.slice(0,10))}` : ''} –
+            weiterhin bearbeitbar.
+          </span>
+        ) : (
+          <button className="btn primary" onClick={()=>aendern({
+            status: 'reviewed', reviewedAt: new Date().toISOString(),
+          })}>Nachbereitung abschließen</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   Progression einer Sequenz
+
+   Sie zeigt, wie sich das sprachliche Handeln über die Sequenz
+   entwickelt – und speist sich vollständig aus dem, was in den Stunden
+   ohnehin steht. Es wird nichts doppelt eingegeben; die einzige eigene
+   Angabe ist die freie Notiz je Stunde, und die liegt in der Stunde.
+
+   Was sie ausdrücklich NICHT tut: bewerten. Keine Reihenfolgeprüfung,
+   kein Hinweis auf angeblich fehlende Progression, keine Ampel, kein
+   Wert. Ob eine Sequenz didaktisch trägt, entscheidet die Lehrkraft;
+   die App legt ihr die eigenen Angaben nebeneinander.
+   ============================================================ */
+function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, onOpenLessons }){
+  const finalTask = normalisiereAufgabe(sequenz?.finalTask);
+  const details = [
+    ['Situation', finalTask.situation],
+    ['Adressat', finalTask.audience],
+    ['Absicht', finalTask.intention],
+    ['Ergebnis', finalTask.outcome],
+  ].filter(([, v]) => v);
+
+  return (
+    <div className="card">
+      <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start', gap:12}}>
+        <div>
+          <h2 className="dialogTitle">{sequenz?.name || 'Sequenz'}</h2>
+          <p className="muted small" style={{margin:0}}>
+            Wie sich das sprachliche Handeln über die Sequenz entwickelt – aus den
+            Angaben der einzelnen Stunden.
+          </p>
+        </div>
+        <button className="btn" onClick={onOpenLessons}>Stunden im Makroplan</button>
+      </div>
+
+      {!istLeereAufgabe(finalTask) ? (
+        <section className="zielaufgabe">
+          <div className="zielaufgabeKopf">Zielaufgabe der Sequenz</div>
+          {finalTask.text ? <p className="zielaufgabeText">{finalTask.text}</p> : null}
+          {details.length ? (
+            <div className="zielaufgabeDetails">
+              {details.map(([k, v])=>(
+                <div key={k}><span className="muted small">{k}: </span>{v}</div>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {zeilen.length === 0 ? (
+        <EmptyState
+          text="Sobald dieser Sequenz Stunden zugeordnet sind, entsteht hier ihre Abfolge."
+        />
+      ) : (
+        <div className="progScroll">
+          <table className="progTable">
+            <thead>
+              <tr>
+                <th scope="col" className="progNr">Std.</th>
+                <th scope="col">Sprachhandlung / Aufgabe</th>
+                <th scope="col">Kompetenz</th>
+                <th scope="col">Sprechabsichten</th>
+                <th scope="col">Sprachliche Mittel</th>
+                <th scope="col">Hilfen</th>
+                <th scope="col">Notiz</th>
+              </tr>
+            </thead>
+            <tbody>
+              {zeilen.map((z)=>(
+                <tr key={z.key}>
+                  <th scope="row" className="progNr">
+                    <button className="linkBtn" onClick={()=>onOpenLesson(z)}
+                            title="Stunde öffnen">{z.nummer}</button>
+                    {z.dateISO ? <div className="muted small">{formatDateDE(z.dateISO)}</div> : null}
+                  </th>
+                  <td>
+                    <div>{z.sprachhandlung || <span className="muted">—</span>}</div>
+                    {/* Sichtbar machen, wenn hier ersatzweise das Thema steht. */}
+                    {!z.ausAufgabe && z.topic ? <div className="muted small">Stundenthema</div> : null}
+                  </td>
+                  <td>
+                    {z.kompetenzPrimaer ? (
+                      <div><Star {...ICON_SM} /> {z.kompetenzPrimaer}</div>
+                    ) : null}
+                    {z.kompetenzen.filter(k => k !== z.kompetenzPrimaer).map(k => (
+                      <div key={k} className="muted small">{k}</div>
+                    ))}
+                    {!z.kompetenzPrimaer && !z.kompetenzen.length ? <span className="muted">—</span> : null}
+                  </td>
+                  <td>
+                    {z.sprechabsichten.length
+                      ? z.sprechabsichten.join(', ')
+                      : <span className="muted">—</span>}
+                  </td>
+                  <td>
+                    {z.mittel.length
+                      ? z.mittel.map((m, i)=> <div key={i}>{m}</div>)
+                      : <span className="muted">—</span>}
+                  </td>
+                  <td>
+                    {z.scaffolds.length ? (
+                      <details className="progHilfen">
+                        <summary>
+                          {z.scaffolds.length} {z.scaffolds.length === 1 ? 'Hilfe' : 'Hilfen'}
+                          {/* Nur was die Lehrkraft selbst hinterlegt hat. */}
+                          {z.stufe ? ` · ${stufenName(z.stufe)}` : ''}
+                        </summary>
+                        <ul className="progHilfenListe">
+                          {z.scaffolds.map(sc => (
+                            <li key={sc.id}>
+                              {sc.fadeOut ? <ArrowDown {...ICON_SM} /> : null}
+                              <span>{sc.label || scaffoldArtName(sc.type)}</span>
+                              {sc.note ? <span className="muted small"> – {sc.note}</span> : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : <span className="muted">—</span>}
+                  </td>
+                  <td>
+                    {/* Ein Textfeld statt einer Zeile: In einer Tabelle, die
+                        gelesen werden soll, darf die Notiz nicht hinter dem
+                        rechten Rand verschwinden. */}
+                    <textarea
+                      className="input progNotiz"
+                      rows={3}
+                      value={z.notiz}
+                      onChange={(e)=>onChangeNote(z, e.target.value)}
+                      placeholder="z. B. Übergang zum freieren Sprechen"
+                      aria-label={`Progressionsnotiz zu Stunde ${z.nummer}`}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompetencyHeatmapView({ daten, profil, onBack }){
   const monatsName = (m)=>{
     const [j, mo] = String(m).split('-');
     const d = new Date(Number(j), Number(mo) - 1, 1);
@@ -1587,6 +2501,17 @@ function CompetencyHeatmapView({ daten, onBack }){
           </p>
         </div>
       </div>
+
+      {profil && profil.bereiche.length ? (
+        <section style={{marginTop:14}}>
+          <h3 className="settingsHeading">Kompetenzprofil</h3>
+          <p className="muted small" style={{margin:'0 0 4px'}}>
+            Wie sich die Zuordnungen auf die Bereiche verteilen. Eine Beschreibung,
+            keine Bewertung.
+          </p>
+          <CompetencyProfileView profil={profil} />
+        </section>
+      ) : null}
 
       <div className="heatScroll">
         <table className="heatTable">
@@ -1783,6 +2708,12 @@ function ensureDbShape(raw){
   // Phase names (Phasenname) suggestions
   if (!db.phaseNames || typeof db.phaseNames !== 'object') db.phaseNames = {};
   if (!db.competencies || typeof db.competencies !== 'object') db.competencies = {};
+  /* Eigene Sprechabsichten und Bezeichnungen von Hilfen. Bewusst
+     dieselbe Bauart wie db.competencies: eine Nutzungsablage, aus der
+     sich Vorschläge, Wiederverwendung und die Verwaltung ergeben. Es
+     kommt keine zweite Bibliotheksarchitektur hinzu. */
+  if (!db.speechActs || typeof db.speechActs !== 'object') db.speechActs = {};
+  if (!db.scaffoldLabels || typeof db.scaffoldLabels !== 'object') db.scaffoldLabels = {};
   if (!db.classGroups || typeof db.classGroups !== 'object') db.classGroups = {};
   if (!db.subjects || typeof db.subjects !== 'object') db.subjects = {};
   // Hidden suggestions (user can remove unwanted ones via the dropdown "x")
@@ -1793,6 +2724,8 @@ function ensureDbShape(raw){
       classGroups: {},
       subjects: {},
       competencies: {},
+      speechActs: {},
+      scaffoldLabels: {},
       supervisionLabels: {}
     };
   } else {
@@ -1801,6 +2734,8 @@ function ensureDbShape(raw){
     if (!db.hiddenSuggestions.classGroups || typeof db.hiddenSuggestions.classGroups !== 'object') db.hiddenSuggestions.classGroups = {};
     if (!db.hiddenSuggestions.subjects || typeof db.hiddenSuggestions.subjects !== 'object') db.hiddenSuggestions.subjects = {};
     if (!db.hiddenSuggestions.competencies || typeof db.hiddenSuggestions.competencies !== 'object') db.hiddenSuggestions.competencies = {};
+    if (!db.hiddenSuggestions.speechActs || typeof db.hiddenSuggestions.speechActs !== 'object') db.hiddenSuggestions.speechActs = {};
+    if (!db.hiddenSuggestions.scaffoldLabels || typeof db.hiddenSuggestions.scaffoldLabels !== 'object') db.hiddenSuggestions.scaffoldLabels = {};
     if (!db.hiddenSuggestions.supervisionLabels || typeof db.hiddenSuggestions.supervisionLabels !== 'object') db.hiddenSuggestions.supervisionLabels = {};
   }
 
@@ -1871,6 +2806,15 @@ function ensureDbShape(raw){
     if (!s.id) s.id = id;
     if (!s.name) s.name = String(id);
     if (!s.color) s.color = SEQ_COLORS[Math.abs(hashCode(id)) % SEQ_COLORS.length];
+    /* Schwerpunkt der Sequenz – dieselbe Form wie in der Stunde, damit
+       beides mit denselben Bausteinen bearbeitet werden kann. Stunden
+       dürfen davon abweichen; die Sequenz gibt nichts vor. */
+    if (!Array.isArray(s.competencies)) s.competencies = [];
+    s.competencies = s.competencies.map(x => String(x || '').trim()).filter(Boolean);
+    s.primaryCompetency = String(s.primaryCompetency || '').trim();
+    /* Zielaufgabe der Sequenz. Dieselbe Form wie die kommunikative
+       Aufgabe einer Stunde – dieselben Bausteine bearbeiten beides. */
+    s.finalTask = normalisiereAufgabe(s.finalTask);
   }
 
   // Normalize templates (ensure id/lessons)
@@ -1936,7 +2880,19 @@ db.todos = (Array.isArray(db.todos) ? db.todos : []).map(t => {
   if (!THEME_CHOICES.includes(db.appSettings.theme)) db.appSettings.theme = 'system';
   // Wochenabschluss: standardmässig an, dauerhaft abschaltbar.
   if (typeof db.appSettings.weekReview !== 'boolean') db.appSettings.weekReview = true;
+  /* Fremdsprachenmodus: bei bestehenden wie bei neuen Installationen aus.
+     Er schaltet ausschliesslich die Darstellung der Kompetenzauswahl um –
+     an den gespeicherten Kompetenzen ändert er nichts. */
+  if (typeof db.appSettings.languageMode !== 'boolean') db.appSettings.languageMode = false;
 
+  /* Der gespeicherte Teil des Kompetenzkatalogs.
+
+     Rein additiv: fehlt das Feld, entsteht ein leeres Modell, und die App
+     verhält sich wie zuvor. Die Kompetenzen der Stunden werden NICHT
+     angefasst – sie bleiben Etiketten, so wie sie seit der ersten Fassung
+     gespeichert sind. Damit ist dieser Schritt für sich genommen
+     verlustfrei und beliebig oft wiederholbar. */
+  db.competencyModel = normalisiereModell(db.competencyModel);
 
   return db;
 }
@@ -1997,6 +2953,22 @@ export default function App(){
   // Cache ephemeral draft lessons (so opening an empty slot doesn't regenerate IDs every render).
   // These drafts are NOT persisted until the user actually changes something.
   const draftLessonCacheRef = useRef(new Map());
+
+  /* Eigener Zustand, bewusst nicht splashVisible wiederverwendet: an
+     dessen Ende hängen der To-do-Hinweis und die Schuljahresabfrage.
+     Ein wiederholtes Startbild darf diese Abläufe nicht anstossen. */
+  const [splashReplay, setSplashReplay] = useState(false);
+  const splashReplayTimer = useRef(null);
+  const versteckeSplashReplay = ()=>{
+    if (splashReplayTimer.current) { clearTimeout(splashReplayTimer.current); splashReplayTimer.current = null; }
+    setSplashReplay(false);
+  };
+  const zeigeSplashReplay = ()=>{
+    if (splashReplayTimer.current) clearTimeout(splashReplayTimer.current);
+    setSplashReplay(true);
+    splashReplayTimer.current = setTimeout(()=>{ splashReplayTimer.current = null; setSplashReplay(false); }, 1800);
+  };
+  useEffect(()=>()=>{ if (splashReplayTimer.current) clearTimeout(splashReplayTimer.current); }, []);
 
   const triggerEasterEgg = ()=>{
     try {
@@ -2262,6 +3234,48 @@ export default function App(){
     return entries.map(([label])=>label);
   }, [db?.competencies, db?.hiddenSuggestions]);
 
+  /* Sprechabsichten und Hilfen-Bezeichnungen: dieselbe Sortierung wie
+     bei den Kompetenzen – oft benutzt und zuletzt benutzt zuerst. */
+  const nutzungsliste = (ablage, versteckt)=>{
+    const entries = Object.entries(ablage || {}).filter(([label])=>!(versteckt || {})[label]);
+    entries.sort((a, b)=>{
+      const ac = a[1]?.count || 0, bc = b[1]?.count || 0;
+      if (bc !== ac) return bc - ac;
+      return String(b[1]?.lastUsed || '').localeCompare(String(a[1]?.lastUsed || ''));
+    });
+    return entries.map(([label])=>label);
+  };
+
+  const speechActSuggestions = useMemo(
+    ()=> nutzungsliste(db?.speechActs, db?.hiddenSuggestions?.speechActs),
+    [db?.speechActs, db?.hiddenSuggestions]
+  );
+  const scaffoldSuggestions = useMemo(
+    ()=> [...new Set([
+      ...nutzungsliste(db?.scaffoldLabels, db?.hiddenSuggestions?.scaffoldLabels),
+      ...SCAFFOLD_VORSCHLAEGE,
+    ])],
+    [db?.scaffoldLabels, db?.hiddenSuggestions]
+  );
+
+  /* Der Fremdsprachenmodus und der gespeicherte Teil des Katalogs.
+     Beides wird an die Stellen durchgereicht, die Kompetenzen anzeigen –
+     die Auswahl in der Stunde, die Verwaltung, die Jahresübersicht. */
+  const languageMode = Boolean(db?.appSettings?.languageMode);
+  const competencyModel = useMemo(
+    ()=> normalisiereModell(db?.competencyModel),
+    [db?.competencyModel]
+  );
+  /* Alle je benutzten Etiketten – ohne die aus den Vorschlägen entfernten.
+     Sie sind die eigenen Kompetenzen; es braucht dafür keine eigene
+     Ablage, weil db.competencies sie seit jeher führt. */
+  const benutzteKompetenzen = competencySuggestions;
+
+  /* Ausgeblendetes gehört auch nicht in die freie Vorschlagsliste. */
+  const sichtbareKompetenzVorschlaege = useMemo(
+    ()=> competencySuggestions.filter(l => !competencyModel.hidden?.[l]),
+    [competencySuggestions, competencyModel]
+  );
 
 const classGroupSuggestions = useMemo(()=>{
   if (!db || !db.classGroups) return [];
@@ -2512,12 +3526,31 @@ const classGroupSuggestions = useMemo(()=>{
       case 'library':  return 'Bibliothek';
       case 'today':    return 'Heute';
       case 'competencies': return 'Kompetenzen';
+      case 'progression':  return 'Progression';
+      case 'review':       return 'Nachbereitung';
       case 'settings': return 'Einstellungen';
       case 'help':     return 'Hilfe';
       case 'week':     return '';
       default:         return formatWeekLabel(view.weekStart);
     }
   }, [view]);
+
+  /* Die offenen Punkte für die gerade geöffnete Stunde. Sie werden über
+     die Lerngruppe gesucht, nicht über eine feste Verknüpfung – deshalb
+     stimmt die Liste auch dann, wenn zwischenzeitlich Stunden entstanden
+     oder verschwunden sind. */
+  const offenePunkteDerStunde = useMemo(()=>{
+    if (!db || view.name !== 'lesson') return [];
+    const l = db.weeks?.[view.weekStart]?.lessons?.[keyOf(view.dayIndex, view.slotIndex)];
+    const gruppe = l || {};
+    const classGroup = String(gruppe.classGroup || '').trim();
+    const subject = String(gruppe.subject || '').trim();
+    if (!classGroup || !subject) return [];
+    return offenePunkteFuer(db, {
+      classGroup, subject,
+      weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+    });
+  }, [db, view]);
 
   const themeChoice = THEME_CHOICES.includes(appSettings?.theme) ? appSettings.theme : 'system';
   const darkActive = themeChoice === 'dark' || (themeChoice === 'system' && systemPrefersDark);
@@ -2614,7 +3647,7 @@ useEffect(()=>{
     return <div className="app">
       <div className="topbar">
         <div className="left">
-          <img className="logo" src={logo} alt="Prép-ybara Logo" />
+          <LogoButton onClick={zeigeSplashReplay} />
           <h1>Prép-ybara</h1>
         </div>
       </div>
@@ -2623,7 +3656,10 @@ useEffect(()=>{
         <span>Prép-ybara, Version {APP_VERSION}</span>
         <span>© Florian Nowak</span>
       </div>
-      <SplashOverlay visible={splashVisible} />
+      <SplashOverlay
+        visible={splashVisible || splashReplay}
+        onDismiss={(splashReplay && !splashVisible) ? versteckeSplashReplay : null}
+      />
 	      <EasterEggOverlay visible={easterEggVisible} />
       <TodoReminderOverlay
         visible={todoReminderVisible}
@@ -2675,17 +3711,17 @@ useEffect(()=>{
       // Wenn es nur ein Draft ist (leerer Slot), nicht in die Zwischenablage.
       if (!l || isLessonEmpty(l)) return;
     }
-    const cloned = normalizeLesson(deepClone(l));
+    const cloned = nurPlanung(deepClone(l));
     // Neue IDs für Phasen, damit du beim Kopieren nicht versehentlich identische IDs hast.
-    cloned.phases = normalizePhases((cloned.phases || []).map(p => ({ ...p, id: uid() })));
+    cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)));
     setLessonClipboard({ lesson: cloned, source: { weekStart, dayIndex, slotIndex }, cut: false, copiedAt: Date.now() });
   };
 
   const cutLessonToClipboard = (weekStart, dayIndex, slotIndex) => {
     const persisted = db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, slotIndex)] || null;
     if (!persisted) return;
-    const l = normalizeLesson(deepClone(persisted));
-    l.phases = normalizePhases((l.phases || []).map(p => ({ ...p, id: uid() })));
+    const l = nurPlanung(deepClone(persisted));
+    l.phases = normalizePhases((l.phases || []).map(p => neuePhasenIds(p)));
     setLessonClipboard({ lesson: l, source: { weekStart, dayIndex, slotIndex }, cut: true, copiedAt: Date.now() });
     deleteLessonAt(weekStart, dayIndex, slotIndex, { silent: true });
   };
@@ -2756,8 +3792,8 @@ useEffect(()=>{
         });
         if (!ok) return;
       }
-      const cloned = normalizeLesson(deepClone(src));
-      cloned.phases = normalizePhases((cloned.phases || []).map(p => ({ ...p, id: uid() })));
+      const cloned = nurPlanung(deepClone(src));
+      cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)));
       upsertIn(toW, toKey, cloned);
       persist(nextDb);
       return;
@@ -3119,6 +4155,260 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     persist(nextDb);
   };
 
+  /* ============================================================
+     Kompetenzkatalog
+
+     Alles hier arbeitet auf Etiketten, weil die Stunden Etiketten
+     speichern. Die Funktionen fassen deshalb nie eine Stunde an – mit
+     einer begründeten Ausnahme: Umbenennen. Bliebe eine Stunde beim
+     alten Namen, hätte die Lehrkraft danach zwei Kompetenzen statt
+     einer, und die Jahresübersicht zählte getrennt. Ein Umbenennen ist
+     genau das Versprechen, dass es dieselbe Kompetenz bleibt.
+     ============================================================ */
+
+  const updateCompetencyModel = (aendern) => {
+    const nextDb = deepClone(db);
+    const modell = normalisiereModell(nextDb.competencyModel);
+    nextDb.competencyModel = normalisiereModell(aendern(modell) || modell);
+    persist(nextDb);
+  };
+
+  /* Ausblenden ist die zurückhaltende Geste: die Kompetenz verschwindet
+     aus der Auswahl, bleibt aber in allen Stunden und in der Übersicht
+     stehen und lässt sich jederzeit wieder einblenden. */
+  const setCompetencyHidden = (label, hidden) => {
+    const l = normalisiereEtikett(label);
+    if (!l) return;
+    updateCompetencyModel((m)=>{
+      const next = { ...m, hidden: { ...m.hidden } };
+      if (hidden) next.hidden[l] = true; else delete next.hidden[l];
+      return next;
+    });
+  };
+
+  const setCompetencyArea = (label, bereichId) => {
+    const l = normalisiereEtikett(label);
+    if (!l || istSystemKompetenz(l)) return;
+    updateCompetencyModel((m)=>{
+      const next = { ...m, areaOf: { ...m.areaOf } };
+      if (bereichId && bereichId !== OHNE_BEREICH_ID) next.areaOf[l] = bereichId;
+      else delete next.areaOf[l];
+      return next;
+    });
+  };
+
+  /* Umbenennen: das Etikett wird überall dort ersetzt, wo es steht –
+     im Katalog, in jeder Stunde, in jeder Sequenz und in jeder Vorlage.
+     Trifft der neue Name auf ein bereits vorhandenes Etikett, werden
+     beide zusammengeführt statt verdoppelt. */
+  const renameCompetency = (vonLabel, nachLabel) => {
+    const alt = normalisiereEtikett(vonLabel);
+    const neu = normalisiereEtikett(nachLabel);
+    if (!alt || !neu || alt === neu) return;
+    if (istSystemKompetenz(alt)) return;   // Systemnamen bleiben, wie sie sind
+
+    const before = db;
+    const nextDb = deepClone(db);
+    const tausch = (x)=> (String(x || '').trim() === alt ? neu : x);
+    const tauschListe = (arr)=> Array.from(new Set(
+      (Array.isArray(arr) ? arr : []).map(x => tausch(String(x || '').trim())).filter(Boolean)
+    ));
+
+    for (const woche of Object.values(nextDb.weeks || {})) {
+      for (const stunde of Object.values(woche?.lessons || {})) {
+        if (!stunde || typeof stunde !== 'object') continue;
+        stunde.competencies = tauschListe(stunde.competencies);
+        stunde.primaryCompetency = tausch(stunde.primaryCompetency || '');
+      }
+    }
+    for (const seq of Object.values(nextDb.sequences || {})) {
+      if (!seq || typeof seq !== 'object') continue;
+      seq.competencies = tauschListe(seq.competencies);
+      seq.primaryCompetency = tausch(seq.primaryCompetency || '');
+    }
+    for (const tpl of Object.values(nextDb.sequenceTemplates || {})) {
+      for (const l of (Array.isArray(tpl?.lessons) ? tpl.lessons : [])) {
+        if (!l || typeof l !== 'object') continue;
+        l.competencies = tauschListe(l.competencies);
+        l.primaryCompetency = tausch(l.primaryCompetency || '');
+      }
+    }
+
+    // Katalog: Nutzungszähler zusammenführen, Zuordnung und Ausblendung mitnehmen.
+    const komp = nextDb.competencies || {};
+    if (komp[alt]) {
+      const a = komp[alt];
+      const b = komp[neu] || { count: 0, lastUsed: '' };
+      komp[neu] = {
+        ...b,
+        count: (b.count || 0) + (a.count || 0),
+        lastUsed: [a.lastUsed || '', b.lastUsed || ''].sort().pop() || '',
+      };
+      delete komp[alt];
+    } else if (!komp[neu]) {
+      komp[neu] = { count: 1, lastUsed: new Date().toISOString() };
+    }
+    nextDb.competencies = komp;
+
+    const m = normalisiereModell(nextDb.competencyModel);
+    if (m.areaOf[alt]) { m.areaOf[neu] = m.areaOf[alt]; delete m.areaOf[alt]; }
+    if (m.hidden[alt]) { m.hidden[neu] = true; delete m.hidden[alt]; }
+    nextDb.competencyModel = normalisiereModell(m);
+
+    runUndoable('Kompetenz umbenannt', before, ()=>persist(nextDb));
+  };
+
+  /* Löschen nimmt die Kompetenz aus dem Katalog, NICHT aus den Stunden.
+     Eine bereits gehaltene Stunde soll zeigen, was in ihr vorkam –
+     unabhängig davon, was heute noch zur Auswahl steht. Dafür gibt es
+     bereits den Weg über hideSuggestion; er wird hier wiederverwendet. */
+  const deleteCompetency = (label) => {
+    const l = normalisiereEtikett(label);
+    if (!l || istSystemKompetenz(l)) return;
+    hideSuggestion('competency', l);
+  };
+
+  /* Sprechabsichten umbenennen: dieselbe Überlegung wie bei den
+     Kompetenzen – bliebe eine Stunde beim alten Namen, hätte man
+     danach zwei Einträge statt einem. Deshalb wandert das Etikett mit. */
+  const renameSpeechAct = (vonLabel, nachLabel) => {
+    const alt = String(vonLabel || '').trim();
+    const neu = String(nachLabel || '').trim();
+    if (!alt || !neu || alt === neu || istSystemSprechabsicht(alt)) return;
+
+    const before = db;
+    const nextDb = deepClone(db);
+    const tauschListe = (arr)=> [...new Set(
+      (Array.isArray(arr) ? arr : [])
+        .map(x => String(x || '').trim())
+        .map(x => x === alt ? neu : x)
+        .filter(Boolean)
+    )];
+
+    for (const woche of Object.values(nextDb.weeks || {})) {
+      for (const stunde of Object.values(woche?.lessons || {})) {
+        if (!stunde || typeof stunde !== 'object') continue;
+        stunde.speechActs = tauschListe(stunde.speechActs);
+      }
+    }
+    for (const tpl of Object.values(nextDb.sequenceTemplates || {})) {
+      for (const l of (Array.isArray(tpl?.lessons) ? tpl.lessons : [])) {
+        if (!l || typeof l !== 'object') continue;
+        l.speechActs = tauschListe(l.speechActs);
+      }
+    }
+
+    const ablage = nextDb.speechActs || {};
+    if (ablage[alt]) {
+      const a = ablage[alt];
+      const b = ablage[neu] || { count: 0, lastUsed: '' };
+      ablage[neu] = {
+        ...b,
+        count: (b.count || 0) + (a.count || 0),
+        lastUsed: [a.lastUsed || '', b.lastUsed || ''].sort().pop() || '',
+      };
+      delete ablage[alt];
+    }
+    nextDb.speechActs = ablage;
+
+    runUndoable('Sprechabsicht umbenannt', before, ()=>persist(nextDb));
+  };
+
+  /* Löschen nimmt sie aus der Auswahl, nicht aus den Stunden. */
+  const deleteSpeechAct = (label) => {
+    const l = String(label || '').trim();
+    if (!l || istSystemSprechabsicht(l)) return;
+    hideSuggestion('speechAct', l);
+  };
+
+  const addCompetencyArea = (name) => {
+    const n = String(name || '').trim();
+    if (!n) return;
+    updateCompetencyModel((m)=>({
+      ...m,
+      customAreas: [...m.customAreas, { id: `area-${uid()}`, name: n }],
+    }));
+  };
+
+  const renameCompetencyArea = (id, name) => {
+    const n = String(name || '').trim();
+    if (!id || !n || istSystemBereich(id)) return;
+    updateCompetencyModel((m)=>({
+      ...m,
+      customAreas: m.customAreas.map(a => a.id === id ? { ...a, name: n } : a),
+    }));
+  };
+
+  /* Einen eigenen Bereich zu löschen darf keine Kompetenz kosten: die
+     Zuordnungen fallen weg, die Etiketten bleiben und rücken in
+     „Ohne Bereich". In den Stunden ändert sich gar nichts. */
+  const deleteCompetencyArea = (id) => {
+    if (!id || istSystemBereich(id)) return;
+    updateCompetencyModel((m)=>{
+      const areaOf = { ...m.areaOf };
+      for (const [label, bereichId] of Object.entries(areaOf)) {
+        if (bereichId === id) delete areaOf[label];
+      }
+      return { ...m, customAreas: m.customAreas.filter(a => a.id !== id), areaOf };
+    });
+  };
+
+  /* Merken in einer beliebigen Nutzungsablage. Dieselbe Mechanik wie
+     rememberCompetency, nur ohne sie zu verdoppeln. */
+  const rememberIn = (ablage, label, minLaenge = 1) => {
+    const l = String(label || '').trim();
+    if (!l || l.length < minLaenge) return;
+    const nextDb = deepClone(db);
+    if (!nextDb[ablage] || typeof nextDb[ablage] !== 'object') nextDb[ablage] = {};
+    if (!nextDb.hiddenSuggestions) nextDb.hiddenSuggestions = {};
+    if (!nextDb.hiddenSuggestions[ablage]) nextDb.hiddenSuggestions[ablage] = {};
+    // Wer einen entfernten Vorschlag erneut eingibt, will ihn zurück.
+    if (nextDb.hiddenSuggestions[ablage][l]) delete nextDb.hiddenSuggestions[ablage][l];
+    const bisher = nextDb[ablage][l] || { count: 0, lastUsed: '' };
+    nextDb[ablage][l] = {
+      ...bisher,
+      count: (bisher.count || 0) + 1,
+      lastUsed: new Date().toISOString(),
+    };
+    persist(nextDb);
+  };
+
+  /* Systemeinträge des Startbestands nicht in die eigene Ablage
+     schreiben – sie stehen ohnehin zur Auswahl, und die Verwaltung
+     zeigte sie sonst fälschlich als eigene Sprechabsicht. */
+  const rememberSpeechAct = (label) => {
+    const l = String(label || '').trim();
+    if (!l || istSystemSprechabsicht(l)) return;
+    rememberIn('speechActs', l, 2);
+  };
+  const rememberScaffoldLabel = (label) => rememberIn('scaffoldLabels', label, 2);
+
+  /* Einen offenen Punkt abschliessen. Er wird nicht gelöscht, sondern
+     bekommt einen Status – so bleibt in der Nachbereitung der
+     Ursprungsstunde sichtbar, was aus ihm geworden ist, und ein
+     versehentliches "Erledigt" ist über Rückgängig zu holen. */
+  const resolveCarryOver = (punkt, status) => {
+    const ref = punkt?.sourceRef ? parseStundenRef(punkt.sourceRef) : null;
+    if (!ref || !punkt?.id) return;
+    const before = db;
+    const nextDb = deepClone(db);
+    const stunde = nextDb.weeks?.[ref.weekStart]?.lessons?.[keyOf(ref.dayIndex, ref.slotIndex)];
+    if (!stunde) return;
+    const review = normalisiereReview(stunde.review, uid);
+    review.carryOverItems = review.carryOverItems.map(i => i.id === punkt.id ? {
+      ...i,
+      status,
+      resolvedAt: new Date().toISOString(),
+      targetRef: status === 'transferred' && view.name === 'lesson'
+        ? stundenRef({ weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex })
+        : i.targetRef,
+    } : i);
+    stunde.review = review;
+    const beschriftung = status === 'transferred' ? 'Punkt übernommen'
+      : status === 'completed' ? 'Punkt erledigt' : 'Punkt verworfen';
+    runUndoable(beschriftung, before, ()=>persist(nextDb));
+  };
+
   const rememberSocialForm = (label) => {
     const l = (label || '').trim();
     if (!l) return;
@@ -3176,6 +4466,14 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
       if (!nextDb.hiddenSuggestions.competencies) nextDb.hiddenSuggestions.competencies = {};
       nextDb.hiddenSuggestions.competencies[l] = true;
       if (nextDb.competencies && nextDb.competencies[l]) delete nextDb.competencies[l];
+    } else if (kind === 'speechAct') {
+      if (!nextDb.hiddenSuggestions.speechActs) nextDb.hiddenSuggestions.speechActs = {};
+      nextDb.hiddenSuggestions.speechActs[l] = true;
+      if (nextDb.speechActs && nextDb.speechActs[l]) delete nextDb.speechActs[l];
+    } else if (kind === 'scaffoldLabel') {
+      if (!nextDb.hiddenSuggestions.scaffoldLabels) nextDb.hiddenSuggestions.scaffoldLabels = {};
+      nextDb.hiddenSuggestions.scaffoldLabels[l] = true;
+      if (nextDb.scaffoldLabels && nextDb.scaffoldLabels[l]) delete nextDb.scaffoldLabels[l];
     } else if (kind === 'supervisionLabel') {
       if (!nextDb.hiddenSuggestions.supervisionLabels) nextDb.hiddenSuggestions.supervisionLabels = {};
       nextDb.hiddenSuggestions.supervisionLabels[l] = true;
@@ -3330,14 +4628,23 @@ const deleteTodo = (id) => {
     }
     if (!subject) subject = (items.find(i=> (i.lesson.subject||'').trim())?.lesson?.subject || '').trim();
 
+    /* Diese Aufzählung ist die einzige Stelle, an der eine Vorlage
+       entscheidet, was sie mitnimmt. Neue Felder gehören deshalb hier
+       hinein – sonst gingen sie beim Speichern als Vorlage lautlos
+       verloren, ohne dass irgendwo ein Fehler entstünde. */
     const lessons = items.map(({ lesson }) => ({
       topic: lesson.topic || '',
       objectives: lesson.objectives || '',
-      phases: (lesson.phases || []).map(p => ({ ...p, id: p?.id || uid() })),
+      phases: (lesson.phases || []).map(p => neuePhasenIds(p)),
       homework: lesson.homework || '',
       notes: lesson.notes || '',
       competencies: Array.isArray(lesson.competencies) ? lesson.competencies : [],
-      primaryCompetency: lesson.primaryCompetency || ''
+      primaryCompetency: lesson.primaryCompetency || '',
+      successCriteria: normalisiereErfolgskriterien(lesson.successCriteria),
+      communicativeTask: normalisiereAufgabe(lesson.communicativeTask),
+      speechActs: normalisiereSprechabsichten(lesson.speechActs),
+      languageResources: normalisiereMittel(lesson.languageResources),
+      progressionNote: String(lesson.progressionNote || '').trim(),
     }));
 
     const nextDb = deepClone(db);
@@ -3378,14 +4685,20 @@ const deleteTodo = (id) => {
     }
   };
 
+  /* Ob eine Stunde als leer gilt, entscheidet mit darüber, ob eine
+     Vorlage sie überschreiben darf. Eine Stunde, in der bislang nur
+     fachdidaktisch geplant wurde – etwa eine kommunikative Aufgabe und
+     Erfolgskriterien, aber noch kein Thema –, ist nicht leer. */
   const isLessonEmpty = (raw) => {
     const l = normalizeLesson(raw);
     const hasText = (l.topic || l.objectives || l.homework || l.notes || '').trim().length > 0;
     const hasComps = (l.primaryCompetency || '').trim() || (Array.isArray(l.competencies) && l.competencies.length);
-    const hasPhaseContent = (l.phases || []).some(p => (p.title || '').trim() || (p.socialForm || '').trim() || (p.content || '').trim());
     // A brand-new default lesson has titles; consider it empty if only titles exist and no content/socialforms.
     const hasMeaningfulPhase = (l.phases || []).some(p => (p.socialForm || '').trim() || (p.content || '').trim());
-    return !hasText && !hasComps && !hasMeaningfulPhase;
+    const hasDidaktik = (l.successCriteria || []).length > 0
+      || (l.progressionNote || '').trim().length > 0
+      || hatFachdidaktik(l);
+    return !hasText && !hasComps && !hasMeaningfulPhase && !hasDidaktik;
   };
 
   const insertTemplateIntoPlan = ({ templateId, targetGroup, subject, startISO, overwrite, sequenceName }) => {
@@ -3449,11 +4762,16 @@ const deleteTodo = (id) => {
         nextLesson.room = (l.room || '').trim();
         nextLesson.topic = bp.topic || '';
         nextLesson.objectives = bp.objectives || '';
-        nextLesson.phases = normalizePhases((bp.phases || []).map(p => ({ ...p, id: p?.id || uid() })));
+        nextLesson.phases = normalizePhases((bp.phases || []).map(p => neuePhasenIds(p)));
         nextLesson.homework = bp.homework || '';
         nextLesson.notes = bp.notes || '';
         nextLesson.competencies = Array.isArray(bp.competencies) ? bp.competencies : [];
         nextLesson.primaryCompetency = bp.primaryCompetency || (nextLesson.competencies?.[0] || '');
+        nextLesson.successCriteria = normalisiereErfolgskriterien(bp.successCriteria);
+        nextLesson.communicativeTask = normalisiereAufgabe(bp.communicativeTask);
+        nextLesson.speechActs = normalisiereSprechabsichten(bp.speechActs);
+        nextLesson.languageResources = normalisiereMittel(bp.languageResources);
+        nextLesson.progressionNote = String(bp.progressionNote || '').trim();
         nextLesson.sequenceId = seqId;
         nextLesson.updatedAt = new Date().toISOString();
 
@@ -3518,6 +4836,7 @@ const doExportDocx = async (html, suggestedName) => {
           onDeleteDuty={(dayIndex, pos)=>deleteDutyAt(view.weekStart, dayIndex, pos)}
           lessonClipboard={lessonClipboard}
           onCopyLesson={(dayIndex, slotIndex)=>copyLessonToClipboard(view.weekStart, dayIndex, slotIndex)}
+          onReviewLesson={(dayIndex, slotIndex)=>setView({ name:'review', weekStart: view.weekStart, dayIndex, slotIndex })}
           onCutLesson={(dayIndex, slotIndex)=>cutLessonToClipboard(view.weekStart, dayIndex, slotIndex)}
           onPasteLesson={(dayIndex, slotIndex)=>pasteLessonFromClipboard(view.weekStart, dayIndex, slotIndex)}
           onLessonDnd={(payload)=>moveOrCopyLessonByDnd(payload)}
@@ -3670,8 +4989,57 @@ const doExportDocx = async (html, suggestedName) => {
         />
       );
     }
+    if (view.name === 'review') {
+      const l = getLessonAt(view.weekStart, view.dayIndex, view.slotIndex);
+      const dateISO = toISODate(addDays(fromISODate(view.weekStart), view.dayIndex));
+      return (
+        <LessonReviewView
+          lesson={l}
+          dateISO={dateISO}
+          dayIndex={view.dayIndex}
+          slotIndex={view.slotIndex}
+          languageMode={languageMode}
+          onChangeReview={(next)=>{
+            const akt = getLessonAt(view.weekStart, view.dayIndex, view.slotIndex);
+            updateLessonAt(view.weekStart, view.dayIndex, view.slotIndex, { ...akt, review: next });
+          }}
+          onOpenLesson={()=>setView({
+            name:'lesson', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+          })}
+        />
+      );
+    }
+    if (view.name === 'progression') {
+      const seq = sequences?.[view.sequenceId] || null;
+      const zeilen = seq ? sequenzProgression(sequenceOccurrences(db, view.sequenceId)) : [];
+      return (
+        <SequenceProgressionView
+          sequenz={seq}
+          zeilen={zeilen}
+          onOpenLesson={(z)=>setView({
+            name:'lesson', weekStart: z.weekStart, dayIndex: z.dayIndex, slotIndex: z.slotIndex,
+          })}
+          onChangeNote={(z, wert)=>{
+            const l = getLessonAt(z.weekStart, z.dayIndex, z.slotIndex);
+            updateLessonAt(z.weekStart, z.dayIndex, z.slotIndex, { ...l, progressionNote: wert });
+          }}
+          onOpenLessons={()=>setView({
+            name:'macro', weekStart: view.weekStart,
+            startISO: zeilen[0]?.weekStart || view.weekStart, rangeDays: 84,
+          })}
+        />
+      );
+    }
     if (view.name === 'competencies') {
-      return <CompetencyHeatmapView daten={competencyHeatmap(db)} />;
+      return (
+        <CompetencyHeatmapView
+          daten={competencyHeatmap(db)}
+          /* Das Profil folgt der Gliederung des Katalogs. Ohne den
+             Fremdsprachenmodus gibt es keine Bereiche, nach denen sich
+             sinnvoll bündeln liesse – dann bleibt es bei der Wärmekarte. */
+          profil={languageMode ? competencyProfile(db, { modell: competencyModel }) : null}
+        />
+      );
     }
     if (view.name === 'settings') {
       return (
@@ -3683,6 +5051,20 @@ const doExportDocx = async (html, suggestedName) => {
           onImportBackup={importBackup}
           weekReview={appSettings?.weekReview !== false}
           onChangeWeekReview={(v)=>updateAppSettings({ weekReview: !!v })}
+          languageMode={languageMode}
+          onChangeLanguageMode={(v)=>updateAppSettings({ languageMode: !!v })}
+          eigeneSprechabsichten={speechActSuggestions.filter(l => !istSystemSprechabsicht(l))}
+          onRenameSpeechAct={renameSpeechAct}
+          onDeleteSpeechAct={deleteSpeechAct}
+          competencyModel={competencyModel}
+          benutzteKompetenzen={benutzteKompetenzen}
+          onSetCompetencyHidden={setCompetencyHidden}
+          onSetCompetencyArea={setCompetencyArea}
+          onRenameCompetency={renameCompetency}
+          onDeleteCompetency={deleteCompetency}
+          onAddCompetencyArea={addCompetencyArea}
+          onRenameCompetencyArea={renameCompetencyArea}
+          onDeleteCompetencyArea={deleteCompetencyArea}
         />
       );
     }
@@ -3720,7 +5102,21 @@ const doExportDocx = async (html, suggestedName) => {
         appSettings={appSettings}
         onUpdateAppSettings={updateAppSettings}
         schoolCalendar={schoolCalendar}
-        competencySuggestions={competencySuggestions}
+        competencySuggestions={sichtbareKompetenzVorschlaege}
+        languageMode={languageMode}
+        competencyModel={competencyModel}
+        benutzteKompetenzen={benutzteKompetenzen}
+        speechActSuggestions={speechActSuggestions}
+        scaffoldSuggestions={scaffoldSuggestions}
+        offenePunkte={offenePunkteDerStunde}
+        onResolveCarryOver={resolveCarryOver}
+        onOpenReview={()=>setView({
+          name:'review', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+        })}
+        onRememberSpeechAct={rememberSpeechAct}
+        onHideSpeechActSuggestion={(label)=>hideSuggestion('speechAct', label)}
+        onRememberScaffoldLabel={rememberScaffoldLabel}
+        onHideScaffoldSuggestion={(label)=>hideSuggestion('scaffoldLabel', label)}
         onHideCompetencySuggestion={(label)=>hideSuggestion('competency', label)}
         suggestions={socialFormSuggestions}
         phaseNameSuggestions={phaseNameSuggestions}
@@ -3805,7 +5201,7 @@ const doExportDocx = async (html, suggestedName) => {
               }}
             ><ArrowLeft {...ICON} /> Zurück</button>
           ) : null}
-          <img className="logo" src={logo} alt="Prép-ybara Logo" />
+          <LogoButton onClick={zeigeSplashReplay} />
           <h1>Prép-ybara</h1>
           {viewBadgeLabel ? <span className="badge">{viewBadgeLabel}</span> : null}
         </div>
@@ -3855,7 +5251,10 @@ const doExportDocx = async (html, suggestedName) => {
         <span>© Florian Nowak</span>
       </div>
 
-      <SplashOverlay visible={splashVisible} />
+      <SplashOverlay
+        visible={splashVisible || splashReplay}
+        onDismiss={(splashReplay && !splashVisible) ? versteckeSplashReplay : null}
+      />
       <EasterEggOverlay visible={easterEggVisible} />
       <ToastHost toasts={toasts} onDismiss={dismissToast} />
       <WeekReview
@@ -3948,6 +5347,15 @@ const doExportDocx = async (html, suggestedName) => {
           onCreate={(name)=>createSequence(name)}
           onUpdate={(id, patch)=>updateSequence(id, patch)}
           onDelete={(id)=>deleteSequence(id)}
+          competencySuggestions={sichtbareKompetenzVorschlaege}
+          languageMode={languageMode}
+          competencyModel={competencyModel}
+          benutzteKompetenzen={benutzteKompetenzen}
+          onRememberCompetency={rememberCompetency}
+          onOpenProgression={(sequenceId)=>{
+            closeSequenceManagerModal();
+            setView({ name:'progression', sequenceId, weekStart: view.weekStart });
+          }}
           afterCreate={seqManagerModal.afterCreate}
           autoCloseOnCreate={seqManagerModal.autoCloseOnCreate}
           onSaveAsTemplate={(id)=>{
@@ -4047,7 +5455,7 @@ const doExportDocx = async (html, suggestedName) => {
 }
 
 function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO, groupColors, duties, supervisionSuggestions, onHideSupervisionSuggestion = ()=>{},
-  lessonClipboard, onCopyLesson, onCutLesson, onPasteLesson, onLessonDnd,
+  lessonClipboard, onCopyLesson, onCutLesson, onPasteLesson, onLessonDnd, onReviewLesson,
   onOpenGroupColorPalette, onOpenLesson, onOpenMacro, onOpenTodos, onChangeSlots, onDeleteLesson, onUpsertDuty, onDeleteDuty, onExportPdf, onExportDocx }){
   const slots = week.slotsPerDay || 6;
   const dutyMap = duties || week.duties || {};
@@ -4263,6 +5671,12 @@ const exportWeekDocx = () => {
                               title="Stunde ausschneiden (interne Zwischenablage)"
                               aria-label="Stunde ausschneiden"
                             ><Scissors {...ICON_SM} /></button>
+                            <button
+                              className="iconBtn cellTool"
+                              onClick={()=>onReviewLesson?.(dayIndex, slotIndex)}
+                              title="Nachbereiten"
+                              aria-label="Stunde nachbereiten"
+                            ><ClipboardCheck {...ICON_SM} /></button>
                           </>
                         ) : null}
                         {lessonClipboard ? (
@@ -4303,6 +5717,22 @@ const exportWeekDocx = () => {
                     <div className="sub">{sub}</div>
                     {seq ? <span className="badge" style={{borderColor: lineColor(seq.color), color: textColor(seq.color)}}>Sequenz: {seq.name}</span> : null}
                     {l?.topic ? <span className="badge">Thema: {l.topic}</span> : <span className="badge">Noch kein Thema</span>}
+                    {(()=>{
+                      /* Dezentes Kennzeichen, kein Warnsymbol: ein Haken für
+                         nachbereitet, ein Punkt für noch Vorgemerktes. */
+                      if (!l) return null;
+                      const offen = offeneCarryOver(l.review).length;
+                      if (offen) return (
+                        <span className="nbMarke" title={`${offen} ${offen === 1 ? 'offener Punkt' : 'offene Punkte'} für die nächste Stunde`}>
+                          <span className="nbMarkePunkt" aria-hidden="true" />
+                          {offen}
+                        </span>
+                      );
+                      if (hatNachbereitung(l.review)) return (
+                        <span className="nbMarke" title="nachbereitet"><Check {...ICON_SM} /></span>
+                      );
+                      return null;
+                    })()}
                   </div>
                 );
               })}
@@ -4758,6 +6188,18 @@ function LessonView({
   onUpdateAppSettings,
   schoolCalendar,
   competencySuggestions,
+  languageMode,
+  competencyModel,
+  benutzteKompetenzen,
+  speechActSuggestions,
+  scaffoldSuggestions,
+  onRememberSpeechAct,
+  onHideSpeechActSuggestion,
+  onRememberScaffoldLabel,
+  onHideScaffoldSuggestion,
+  offenePunkte = [],
+  onResolveCarryOver,
+  onOpenReview,
   suggestions,
   phaseNameSuggestions,
   onCreateSequence,
@@ -4794,6 +6236,12 @@ function LessonView({
     files: Array.isArray(l.files) ? l.files : [],
     links: Array.isArray(l.links) ? l.links : [],
     phases: normalizePhases(l.phases || []),
+    // Damit die Bausteine nie auf undefined treffen.
+    successCriteria: normalisiereErfolgskriterien(l.successCriteria),
+    communicativeTask: normalisiereAufgabe(l.communicativeTask),
+    speechActs: normalisiereSprechabsichten(l.speechActs),
+    languageResources: normalisiereMittel(l.languageResources),
+    progressionNote: String(l.progressionNote || ''),
   });
 
   // Stable serialization for change detection (no IDs, no timestamps).
@@ -4827,7 +6275,18 @@ function LessonView({
         content: p.content || '',
         materialsMedia: p.materialsMedia || '',
         remarks: p.remarks || '',
+        // Ohne die Hilfen hier bliebe eine geänderte Hilfe ungespeichert.
+        scaffolds: normalisiereScaffolds(p.scaffolds),
       })),
+      /* Diese Aufzählung entscheidet, OB überhaupt gespeichert wird:
+         was hier fehlt, sieht der Vergleich nicht, und die Änderung
+         gilt als "nichts passiert". Neue Felder gehören deshalb hierher
+         – sonst verschwände die Eingabe beim Verlassen der Ansicht. */
+      successCriteria: normalisiereErfolgskriterien(n.successCriteria),
+      communicativeTask: normalisiereAufgabe(n.communicativeTask),
+      speechActs: normalisiereSprechabsichten(n.speechActs),
+      languageResources: normalisiereMittel(n.languageResources),
+      progressionNote: String(n.progressionNote || ''),
     };
     return JSON.stringify(simple);
   };
@@ -4837,6 +6296,18 @@ function LessonView({
   // (important when users go back to the timetable quickly).
   const localRef = useRef(local);
   useEffect(()=>{ localRef.current = local; }, [local]);
+
+  /* Auch der Speicher-Rückruf muss frisch bleiben.
+
+     Der Abschluss beim Verlassen der Ansicht unten hängt an [] und hielt
+     deshalb den Rückruf des ERSTEN Rendervorgangs fest. Der schliesst
+     über den Datenbankstand von damals. Alles, was währenddessen sonst
+     gespeichert wurde – eine gemerkte Kompetenz, eine Sozialform, eine
+     Lerngruppenfarbe –, wurde beim Verlassen wieder überschrieben, wenn
+     man schneller wegklickte als die 600 ms des verzögerten Speicherns.
+     Mit dem Ref schreibt der Abschluss auf den aktuellen Stand. */
+  const onUpdateLessonRef = useRef(onUpdateLesson);
+  useEffect(()=>{ onUpdateLessonRef.current = onUpdateLesson; });
 
   // Prevent saving a "brand-new" empty lesson just because the user opened it.
   const initialSnapshotRef = useRef(serializeForCompare(lesson));
@@ -4894,7 +6365,7 @@ function LessonView({
         const latest = localRef.current;
         const curr = serializeForCompare(latest);
         if (curr !== initialSnapshotRef.current) {
-          onUpdateLesson(latest);
+          onUpdateLessonRef.current?.(latest);
           initialSnapshotRef.current = curr;
         }
       } catch {}
@@ -5084,6 +6555,51 @@ const gColor = useMemo(()=>{
     if (res && res.ok === false && res.error) ui.toast(`Konnte Ablage nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
+  /* Der fachdidaktische Block startet aufgeklappt, wenn schon etwas
+     darin steht – sonst wären ausgefüllte Angaben versteckt. Sonst
+     bleibt die Stundenplanung so kurz wie zuvor. */
+  const [fachdidaktikOffen, setFachdidaktikOffen] = useState(()=> hatFachdidaktik(lesson));
+
+  /* Eine Zeile, die im zugeklappten Zustand sagt, was drinsteht. */
+  const fachdidaktikZusammenfassung = useMemo(()=>{
+    const teile = [];
+    if (!istLeereAufgabe(local.communicativeTask)) teile.push('Aufgabe');
+    const sa = normalisiereSprechabsichten(local.speechActs).length;
+    if (sa) teile.push(`${sa} ${sa === 1 ? 'Sprechabsicht' : 'Sprechabsichten'}`);
+    if (!istLeereMittel(local.languageResources)) teile.push('sprachliche Mittel');
+    const sc = scaffoldsDerStunde(local).length;
+    if (sc) teile.push(`${sc} ${sc === 1 ? 'Hilfe' : 'Hilfen'}`);
+    return teile.length ? teile.join(' · ') : 'noch nichts eingetragen';
+  }, [local.communicativeTask, local.speechActs, local.languageResources, local.phases]);
+
+  /* Ein offener Punkt wird zu einer ganz normalen Phase am Ende der
+     Stunde. Danach lässt sie sich wie jede andere ziehen, ändern und
+     löschen – es gibt keinen Sondertyp "übernommene Phase".
+
+     Die Ursprungsstunde bleibt unverändert: kopiert, nicht verschoben.
+     Nur der Punkt selbst wird dort als übernommen vermerkt, damit er
+     nicht bei jeder weiteren Stunde erneut angeboten wird. */
+  const uebernehmeAlsPhasen = (liste)=>{
+    const punkte = (Array.isArray(liste) ? liste : []).filter(Boolean);
+    if (!punkte.length) return;
+    const neue = punkte.map(p => phaseAusCarryOver(p, uid));
+    setPhases([...(local.phases || []), ...neue]);
+    for (const p of punkte) onResolveCarryOver?.(p, 'transferred');
+    ui.toast(punkte.length === 1
+      ? 'Als Phase übernommen.'
+      : `${punkte.length} Phasen übernommen.`);
+  };
+
+  const uebernehmeAlsNotiz = (p)=>{
+    if (!p) return;
+    const bisher = String(local.notes || '').trim();
+    const zeile = String(p.title || '').trim();
+    if (!zeile) return;
+    setField('notes', bisher ? `${bisher}\n${zeile}` : zeile);
+    onResolveCarryOver?.(p, 'transferred');
+    ui.toast('Als Notiz übernommen.');
+  };
+
   const setPhases = (nextPhases) => {
     setLocal(prev => ({ ...prev, phases: normalizePhases(nextPhases) }));
   };
@@ -5133,7 +6649,7 @@ const gColor = useMemo(()=>{
 
 const exportDocx = () => {
   if (typeof onExportDocx !== 'function') {
-    showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
+    ui.toast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
   const html = buildLessonPdfHtml({ title: lessonTitle, dateISO, dayIndex, slotIndex, schoolCalendar, lesson: local });
@@ -5143,7 +6659,7 @@ const exportDocx = () => {
 
   const startExecution = () => {
     if (typeof onOpenExecution !== 'function') {
-      showToast('Durchführungsansicht ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
+      ui.toast('Durchführungsansicht ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
 
@@ -5195,6 +6711,10 @@ const exportDocx = () => {
           ) : null}
         </div>
         <div className="row" style={{gap:8}}>
+          <button className="btn" onClick={()=>onOpenReview?.()}
+                  title="Nach der Stunde festhalten, was daraus geworden ist">
+            <ClipboardCheck {...ICON_SM} /> Nachbereiten
+          </button>
           {capabilities.executionWindow ? (
             <button className="btn success" onClick={startExecution}><Play {...ICON_SM} /> Durchführung</button>
           ) : null}
@@ -5256,6 +6776,14 @@ const exportDocx = () => {
       </div>
 
       <div style={{height:10}} />
+
+      <CarryOverPanel
+        punkte={offenePunkte}
+        onUebernehmenAlsPhase={(liste)=>uebernehmeAlsPhasen(liste)}
+        onUebernehmenAlsNotiz={(p)=>uebernehmeAlsNotiz(p)}
+        onErledigt={(p)=>onResolveCarryOver?.(p, 'completed')}
+        onIgnorieren={(p)=>onResolveCarryOver?.(p, 'dismissed')}
+      />
 
       <div className="row wrap">
         <div className="grow">
@@ -5333,6 +6861,9 @@ const exportDocx = () => {
         competencies={Array.isArray(local.competencies) ? local.competencies : []}
         primary={local.primaryCompetency || ''}
         suggestions={competencySuggestions}
+        languageMode={languageMode}
+        modell={competencyModel}
+        benutzte={benutzteKompetenzen}
         onChange={(nextComps, nextPrimary)=>{
           setLocal(prev => ({ ...prev, competencies: nextComps, primaryCompetency: nextPrimary }));
         }}
@@ -5346,6 +6877,46 @@ const exportDocx = () => {
         <label className="small muted">Lernziele (Stichpunkte oder Sätze)</label>
         <textarea value={local.objectives} onChange={(e)=>setField('objectives', e.target.value)} placeholder="- Die Lernenden können ..." />
       </div>
+
+      <div style={{height:8}} />
+
+      {/* Fachunabhängig – deshalb auch ohne Fremdsprachenmodus da. */}
+      <SuccessCriteriaEditor
+        kriterien={local.successCriteria}
+        onChange={(next)=>setField('successCriteria', next)}
+      />
+
+      {/* Alles Weitere gehört zum Fremdsprachenmodus und bleibt sonst
+          unsichtbar – gespeichert bleibt es trotzdem. */}
+      {languageMode ? (
+        <>
+          <div style={{height:10}} />
+          <details className="didaktikBlock" open={fachdidaktikOffen}
+                   onToggle={(e)=>setFachdidaktikOffen(e.currentTarget.open)}>
+            <summary className="didaktikKopf">
+              <span className="didaktikTitel">Fachdidaktische Planung</span>
+              <span className="muted small">{fachdidaktikZusammenfassung}</span>
+            </summary>
+            <div className="didaktikInhalt">
+              <CommunicativeTaskEditor
+                wert={local.communicativeTask}
+                onChange={(next)=>setField('communicativeTask', next)}
+                titel="Kommunikative Aufgabe"
+                platzhalter="z. B. Plant mit eurem Austauschpartner einen gemeinsamen Samstagnachmittag."
+              />
+              <SpeechActEditor
+                ausgewaehlt={local.speechActs}
+                vorrat={speechActSuggestions}
+                onChange={(next)=>setField('speechActs', next)}
+                onRemember={(v)=>onRememberSpeechAct?.(v)}
+                onHideSuggestion={(v)=>onHideSpeechActSuggestion?.(v)}
+                mittel={local.languageResources}
+                onChangeMittel={(next)=>setField('languageResources', next)}
+              />
+            </div>
+          </details>
+        </>
+      ) : null}
 
       <div style={{height:14}} />
 
@@ -5438,6 +7009,23 @@ const exportDocx = () => {
                     />
                   </div>
                 </div>
+
+                {/* Hilfen gehören zur Phase und stehen deshalb hier –
+                    aber nur im Fremdsprachenmodus und nur auf Klick. */}
+                {languageMode ? (
+                  <>
+                    <div style={{height:10}} />
+                    <PhaseScaffolds
+                      scaffolds={ph.scaffolds}
+                      vorschlaege={scaffoldSuggestions}
+                      onChange={(next)=>{
+                        setPhases(local.phases.map((p,i)=> i===idx ? { ...p, scaffolds: next } : p));
+                      }}
+                      onRemember={(v)=>onRememberScaffoldLabel?.(v)}
+                      onHideSuggestion={(v)=>onHideScaffoldSuggestion?.(v)}
+                    />
+                  </>
+                ) : null}
               </div>
             ))}
           </div>
@@ -5623,6 +7211,10 @@ function MacroView({
 
   const [groupQuery, setGroupQuery] = useState('');
   const [sequenceFilter, setSequenceFilter] = useState('');
+  /* Kompetenzfilter: arbeitet auf dem Etikett und deckt damit System-
+     wie eigene Kompetenzen gleichermassen ab – es gibt nur eine Art
+     von Wert, nach der gefiltert werden könnte. */
+  const [competencyFilter, setCompetencyFilter] = useState('');
 
   const dates = useMemo(()=>{
     const out = [];
@@ -5679,10 +7271,32 @@ function MacroView({
     return groups.filter(g => g.toLowerCase().includes(q));
   }, [groups, groupQuery]);
 
+  /* Zur Auswahl steht, was in diesem Zeitraum wirklich vorkommt – eine
+     Liste aller je angelegten Kompetenzen wäre hier nur lang. */
+  const kompetenzenImZeitraum = useMemo(()=>{
+    const set = new Set();
+    for (const o of occurrences) {
+      for (const c of (Array.isArray(o.lesson.competencies) ? o.lesson.competencies : [])) {
+        const v = String(c || '').trim();
+        if (v) set.add(v);
+      }
+      const p = String(o.lesson.primaryCompetency || '').trim();
+      if (p) set.add(p);
+    }
+    return [...set].sort((a, b)=> a.localeCompare(b));
+  }, [occurrences]);
+
   const byGroupDate = useMemo(()=>{
     const map = new Map();
     for (const o of occurrences) {
       if (sequenceFilter && (o.lesson.sequenceId || '') !== sequenceFilter) continue;
+      if (competencyFilter && kompetenzenImZeitraum.includes(competencyFilter)) {
+        const liste = Array.isArray(o.lesson.competencies) ? o.lesson.competencies : [];
+        const alle = new Set(liste.map(x => String(x || '').trim()).filter(Boolean));
+        const primaer = String(o.lesson.primaryCompetency || '').trim();
+        if (primaer) alle.add(primaer);
+        if (!alle.has(competencyFilter)) continue;
+      }
       if (!map.has(o.group)) map.set(o.group, new Map());
       const dm = map.get(o.group);
       const arr = dm.get(o.dateISO) || [];
@@ -5690,7 +7304,7 @@ function MacroView({
       dm.set(o.dateISO, arr);
     }
     return map;
-  }, [occurrences, sequenceFilter]);
+  }, [occurrences, sequenceFilter, competencyFilter, kompetenzenImZeitraum]);
 
   const colsStyle = useMemo(()=>({
     gridTemplateColumns: `160px repeat(${dates.length}, 220px)`
@@ -5817,6 +7431,15 @@ const exportSequenceDocx = (sequenceId) => {
             {Object.values(sequences || {}).sort((a,b)=>a.name.localeCompare(b.name)).map(s => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
+          </select>
+        </div>
+        <div style={{width:260}}>
+          <label className="small muted">Kompetenz filtern</label>
+          <select className="input" value={competencyFilter}
+                  onChange={(e)=>setCompetencyFilter(e.target.value)}
+                  disabled={kompetenzenImZeitraum.length === 0}>
+            <option value="">Alle Kompetenzen</option>
+            {kompetenzenImZeitraum.map(k => <option key={k} value={k}>{k}</option>)}
           </select>
         </div>
       </div>
@@ -6024,16 +7647,51 @@ function YearPlanView({
   };
 
   const axis = useMemo(()=>{
-    // Build month separators & week labels
-    const list = weekStarts.map((ws, i)=>{
+    return weekStarts.map((ws, i)=>{
       const d = fromISODate(ws);
-      const month = d.getMonth();
-      const year = d.getFullYear();
-      const wk = weekNumberISO(d); // "KW x / yyyy"
-      return { ws, i, month, year, wk };
+      const voll = weekNumberISO(d);            // "KW x / yyyy"
+      return {
+        ws, i,
+        month: d.getMonth(),
+        year: d.getFullYear(),
+        wk: voll,
+        // Nur die Zahl. "KW" 40-mal nebeneinander zu wiederholen ist der
+        // Grund, warum die Leiste vorher unlesbar war – es steht jetzt
+        // einmal in der Spaltenüberschrift.
+        nummer: (voll.match(/\d+/) || [''])[0],
+      };
     });
-    return list;
   }, [weekStarts]);
+
+  /* Monatsbänder: zusammenhängende Wochen desselben Monats zu einem Feld
+     gefasst. Vorher lag die Monatsbeschriftung IN der 28 px breiten
+     Wochenspalte und lief über ihre Nachbarn hinweg. */
+  const monatsBaender = useMemo(()=>{
+    const out = [];
+    for (const a of axis){
+      const letzter = out[out.length - 1];
+      if (letzter && letzter.month === a.month && letzter.year === a.year) {
+        letzter.wochen += 1;
+        continue;
+      }
+      out.push({ month: a.month, year: a.year, start: a.i, wochen: 1, ws: a.ws });
+    }
+    return out.map((m, i)=>{
+      const d = fromISODate(m.ws);
+      const kurz = d.toLocaleString('de-DE', { month: 'short' });
+      const lang = d.toLocaleString('de-DE', { month: 'long' });
+      // Die Jahreszahl steht am Anfang und beim Jahreswechsel, nicht an
+      // jedem Monat – sonst trägt die Leiste zwölfmal dieselbe Angabe.
+      const zeigtJahr = i === 0 || out[i-1].year !== m.year;
+      return {
+        key: `${m.year}-${m.month}`,
+        left: m.start * weekWidth,
+        width: m.wochen * weekWidth,
+        text: zeigtJahr ? `${kurz} ${m.year}` : kurz,
+        titel: `${lang} ${m.year}`,
+      };
+    });
+  }, [axis, weekWidth]);
 
   const scrollRef = useRef(null);
   useEffect(()=>{
@@ -6173,20 +7831,33 @@ function YearPlanView({
 
       <div className="yearPlanWrap">
         <div className="yearPlanAxis">
-          <div className="yearPlanSticky">&nbsp;</div>
+          <div className="yearPlanSticky yearPlanAxisSticky">
+            <div className="yearPlanAxisHint">Monat</div>
+            <div className="yearPlanAxisHint">Kalenderwoche</div>
+          </div>
           <div className="yearPlanScroll" ref={scrollRef}>
             <div className="yearPlanAxisInner" style={{width: totalWidth}}>
-              {axis.map(({ws,i,month,year,wk})=>{
-                const d = fromISODate(ws);
-                const isMonthStart = i===0 || fromISODate(axis[i-1].ws).getMonth() !== month;
-                const off = weekOffMap.get(ws);
-                return (
-                  <div key={ws} className={`yearPlanWeekTick ${off ? 'yearPlanWeekTick--off' : ''}`} style={{left: i*weekWidth, width: weekWidth}} title={wk}>
-                    {isMonthStart ? <div className="yearPlanMonthLabel">{d.toLocaleString('de-DE', { month:'short' })} {year}</div> : null}
-                    <div className="yearPlanWeekLabel">{wk.split(' / ')[0]}</div>
+              <div className="yearPlanMonthBand">
+                {monatsBaender.map(m=>(
+                  <div key={m.key} className="yearPlanMonth"
+                       style={{left: m.left, width: m.width}} title={m.titel}>
+                    <span className="yearPlanMonthLabel">{m.text}</span>
                   </div>
-                );
-              })}
+                ))}
+              </div>
+              <div className="yearPlanWeekBand">
+                {axis.map(({ws,i,month,wk,nummer})=>{
+                  const istMonatsbeginn = i===0 || axis[i-1].month !== month;
+                  const off = weekOffMap.get(ws);
+                  return (
+                    <div key={ws}
+                         className={`yearPlanWeekTick${off ? ' yearPlanWeekTick--off' : ''}${istMonatsbeginn ? ' is-monthStart' : ''}`}
+                         style={{left: i*weekWidth, width: weekWidth}} title={wk}>
+                      <span className="yearPlanWeekLabel">{nummer}</span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>
@@ -6206,7 +7877,10 @@ function YearPlanView({
                   {/* background grid */}
                   {weekStarts.map((ws, i)=>{
                     const off = weekOffMap.get(ws);
-                    return <div key={ws} className={`yearPlanGridCol ${off ? 'yearPlanGridCol--off' : ''}`} style={{left:i*weekWidth, width:weekWidth}} />;
+                    const istMonatsbeginn = i===0 || axis[i-1]?.month !== axis[i]?.month;
+                    return <div key={ws}
+                                className={`yearPlanGridCol${off ? ' yearPlanGridCol--off' : ''}${istMonatsbeginn ? ' is-monthStart' : ''}`}
+                                style={{left:i*weekWidth, width:weekWidth}} />;
                   })}
 
                   {laneBars.map((b, idx)=>{
@@ -6610,10 +8284,20 @@ function SequenceManager({
   onSaveAsTemplate,
   onExportPdfSequence,
   onExportDocxSequence,
+  competencySuggestions = [],
+  languageMode = false,
+  competencyModel = null,
+  benutzteKompetenzen = [],
+  onRememberCompetency,
+  onOpenProgression,
   afterCreate,
   autoCloseOnCreate = false,
 }){
   const ui = useUi();
+  /* Die Kompetenzen einer Sequenz stehen nicht dauerhaft in der Zeile –
+     sie ist bereits dicht genug. Ein Klick klappt sie unter der Sequenz
+     auf, immer nur für eine; ein zweiter schliesst sie wieder. */
+  const [kompetenzSeqId, setKompetenzSeqId] = useState('');
   const [newName, setNewName] = useState('');
   const newNameRef = useRef(null);
   const canAdd = (newName || '').trim().length > 0;
@@ -6855,7 +8539,8 @@ function SequenceManager({
               text="Eine Sequenz fasst die Stunden zu einem Thema zusammen und zeigt dir, wo du darin stehst."
             />
           ) : list.map(s => (
-            <div key={s.id} className="seqRow">
+          <React.Fragment key={s.id}>
+            <div className="seqRow">
               <input
                 type="color"
                 value={s.color || SEQ_COLORS[0]}
@@ -6878,10 +8563,54 @@ function SequenceManager({
                 if (typeof onExportDocxSequence === 'function') onExportDocxSequence(s.id);
               }} title="Sequenz als Word speichern"><FileText {...ICON_SM} /> Word</button>
               <button className="btn" onClick={()=>openSeqFiles(s.id)} title="Dateien für diese Sequenz hinterlegen (nur Verweise, nicht exportiert)">Dateien</button>
+              <button className={`btn${kompetenzSeqId === s.id ? ' primary' : ''}`}
+                      onClick={()=>setKompetenzSeqId(kompetenzSeqId === s.id ? '' : s.id)}
+                      title="Schwerpunkt und Zielaufgabe der Sequenz – die Stunden dürfen davon abweichen">
+                {languageMode ? 'Didaktik' : 'Kompetenzen'}{(s.competencies || []).length ? ` (${s.competencies.length})` : ''}
+              </button>
+              {languageMode ? (
+                <button className="btn" onClick={()=>onOpenProgression?.(s.id)}
+                        title="Wie sich das sprachliche Handeln über die Sequenz entwickelt">
+                  <ListTree {...ICON_SM} /> Progression
+                </button>
+              ) : null}
               <button className="btn danger" onClick={()=>{
                 onDelete(s.id);
               }}>Löschen</button>
             </div>
+            {kompetenzSeqId === s.id ? (
+              <div className="seqKompetenzen">
+                {languageMode ? (
+                  <>
+                    <CommunicativeTaskEditor
+                      wert={s.finalTask}
+                      onChange={(next)=>onUpdate(s.id, { finalTask: next })}
+                      titel="Kommunikative Zielaufgabe (Final Task)"
+                      hinweis="Worauf die Sequenz hinausläuft. Erscheint über der Progressionsansicht."
+                      platzhalter="z. B. Plant ein Wochenende für die Austauschschüler und begründet euer Programm."
+                    />
+                    <div style={{height:12}} />
+                  </>
+                ) : null}
+                <p className="muted small" style={{margin:'0 0 8px'}}>
+                  Schwerpunkt dieser Sequenz. Die einzelnen Stunden dürfen andere
+                  Kompetenzen haben – die Sequenz gibt nichts vor.
+                </p>
+                <CompetencyEditor
+                  competencies={Array.isArray(s.competencies) ? s.competencies : []}
+                  primary={s.primaryCompetency || ''}
+                  suggestions={competencySuggestions}
+                  languageMode={languageMode}
+                  modell={competencyModel}
+                  benutzte={benutzteKompetenzen}
+                  onChange={(nextComps, nextPrimary)=>{
+                    onUpdate(s.id, { competencies: nextComps, primaryCompetency: nextPrimary });
+                  }}
+                  onRemember={(v)=>onRememberCompetency?.(v)}
+                />
+              </div>
+            ) : null}
+          </React.Fragment>
           ))}
         </div>
       </div>
@@ -7372,9 +9101,383 @@ function CompetencyPrimaryInput({ value, suggestions, onChange, onCommit, onHide
 }
 
 
-function CompetencyEditor({ competencies, primary, suggestions, onChange, onRemember, onHideSuggestion }){
+/* ============================================================
+   Erfolgskriterien
+
+   Woran ist erkennbar, dass die Lernenden das Ziel erreicht haben? Eine
+   Liste von Sätzen, sonst nichts – ausdrücklich kein Bewertungsraster:
+   keine Punkte, keine Stufen, kein "erreicht / nicht erreicht". Es sind
+   Planungskriterien, keine Urteile.
+
+   Bewusst NICHT unter der fremdsprachlichen Planung: die Frage ist
+   fachunabhängig, und die App gilt weiterhin für jedes Fach. Die
+   Kriterien sind deshalb auch bei abgeschaltetem Fremdsprachenmodus
+   erreichbar.
+
+   Die App kennt ein Lernziel-FELD, keine Lernziel-LISTE (objectives ist
+   ein Freitext mit mehreren Zeilen). Eine Zuordnung "Kriterien je Ziel"
+   hätte deshalb kein Ziel, an dem sie hängen könnte. Die Kriterien
+   gehören darum zur Stunde – so wie die Lernziele selbst.
+   ============================================================ */
+function SuccessCriteriaEditor({ kriterien, onChange }){
+  const liste = Array.isArray(kriterien) ? kriterien : [];
+  // Aufgeklappt, sobald etwas drinsteht – sonst versteckte Inhalte.
+  const [offen, setOffen] = useState(liste.length > 0);
+
+  const setzen = (i, wert)=> onChange(liste.map((k, j)=> j === i ? wert : k));
+  const entfernen = (i)=> onChange(liste.filter((_, j)=> j !== i));
+  const ergaenzen = ()=>{ setOffen(true); onChange([...liste, '']); };
+
+  if (!offen) {
+    return (
+      <button type="button" className="btn btnLeise" onClick={ergaenzen}>
+        <Plus {...ICON_SM} /> Erfolgskriterien
+      </button>
+    );
+  }
+
+  return (
+    <div className="kriterienBox">
+      <div className="row" style={{justifyContent:'space-between', alignItems:'baseline'}}>
+        <div>
+          <div className="kriterienTitel">Erfolgskriterien</div>
+          <div className="muted small">Woran ist erkennbar, dass das Ziel erreicht ist?</div>
+        </div>
+        {liste.length === 0 ? (
+          <button className="btn btnLeise" onClick={()=>setOffen(false)}>Ausblenden</button>
+        ) : null}
+      </div>
+
+      <div style={{height:8}} />
+
+      {liste.map((k, i)=>(
+        <div key={i} className="kriterienZeile">
+          <span className="kriterienPunkt" aria-hidden="true">·</span>
+          <input
+            className="input"
+            value={k}
+            autoFocus={i === liste.length - 1 && !k}
+            onChange={(e)=>setzen(i, e.target.value)}
+            onKeyDown={(e)=>{
+              if (e.key === 'Enter') { e.preventDefault(); ergaenzen(); }
+            }}
+            placeholder="z. B. mindestens zwei Vorschläge formulieren"
+          />
+          <button className="btn btnMini" onClick={()=>entfernen(i)}
+                  title="Kriterium entfernen" aria-label={`Kriterium ${i + 1} entfernen`}>
+            <X {...ICON_SM} />
+          </button>
+        </div>
+      ))}
+
+      <button className="btn btnLeise" onClick={ergaenzen} style={{marginTop:6}}>
+        <Plus {...ICON_SM} /> Kriterium
+      </button>
+    </div>
+  );
+}
+
+/* ============================================================
+   Kommunikative Aufgabe
+
+   Was sollen die Lernenden mit der Sprache tatsächlich tun? Ein Satz
+   genügt. Die vier Detailfelder sind für die, die genauer planen
+   wollen – nichts davon ist Pflicht, nichts wird angemahnt.
+
+   Dieselbe Form trägt die Zielaufgabe einer Sequenz; nur die
+   Beschriftungen unterscheiden sich.
+   ============================================================ */
+function CommunicativeTaskEditor({ wert, onChange, titel, hinweis, platzhalter }){
+  const a = normalisiereAufgabe(wert);
+  const [details, setDetails] = useState(hatAufgabenDetails(a));
+  const setzen = (feld, v)=> onChange({ ...a, [feld]: v });
+
+  return (
+    <div className="aufgabeBox">
+      <div className="small muted">{titel}</div>
+      <textarea
+        className="aufgabeText"
+        value={a.text}
+        onChange={(e)=>setzen('text', e.target.value)}
+        placeholder={platzhalter}
+      />
+      {hinweis ? <div className="muted small">{hinweis}</div> : null}
+
+      <button type="button" className="btn btnLeise" onClick={()=>setDetails(v => !v)}
+              aria-expanded={details} style={{marginTop:6}}>
+        {details ? <ChevronDown {...ICON_SM} /> : <ChevronRight {...ICON_SM} />} Details
+      </button>
+
+      {details ? (
+        <div className="aufgabeDetails">
+          <div>
+            <label className="small muted">Situation / Kontext</label>
+            <input className="input" value={a.situation} onChange={(e)=>setzen('situation', e.target.value)}
+                   placeholder="z. B. während des Austausches, ein freier Nachmittag" />
+          </div>
+          <div>
+            <label className="small muted">Adressat / Kommunikationspartner</label>
+            <input className="input" value={a.audience} onChange={(e)=>setzen('audience', e.target.value)}
+                   placeholder="z. B. die Austauschpartner" />
+          </div>
+          <div>
+            <label className="small muted">Kommunikative Absicht</label>
+            <input className="input" value={a.intention} onChange={(e)=>setzen('intention', e.target.value)}
+                   placeholder="z. B. vorschlagen, reagieren, aushandeln" />
+          </div>
+          <div>
+            <label className="small muted">Ergebnis / Produkt</label>
+            <input className="input" value={a.outcome} onChange={(e)=>setzen('outcome', e.target.value)}
+                   placeholder="z. B. ein gemeinsamer Nachmittagsplan" />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* ============================================================
+   Sprachhandeln & sprachliche Mittel
+
+   Sprechabsichten sind Etiketten wie Kompetenzen: die Bezeichnung ist
+   die Identität, eigene liegen in derselben Merk-Ablage, und eine
+   Stunde verliert nichts, wenn ein Eintrag später aus der Auswahl
+   genommen wird.
+
+   Die sprachlichen Mittel bleiben absichtlich vier Freitextfelder. Ein
+   Grammatik- oder Wortschatzkatalog wäre für jede Sprache ein eigenes
+   Projekt und im Alltag langsamer als Tippen.
+   ============================================================ */
+function SpeechActEditor({
+  ausgewaehlt, vorrat, onChange, onRemember, onHideSuggestion,
+  mittel, onChangeMittel,
+}){
   const [draft, setDraft] = useState('');
-  const id = useMemo(()=> `ct-${Math.random().toString(16).slice(2)}`, []);
+  const [suche, setSuche] = useState('');
+  const liste = normalisiereSprechabsichten(ausgewaehlt);
+  const m = normalisiereMittel(mittel);
+
+  /* Startbestand plus alles je Benutzte plus das, was in dieser Stunde
+     steht – Letzteres, damit ein aus der Auswahl genommener Eintrag
+     hier abwählbar bleibt. */
+  const alle = useMemo(()=>{
+    const set = new Set([...SPRECHABSICHTEN, ...(vorrat || []), ...liste]);
+    return [...set].filter(Boolean);
+  }, [vorrat, liste]);
+
+  const zeigeSuche = alle.length >= 34;   // Startbestand sind 27
+  const gefiltert = useMemo(()=>{
+    const q = suche.trim().toLowerCase();
+    if (!zeigeSuche || !q) return alle;
+    return alle.filter(x => x.toLowerCase().includes(q));
+  }, [alle, suche, zeigeSuche]);
+
+  const umschalten = (v)=>{
+    if (liste.includes(v)) onChange(liste.filter(x => x !== v));
+    else { onRemember?.(v); onChange([...liste, v]); }
+  };
+  const ergaenzen = (roh)=>{
+    const v = String(roh || '').trim();
+    if (!v) return;
+    onRemember?.(v);
+    if (!liste.includes(v)) onChange([...liste, v]);
+    setDraft('');
+  };
+
+  const feld = (schluessel, beschriftung, platzhalter)=>(
+    <div>
+      <label className="small muted">{beschriftung}</label>
+      <input className="input" value={m[schluessel]}
+             onChange={(e)=>onChangeMittel({ ...m, [schluessel]: e.target.value })}
+             placeholder={platzhalter} />
+    </div>
+  );
+
+  return (
+    <div className="sprachBox">
+      <div className="small muted">Sprechabsichten / kommunikative Funktionen</div>
+      {zeigeSuche ? (
+        <input className="input kompetenzSuche" value={suche} onChange={(e)=>setSuche(e.target.value)}
+               placeholder="Sprechabsicht suchen…" aria-label="Sprechabsicht suchen" />
+      ) : null}
+      <div className="kompetenzWahlListe" style={{marginTop:6}}>
+        {gefiltert.length === 0 ? (
+          <span className="muted small">Keine Sprechabsicht gefunden.</span>
+        ) : gefiltert.map((v)=>(
+          <label key={v} className={`kompetenzWahlEintrag${liste.includes(v) ? ' is-active' : ''}`}>
+            <input type="checkbox" checked={liste.includes(v)} onChange={()=>umschalten(v)} />
+            <span>{v}</span>
+          </label>
+        ))}
+      </div>
+
+      <div className="kompetenzEigene" style={{marginTop:10}}>
+        <div className="small muted">Eigene Sprechabsicht</div>
+        <div className="row" style={{gap:8}}>
+          <TypeaheadInput
+            value={draft}
+            suggestions={vorrat || []}
+            onChange={setDraft}
+            onCommit={(v)=>setDraft((v || '').toString())}
+            onEnter={(v)=>ergaenzen(v)}
+            onHideSuggestion={onHideSuggestion}
+            placeholder="z. B. Gesprächspartner zum Weiterreden animieren"
+            wrapStyle={{flex:1}}
+          />
+          <button className="btn" onClick={()=>ergaenzen(draft)} disabled={!draft.trim()}>Hinzufügen</button>
+        </div>
+      </div>
+
+      <div className="sprachMittel">
+        <div className="small muted" style={{gridColumn:'1 / -1'}}>Sprachliche Mittel</div>
+        {feld('vocabulary', 'Wortschatz', 'z. B. Freizeitaktivitäten, Zeitangaben')}
+        {feld('grammar', 'Grammatik / Strukturen', 'z. B. futur composé, on pourrait…')}
+        {feld('pronunciation', 'Aussprache / Phonologie', 'z. B. Intonation bei Rückfragen; liaison')}
+        {feld('other', 'Weitere sprachliche Mittel', 'z. B. Gesprächsfüller, Konnektoren')}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   Hilfen / Scaffolds an einer Phase
+
+   Sie hängen an der Phase, die es ohnehin gibt – es entsteht keine
+   zweite Phasenstruktur.
+
+   Zur vorhandenen Hilfekarte: die ist etwas anderes. Sie zeigt feste
+   Leitfragen zum Phasennamen ("Wie werden die Lernenden aktiviert?")
+   und speichert nichts. Sie ist kein Bibliotheksmechanismus und taugt
+   deshalb nicht als Grundlage für die Hilfen einer konkreten Stunde.
+   Beide stehen nebeneinander in derselben Zeile: die Karte fragt, die
+   Hilfen antworten.
+
+   Wiederverwendbar sind die Hilfen trotzdem – über dieselbe
+   Merk-Ablage wie Kompetenzen und Sprechabsichten. Eine dritte
+   Bibliotheksarchitektur kommt nicht hinzu.
+   ============================================================ */
+function PhaseScaffolds({ scaffolds, vorschlaege, onChange, onRemember, onHideSuggestion }){
+  const liste = Array.isArray(scaffolds) ? scaffolds : [];
+  const [offen, setOffen] = useState(liste.length > 0);
+
+  const setzen = (id, patch)=> onChange(liste.map(sc => sc.id === id ? { ...sc, ...patch } : sc));
+  const entfernen = (id)=> onChange(liste.filter(sc => sc.id !== id));
+  const ergaenzen = ()=>{
+    setOffen(true);
+    onChange([...liste, {
+      id: uid(), type: SCAFFOLD_ART_STANDARD, label: '', note: '', supportLevel: '', fadeOut: false,
+    }]);
+  };
+
+  if (!offen) {
+    return (
+      <button type="button" className="btn btnLeise" onClick={ergaenzen}>
+        <Plus {...ICON_SM} /> Hilfen
+      </button>
+    );
+  }
+
+  return (
+    <div className="scaffoldBox">
+      <div className="row" style={{justifyContent:'space-between', alignItems:'baseline'}}>
+        <div className="small muted">Hilfen / Scaffolds</div>
+        {liste.length === 0 ? (
+          <button className="btn btnLeise" onClick={()=>setOffen(false)}>Ausblenden</button>
+        ) : null}
+      </div>
+
+      {liste.map((sc)=>(
+        <div key={sc.id} className="scaffoldZeile">
+          <select className="input scaffoldArt" value={sc.type}
+                  aria-label="Art der Hilfe"
+                  onChange={(e)=>setzen(sc.id, { type: e.target.value })}>
+            {SCAFFOLD_ARTEN.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+          </select>
+
+          <TypeaheadInput
+            value={sc.label}
+            suggestions={vorschlaege || []}
+            onChange={(v)=>setzen(sc.id, { label: v })}
+            onCommit={(v)=>{ setzen(sc.id, { label: v }); onRemember?.(v); }}
+            onHideSuggestion={onHideSuggestion}
+            placeholder="z. B. Redemittelkarte Vorschläge"
+            wrapStyle={{flex:1, minWidth:160}}
+          />
+
+          <input className="input scaffoldNotiz" value={sc.note}
+                 aria-label="Notiz zur Hilfe"
+                 onChange={(e)=>setzen(sc.id, { note: e.target.value })}
+                 placeholder="Notiz, z. B. on pourrait…, pourquoi pas…" />
+
+          {/* Beides freiwillig: die App leitet daraus nichts ab. */}
+          <select className="input scaffoldStufe" value={sc.supportLevel}
+                  aria-label="Unterstützungsniveau"
+                  onChange={(e)=>setzen(sc.id, { supportLevel: e.target.value })}>
+            <option value="">Niveau –</option>
+            {UNTERSTUETZUNGSSTUFEN.map(st => <option key={st.id} value={st.id}>{st.name}</option>)}
+          </select>
+
+          <button type="button"
+                  className={`btn btnMini${sc.fadeOut ? ' primary' : ''}`}
+                  aria-pressed={sc.fadeOut}
+                  title="Kennzeichnen, dass diese Unterstützung hier bewusst zurückgenommen wird"
+                  onClick={()=>setzen(sc.id, { fadeOut: !sc.fadeOut })}>
+            <ArrowDown {...ICON_SM} />
+          </button>
+
+          <button className="btn btnMini" onClick={()=>entfernen(sc.id)}
+                  title="Hilfe entfernen" aria-label="Hilfe entfernen">
+            <X {...ICON_SM} />
+          </button>
+        </div>
+      ))}
+
+      <button className="btn btnLeise" onClick={ergaenzen} style={{marginTop:6}}>
+        <Plus {...ICON_SM} /> Hilfe
+      </button>
+    </div>
+  );
+}
+
+/* Ab so vielen auswählbaren Kompetenzen erscheint die Suche. Der
+   Systemkatalog allein bleibt darunter – die Suche kommt also erst,
+   wenn eigene Einträge die Liste tatsächlich haben wachsen lassen. */
+const KOMPETENZ_SUCHE_AB = 24;
+
+function CompetencyEditor({
+  competencies, primary, suggestions, onChange, onRemember, onHideSuggestion,
+  languageMode = false, modell = null, benutzte = [],
+}){
+  const [draft, setDraft] = useState('');
+  const [suche, setSuche] = useState('');
+
+  const ausgewaehlt = useMemo(
+    ()=> Array.isArray(competencies) ? competencies : [],
+    [competencies]
+  );
+
+  /* Der Katalog für diese Stunde. `zusaetzlich` sorgt dafür, dass eine
+     bereits eingetragene Kompetenz sichtbar bleibt, auch wenn sie
+     inzwischen ausgeblendet oder aus der Auswahl gelöscht wurde –
+     sonst liesse sie sich nicht mehr abwählen. */
+  const bereiche = useMemo(()=>{
+    if (!languageMode) return [];
+    return katalogNachBereichen({
+      modell,
+      benutzte,
+      zusaetzlich: [...ausgewaehlt, primary].filter(Boolean),
+    });
+  }, [languageMode, modell, benutzte, ausgewaehlt, primary]);
+
+  const anzahlKompetenzen = useMemo(
+    ()=> bereiche.reduce((a, b)=> a + b.kompetenzen.length, 0),
+    [bereiche]
+  );
+  const zeigeSuche = anzahlKompetenzen >= KOMPETENZ_SUCHE_AB;
+  const gefiltert = useMemo(
+    ()=> zeigeSuche ? filterKatalog(bereiche, suche) : bereiche,
+    [bereiche, suche, zeigeSuche]
+  );
 
   const addValue = (raw) => {
     const v = (raw || '').trim();
@@ -7394,6 +9497,11 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
     onChange?.(next, nextPrimary);
   };
 
+  const toggle = (v) => {
+    if (ausgewaehlt.includes(v)) remove(v);
+    else addValue(v);
+  };
+
   const setAsPrimary = (v) => {
     onRemember?.(v);
     onChange?.(competencies || [], v);
@@ -7404,27 +9512,79 @@ function CompetencyEditor({ competencies, primary, suggestions, onChange, onReme
       <div className="row wrap" style={{justifyContent:'space-between'}}>
         <div>
           <div style={{fontWeight:800}}>Kompetenzen</div>
-          <div className="muted small">Füge Kompetenzen als Tags hinzu. Eine davon kann „primär“ sein.</div>
+          <div className="muted small">
+            {languageMode
+              ? 'Auswählen oder frei ergänzen. Eine davon kann „primär“ sein.'
+              : 'Füge Kompetenzen als Tags hinzu. Eine davon kann „primär“ sein.'}
+          </div>
         </div>
       </div>
 
       <div style={{height:8}} />
 
-      <div className="row wrap" style={{gap:8}}>
-        <div style={{flex:1}}>
-          <TypeaheadInput
-            value={draft}
-            suggestions={suggestions}
-            onChange={setDraft}
-            onCommit={(v)=>setDraft((v || '').toString())}
-            onEnter={(v)=>{ addValue(v); }}
-            onHideSuggestion={onHideSuggestion}
-            placeholder="Kompetenz hinzufügen…"
-            wrapStyle={{width:'100%'}}
-          />
+      {languageMode ? (
+        <div className="kompetenzWahl">
+          {zeigeSuche ? (
+            <input className="input kompetenzSuche" value={suche}
+                   onChange={(e)=>setSuche(e.target.value)}
+                   placeholder="Kompetenz suchen…" aria-label="Kompetenz suchen" />
+          ) : null}
+
+          {gefiltert.length === 0 ? (
+            <div className="muted small">Keine Kompetenz gefunden.</div>
+          ) : gefiltert.map((b)=>(
+            <div key={b.id} className="kompetenzWahlBereich">
+              <div className="kompetenzWahlName">{b.name}</div>
+              <div className="kompetenzWahlListe">
+                {b.kompetenzen.map((k)=>(
+                  <label key={k.label}
+                         className={`kompetenzWahlEintrag${ausgewaehlt.includes(k.label) ? ' is-active' : ''}`}>
+                    <input type="checkbox"
+                           checked={ausgewaehlt.includes(k.label)}
+                           onChange={()=>toggle(k.label)} />
+                    <span>{k.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {/* Eigene Kompetenz ohne Umweg über die Einstellungen: sie steht
+              sofort in dieser Stunde und ab dann in jeder weiteren. */}
+          <div className="kompetenzEigene">
+            <div className="small muted">Eigene Kompetenz</div>
+            <div className="row" style={{gap:8}}>
+              <TypeaheadInput
+                value={draft}
+                suggestions={suggestions}
+                onChange={setDraft}
+                onCommit={(v)=>setDraft((v || '').toString())}
+                onEnter={(v)=>{ addValue(v); }}
+                onHideSuggestion={onHideSuggestion}
+                placeholder="z. B. Gesprächsstrategien"
+                wrapStyle={{flex:1}}
+              />
+              <button className="btn" onClick={add} disabled={!draft.trim()}>Hinzufügen</button>
+            </div>
+          </div>
         </div>
-        <button className="btn" onClick={add}>Hinzufügen</button>
-      </div>
+      ) : (
+        <div className="row wrap" style={{gap:8}}>
+          <div style={{flex:1}}>
+            <TypeaheadInput
+              value={draft}
+              suggestions={suggestions}
+              onChange={setDraft}
+              onCommit={(v)=>setDraft((v || '').toString())}
+              onEnter={(v)=>{ addValue(v); }}
+              onHideSuggestion={onHideSuggestion}
+              placeholder="Kompetenz hinzufügen…"
+              wrapStyle={{width:'100%'}}
+            />
+          </div>
+          <button className="btn" onClick={add}>Hinzufügen</button>
+        </div>
+      )}
 
       <div style={{height:10}} />
 
@@ -7841,11 +10001,117 @@ function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onB
   );
 }
 
+/* ============================================================
+   Fachdidaktik im Export
+
+   Grundsatz: Nur ausgefüllte Bereiche erscheinen. Ein Verlaufsplan
+   einer Stunde ohne diese Angaben sieht deshalb aus wie zuvor – keine
+   leeren Überschriften, keine Platzhalter.
+   ============================================================ */
+
+/* Die Aufgabe als eine Zeile plus die ausgefüllten Detailfelder. */
+function aufgabeAlsHtml(aufgabe){
+  const a = normalisiereAufgabe(aufgabe);
+  if (istLeereAufgabe(a)) return '';
+  const details = [
+    ['Situation', a.situation],
+    ['Adressat', a.audience],
+    ['Absicht', a.intention],
+    ['Ergebnis', a.outcome],
+  ].filter(([, v]) => v)
+   .map(([k, v]) => `<span class="dTag">${escapeHtml(k)}: ${escapeHtml(v)}</span>`)
+   .join(' ');
+  return `${a.text ? escapeHtml(a.text) : ''}${details ? `<div class="dMeta">${details}</div>` : ''}`;
+}
+
+/* Sprechabsichten und sprachliche Mittel in einem Block. */
+function sprachhandelnAlsHtml(lesson){
+  const absichten = normalisiereSprechabsichten(lesson?.speechActs);
+  const m = normalisiereMittel(lesson?.languageResources);
+  const zeilen = [];
+  if (absichten.length) zeilen.push(`<div><em>Sprechabsichten:</em> ${escapeHtml(absichten.join(', '))}</div>`);
+  for (const [k, v] of [
+    ['Wortschatz', m.vocabulary],
+    ['Grammatik / Strukturen', m.grammar],
+    ['Aussprache', m.pronunciation],
+    ['Weitere Mittel', m.other],
+  ]) {
+    if (v) zeilen.push(`<div><em>${escapeHtml(k)}:</em> ${escapeHtml(v)}</div>`);
+  }
+  return zeilen.join('');
+}
+
+/* Die Hilfen einer Phase, kompakt in einer Zelle. */
+function scaffoldsAlsHtml(phase){
+  const liste = normalisiereScaffolds(phase?.scaffolds).filter(sc => !istLeererScaffold(sc));
+  if (!liste.length) return '';
+  const eintraege = liste.map((sc)=>{
+    const teile = [
+      sc.fadeOut ? '↓' : '',
+      escapeHtml(sc.label || scaffoldArtName(sc.type)),
+      sc.note ? `– ${escapeHtml(sc.note)}` : '',
+      sc.supportLevel ? `(${escapeHtml(stufenName(sc.supportLevel))})` : '',
+    ].filter(Boolean).join(' ');
+    return `<div>${teile}</div>`;
+  }).join('');
+  return `<div class="scaff"><em>Hilfen:</em>${eintraege}</div>`;
+}
+
+/* Ein Block im Kopfbereich – nur, wenn er Inhalt hat. */
+function kopfBlock(beschriftung, inhaltHtml){
+  if (!inhaltHtml) return '';
+  return `
+    <div class="block">
+      <div class="k">${escapeHtml(beschriftung)}</div>
+      <div class="v">${inhaltHtml}</div>
+    </div>`;
+}
+
 function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalendar, lesson }){
   const l = normalizeLesson(lesson || {});
   const phases = normalizePhases(l.phases || []);
   const lessonStart = getLessonStartTime(schoolCalendar, slotIndex);
   const times = computePhaseTimes(phases, lessonStart);
+
+  /* Kompetenzen im Verlaufsplan.
+
+     Sie standen bisher nur im Wochenexport, und dort nur als einzelne
+     Zeile mit der primären Kompetenz. Weil es hier um dieselben
+     Etiketten geht, trägt derselbe Block System- wie eigene
+     Kompetenzen; die primäre steht mit Stern voran. Ohne eingetragene
+     Kompetenzen entfällt der Block, damit vorhandene Ausgaben
+     unverändert aussehen. */
+  const kompetenzBlock = (()=>{
+    const primaer = String(l.primaryCompetency || '').trim();
+    const alle = new Set((Array.isArray(l.competencies) ? l.competencies : [])
+      .map(x => String(x || '').trim()).filter(Boolean));
+    if (primaer) alle.add(primaer);
+    if (!alle.size) return '';
+    const sortiert = [...alle].sort((a, b)=>{
+      if (a === primaer) return -1;
+      if (b === primaer) return 1;
+      return a.localeCompare(b);
+    });
+    const text = sortiert
+      .map(k => (k === primaer ? `★ ${k}` : k))
+      .map(escapeHtml)
+      .join(' · ');
+    return `
+    <div class="block">
+      <div class="k">Kompetenzen</div>
+      <div class="v">${text}</div>
+    </div>`;
+  })();
+
+  const kriterienBlock = (()=>{
+    const liste = normalisiereErfolgskriterien(l.successCriteria);
+    if (!liste.length) return '';
+    return kopfBlock('Erfolgskriterien',
+      `<ul class="krit">${liste.map(k => `<li>${escapeHtml(k)}</li>`).join('')}</ul>`);
+  })();
+
+  const aufgabenBlock = kopfBlock('Kommunikative Aufgabe', aufgabeAlsHtml(l.communicativeTask));
+  const sprachBlock = kopfBlock('Sprachhandeln & sprachliche Mittel', sprachhandelnAlsHtml(l));
 
   const rows = phases.map((p, i)=>{
     const t = times[i] || { start:'', end:'' };
@@ -7858,7 +10124,7 @@ function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalenda
         <td class="colContent">${sanitizeRichForExport(p.content || '')}</td>
         <td class="colSocial">${escapeHtml(p.socialForm || '')}</td>
         <td class="colMat">${sanitizeRichForExport(p.materialsMedia || '')}</td>
-        <td class="colNotes">${sanitizeRichForExport(p.remarks || '')}</td>
+        <td class="colNotes">${sanitizeRichForExport(p.remarks || '')}${scaffoldsAlsHtml(p)}</td>
       </tr>
     `;
   }).join('');
@@ -7898,6 +10164,11 @@ function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalenda
 
     .tStart{font-size:12px}
     .tDur{color:#374151; font-size:10px; margin-top:1mm}
+    .krit{margin:0; padding-left:4mm}
+    .krit li{margin-bottom:0.5mm}
+    .dMeta{margin-top:1mm; font-size:10px; color:#374151}
+    .dTag{margin-right:3mm; white-space:nowrap}
+    .scaff{margin-top:1mm; padding-top:1mm; border-top:1px dashed #9ca3af; font-size:10px}
   </style>
 </head>
 <body>
@@ -7918,6 +10189,10 @@ function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalenda
       <div class="k">Lernziele</div>
       <div class="v">${escapeHtml(l.objectives || '').replaceAll('\n','<br/>')}</div>
     </div>
+    ${kompetenzBlock}
+    ${kriterienBlock}
+    ${aufgabenBlock}
+    ${sprachBlock}
   </div>
 
   <table>
@@ -8059,6 +10334,54 @@ function buildSequencePdfHtml({ sequence, occurrences, schoolCalendar, groupColo
   const color = sequence?.color || '#2563eb';
   const count = Array.isArray(occurrences) ? occurrences.length : 0;
 
+  /* Zielaufgabe und Progression stehen vor den Verlaufsplänen – sie
+     ordnen ein, was danach im Einzelnen kommt. Beides erscheint nur,
+     wenn es etwas zu zeigen gibt.
+
+     Die Tabelle bleibt bewusst bei vier Spalten: auf A4 hochkant ist
+     mehr nicht lesbar. Die Hilfen stehen als Anzahl, nicht ausgeschrieben. */
+  const zielaufgabe = (()=>{
+    const html = aufgabeAlsHtml(sequence?.finalTask);
+    if (!html) return '';
+    return `
+  <section class="ziel">
+    <div class="zielKopf">Kommunikative Zielaufgabe</div>
+    <div class="zielText">${html}</div>
+  </section>`;
+  })();
+
+  const progression = (()=>{
+    const zeilen = sequenzProgression(occurrences || []);
+    // Ohne fachdidaktische Angaben wiederholte die Tabelle nur die Themen.
+    const traegt = zeilen.some(z => z.ausAufgabe || z.sprechabsichten.length
+      || z.mittel.length || z.scaffolds.length || z.notiz);
+    if (!traegt) return '';
+    const reihen = zeilen.map((z)=>`
+      <tr>
+        <td class="pNr">${z.nummer}</td>
+        <td>${escapeHtml(z.sprachhandlung || '')}${z.notiz ? `<div class="pNotiz">${escapeHtml(z.notiz)}</div>` : ''}</td>
+        <td>${escapeHtml([z.kompetenzPrimaer, ...z.kompetenzen.filter(k => k !== z.kompetenzPrimaer)].filter(Boolean).join(', '))}</td>
+        <td>${escapeHtml([...z.sprechabsichten, ...z.mittel].join(' · '))}</td>
+        <td class="pNr">${z.scaffolds.length ? `${z.scaffolds.length}${z.stufe ? ` · ${escapeHtml(stufenName(z.stufe))}` : ''}` : ''}</td>
+      </tr>`).join('');
+    return `
+  <section class="prog">
+    <div class="zielKopf">Progression</div>
+    <table class="progT">
+      <thead>
+        <tr>
+          <th class="pNr">Std.</th>
+          <th>Sprachhandlung / Aufgabe</th>
+          <th>Kompetenz</th>
+          <th>Sprechabsichten &amp; sprachliche Mittel</th>
+          <th class="pNr">Hilfen</th>
+        </tr>
+      </thead>
+      <tbody>${reihen}</tbody>
+    </table>
+  </section>`;
+  })();
+
   const blocks = (occurrences || []).map((o, idx) => {
     const l = normalizeLesson(o.lesson);
     const phases = normalizePhases(l.phases || []);
@@ -8084,7 +10407,7 @@ function buildSequencePdfHtml({ sequence, occurrences, schoolCalendar, groupColo
           <td class="colContent">${sanitizeRichForExport(p.content || '')}</td>
           <td class="colSocial">${escapeHtml(p.socialForm || '')}</td>
           <td class="colMat">${sanitizeRichForExport(p.materialsMedia || '')}</td>
-          <td class="colNotes">${sanitizeRichForExport(p.remarks || '')}</td>
+          <td class="colNotes">${sanitizeRichForExport(p.remarks || '')}${scaffoldsAlsHtml(p)}</td>
         </tr>
       `;
     }).join('');
@@ -8166,11 +10489,23 @@ function buildSequencePdfHtml({ sequence, occurrences, schoolCalendar, groupColo
     .tDur{font-size:8px; color:#6b7280}
     .muted{ color:#6b7280; }
 
+    .scaff{margin-top:1mm; padding-top:1mm; border-top:1px dashed #9ca3af; font-size:8px}
+    .ziel{border:1px solid #9ca3af; border-left:3px solid ${color}; padding:2mm 3mm; margin-bottom:3mm}
+    .zielKopf{font-size:9px; text-transform:uppercase; letter-spacing:0.06em; color:#6b7280; margin-bottom:1mm}
+    .zielText{font-size:11px}
+    .prog{margin-bottom:4mm}
+    .progT{width:100%; border-collapse:collapse; font-size:9px}
+    .progT th, .progT td{border:1px solid #9ca3af; padding:1.5mm; vertical-align:top; text-align:left}
+    .progT th{background:#e5e7eb; font-weight:700}
+    .pNr{width:12mm; white-space:nowrap}
+    .pNotiz{color:#6b7280; font-style:italic; margin-top:0.5mm}
   </style>
 </head>
 <body>
   <h1>Sequenz: ${escapeHtml(seqName)}</h1>
   <div class="meta">${count} Unterrichtsstunde(n) · Export aus Prép-ybara</div>
+  ${zielaufgabe}
+  ${progression}
   ${count ? blocks : `<div class="muted">Keine Stunden dieser Sequenz im aktuellen Plan gefunden.</div>`}
 </body>
 </html>`;

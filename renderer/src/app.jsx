@@ -16,6 +16,15 @@ import {
 } from './competencies.js';
 import { erstelleDidaktikCheck, phasenDidaktikImpuls } from './didaktik-check.js';
 import {
+  PLANUNGSFELDER, PLANUNGSPROFILE, EXPORTLAYOUTS, NEUE_PHASENFELDER,
+  STANDARD_PROFIL, STANDARD_LAYOUT,
+  feldDefinition, feldWert, feldText, feldHatInhalt,
+  normalisiereProfilId, normalisiereLayoutId, normalisiereFeldListe,
+  normalisiereEigenesLayout,
+  profilFelder, offeneFelderDerPhase,
+  getLessonPlanExportColumns, exportPruefung,
+} from './planung.js';
+import {
   PHASEN_STATUS, statusZeichen, statusName,
   normalisiereReview, leeresReview, hatNachbereitung, offeneCarryOver,
   stundenRef, parseStundenRef, carryOverAusPhase, carryOverAusNotiz, phaseAusCarryOver,
@@ -1020,6 +1029,27 @@ function weekNumberISO(date){
 }
 function keyOf(dayIndex, slotIndex){ return `${dayIndex}-${slotIndex}`; }
 
+/* Eine leere Phase – mit ALLEN unterstützten Feldern.
+
+   Der Kern der Erweiterung steht in dieser einen Funktion: es gibt ein
+   Phasenmodell, nicht eines je Planungsprofil. Ein Profil entscheidet
+   nur, welche dieser Felder man zu sehen bekommt. Deshalb kann man
+   zwischen Profilen beliebig wechseln, ohne dass etwas verlorengeht. */
+function neuePhase(titel = '', dauer = 5){
+  const p = {
+    id: uid(),
+    title: titel,
+    duration: dauer,
+    socialForm: '',
+    content: '',
+    materialsMedia: '',
+    remarks: '',
+    scaffolds: [],
+  };
+  for (const key of NEUE_PHASENFELDER) p[key] = '';
+  return p;
+}
+
 function defaultLesson(){
   return {
     subject: '',
@@ -1028,10 +1058,10 @@ function defaultLesson(){
     topic: '',
     objectives: '',
     phases: [
-      { id: uid(), title: 'Einstieg', duration: 5, socialForm: '', content: '', materialsMedia: '', remarks: '' },
-      { id: uid(), title: 'Erarbeitung', duration: 20, socialForm: '', content: '', materialsMedia: '', remarks: '' },
-      { id: uid(), title: 'Sicherung', duration: 15, socialForm: '', content: '', materialsMedia: '', remarks: '' },
-      { id: uid(), title: 'Abschluss', duration: 5, socialForm: '', content: '', materialsMedia: '', remarks: '' }
+      neuePhase('Einstieg', 5),
+      neuePhase('Erarbeitung', 20),
+      neuePhase('Sicherung', 15),
+      neuePhase('Abschluss', 5)
     ],
     homework: '',
     notes: '',
@@ -1062,6 +1092,20 @@ function defaultLesson(){
        sie erscheint allein in der Progressionsansicht. */
     progressionNote: '',
 
+    /* Planungsprofil und Exportlayout dieser Stunde.
+
+       Das Profil bestimmt, welche Phasenfelder beim Planen sichtbar
+       sind; das Layout, welche Spalten der Verlaufsplan ausgibt. Beides
+       ist unabhängig voneinander wählbar und beides ändert NIE die
+       gespeicherten Angaben – es entscheidet allein über Sichtbarkeit.
+
+       Fehlt die Angabe (jede vor dieser Fassung gespeicherte Stunde),
+       gilt "standard": genau die Felder, die es bisher gab, plus die
+       neuen als optionale Ergänzung. */
+    planningProfile: STANDARD_PROFIL,
+    customPlanningFields: [],
+    preferredExportLayout: '',
+
     /* Nachbereitung. Sie gehört zur Stunde, die sie betrifft – so trägt
        die vorhandene Wochenpersistenz sie ohne eine zweite Ablage mit.
        Eine Stunde ohne diese Angaben ist eine gültige Stunde. */
@@ -1084,6 +1128,10 @@ function normalizePhases(phases){
       content: (src.content || ''),
       materialsMedia: (src.materialsMedia || ''),
       remarks: (src.remarks || ''),
+      /* Die zusätzlichen Planungsfelder. Rein additiv: fehlt eines,
+         entsteht der leere Text – eine Phase aus einer älteren Fassung
+         bleibt dadurch unverändert gültig. */
+      ...Object.fromEntries(NEUE_PHASENFELDER.map(k => [k, String(src[k] || '')])),
       duration: Math.max(MIN_PHASE_MIN, Math.round(src.duration || 0)),
       /* Hilfen dieser Phase. Keine zweite Phasenstruktur – sie hängen
          an der Phase, die es ohnehin gibt. Fehlt das Feld, entsteht die
@@ -1175,6 +1223,11 @@ function normalizeLesson(lesson){
     speechActs: normalisiereSprechabsichten(l.speechActs),
     languageResources: normalisiereMittel(l.languageResources),
     progressionNote: String(l.progressionNote || '').trim(),
+    /* Unbekanntes fällt auf "standard" zurück – nie auf einen Fehler.
+       Das eigene Layout bleibt leer, solange keines gewählt wurde. */
+    planningProfile: normalisiereProfilId(l.planningProfile),
+    customPlanningFields: normalisiereFeldListe(l.customPlanningFields),
+    preferredExportLayout: l.preferredExportLayout ? normalisiereLayoutId(l.preferredExportLayout) : '',
     review: normalisiereReview(l.review, uid),
     updatedAt: l.updatedAt || base.updatedAt
   };
@@ -1201,7 +1254,7 @@ function deepClone(obj){
 
 // Einzige Quelle für die Schema-Kennzeichnung im Renderer. Muss mit
 // SCHEMA_VERSION in electron/main.cjs übereinstimmen.
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 /* ============================================================
    Interaktionsschicht: Meldungen, Bestätigung, Eingabe
@@ -1667,6 +1720,7 @@ function SpeechActManager({ eigene, onRename, onDelete }){
 function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onImportBackup,
                         weekReview, onChangeWeekReview,
                         languageMode, onChangeLanguageMode,
+                        defaultPlanningProfile, onChangeDefaultPlanningProfile,
                         eigeneSprechabsichten = [], onRenameSpeechAct, onDeleteSpeechAct,
                         competencyModel, benutzteKompetenzen,
                         onSetCompetencyHidden, onSetCompetencyArea, onRenameCompetency,
@@ -1702,6 +1756,28 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
             <span>Anzeigen</span>
           </label>
         </div>
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Unterrichtsplanung</h3>
+        <div className="settingsRow">
+          <span className="settingsText" style={{margin:0}}>
+            <strong>Standard-Planungsprofil.</strong> Bestimmt, welche Angaben in der
+            Phasenplanung <em>neuer</em> Stunden erscheinen. Bereits geplante Stunden
+            behalten ihr eigenes Profil und ändern sich dadurch nicht.
+          </span>
+          <select value={normalisiereProfilId(defaultPlanningProfile)} style={{flexShrink:0}}
+                  onChange={(e)=>onChangeDefaultPlanningProfile?.(e.target.value)}>
+            {PLANUNGSPROFILE.filter(pr => !pr.eigen).map(pr => (
+              <option key={pr.id} value={pr.id}>{pr.name}</option>
+            ))}
+          </select>
+        </div>
+        <p className="settingsText muted small" style={{marginBottom:0}}>
+          {PLANUNGSPROFILE.find(pr => pr.id === normalisiereProfilId(defaultPlanningProfile))?.beschreibung || ''}
+          {' '}Das Profil entscheidet ausschliesslich über die Sichtbarkeit – gespeicherte
+          Angaben bleiben in jedem Fall erhalten, auch beim Wechsel auf ein knapperes Profil.
+        </p>
       </section>
 
       <section>
@@ -2016,7 +2092,7 @@ function DidaktikCheckDialog({ open, ergebnis, onClose, onSpringeZu }){
            onKeyDown={(e)=>{ if (e.key === 'Escape') onClose?.(); }}>
         <h3 className="dialogTitle">Fachdidaktischer Planungscheck</h3>
         <p className="dialogBody" style={{marginTop:0}}>
-          Einige ausgewählte Fragen zu dieser Planung. Kein Score und keine Bewertung.
+          Einige ausgewählte Fragen zu dieser Planung.
         </p>
 
         {strengths.length ? (
@@ -2868,8 +2944,36 @@ function ensureDbShape(raw){
     if (!Array.isArray(db.schoolCalendar.events)) db.schoolCalendar.events = [];
   }
   if (!db.weeks || typeof db.weeks !== 'object') db.weeks = {};
+  /* --- Migration auf Schema 9: Planungsprofil je Stunde ---------------
+
+     Vor dieser Fassung kannte eine Stunde kein Planungsprofil. Sie
+     bekommt hier "standard" – also genau die Felder, die sie ohnehin
+     schon hatte, ergänzt um die neuen als leere Ergänzung. Es wird
+     nichts umgeschrieben, nichts umbenannt und nichts entfernt: die
+     Phasen selbst bleiben Zeichen für Zeichen, wie sie waren.
+
+     Bewusst OHNE Versionsabfrage, wie jede andere Formangleichung hier
+     auch. Der Grund ist konkret: beim Einlesen eines Backups hebt der
+     Hauptprozess die Schemakennzeichnung bereits an, bevor diese
+     Funktion sie zu sehen bekommt. Eine Migration hinter `if (version <
+     9)` liefe für genau diesen Weg nie – die Stunden aus einem älteren
+     Backup blieben ohne Profil zurück.
+
+     Die Angleichung ist verlustfrei und beliebig oft wiederholbar: eine
+     Stunde, die bereits ein Profil trägt, wird nicht angefasst. */
+  const setzePlanungsprofil = (l) => {
+    if (!l || typeof l !== 'object') return;
+    if (!l.planningProfile) l.planningProfile = STANDARD_PROFIL;
+  };
+  for (const w of Object.values(db.weeks || {})){
+    for (const l of Object.values(w?.lessons || {})) setzePlanungsprofil(l);
+  }
+  for (const t of Object.values(db.sequenceTemplates || {})){
+    for (const l of (Array.isArray(t?.lessons) ? t.lessons : [])) setzePlanungsprofil(l);
+  }
+
   // Die Formangleichung oben läuft unabhängig von der Version; versionsabhängige
-  // Migrationen gibt es bislang keine. Neue gehören vor diesen Clamp.
+  // Migrationen gehören vor diesen Clamp.
   if (db.schemaVersion < SCHEMA_VERSION) db.schemaVersion = SCHEMA_VERSION;
 
   // Normalize Jahresgrobplanung-Balken
@@ -2986,6 +3090,17 @@ db.todos = (Array.isArray(db.todos) ? db.todos : []).map(t => {
      Er schaltet ausschliesslich die Darstellung der Kompetenzauswahl um –
      an den gespeicherten Kompetenzen ändert er nichts. */
   if (typeof db.appSettings.languageMode !== 'boolean') db.appSettings.languageMode = false;
+
+  /* Standard-Planungsprofil für NEUE Stunden. Bestehende Stunden tragen
+     ihr eigenes Profil und werden davon nie berührt – das ist der ganze
+     Sinn der Angabe je Stunde. */
+  db.appSettings.defaultPlanningProfile = normalisiereProfilId(db.appSettings.defaultPlanningProfile);
+
+  /* Das eigene Exportlayout liegt bewusst hier und nicht in der Stunde:
+     wer sich seine Spalten einmal eingerichtet hat, will sie in jeder
+     Stunde wiederfinden. Welches Layout eine Stunde zuletzt benutzt hat,
+     steht dagegen in der Stunde (preferredExportLayout). */
+  db.appSettings.customExportLayout = normalisiereEigenesLayout(db.appSettings.customExportLayout);
 
   /* Der gespeicherte Teil des Kompetenzkatalogs.
 
@@ -4007,6 +4122,10 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     const cache = draftLessonCacheRef.current;
     if (cache.has(dk)) return normalizeLesson(cache.get(dk));
     const draft = defaultLesson();
+    /* Neue Stunden starten mit dem in den Einstellungen hinterlegten
+       Profil. Bestehende Stunden werden davon nie berührt – sie tragen
+       ihr eigenes. */
+    draft.planningProfile = normalisiereProfilId(db?.appSettings?.defaultPlanningProfile);
     cache.set(dk, draft);
     return normalizeLesson(draft);
   };
@@ -4064,6 +4183,10 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     l.subject = src.subject || '';
     l.classGroup = src.classGroup || '';
     l.room = src.room || '';
+    /* Inhalte werden bewusst nicht übernommen – das Planungsprofil aber
+       schon: es beschreibt, WIE geplant wird, nicht WAS geplant wurde. */
+    l.planningProfile = normalisiereProfilId(src.planningProfile || db?.appSettings?.defaultPlanningProfile);
+    l.customPlanningFields = normalisiereFeldListe(src.customPlanningFields);
     l.updatedAt = new Date().toISOString();
     nextWeek.lessons[k] = l;
   }
@@ -5155,6 +5278,8 @@ const doExportDocx = async (html, suggestedName) => {
           onChangeWeekReview={(v)=>updateAppSettings({ weekReview: !!v })}
           languageMode={languageMode}
           onChangeLanguageMode={(v)=>updateAppSettings({ languageMode: !!v })}
+          defaultPlanningProfile={appSettings?.defaultPlanningProfile}
+          onChangeDefaultPlanningProfile={(v)=>updateAppSettings({ defaultPlanningProfile: normalisiereProfilId(v) })}
           eigeneSprechabsichten={speechActSuggestions.filter(l => !istSystemSprechabsicht(l))}
           onRenameSpeechAct={renameSpeechAct}
           onDeleteSpeechAct={deleteSpeechAct}
@@ -6344,6 +6469,9 @@ function LessonView({
     speechActs: normalisiereSprechabsichten(l.speechActs),
     languageResources: normalisiereMittel(l.languageResources),
     progressionNote: String(l.progressionNote || ''),
+    planningProfile: normalisiereProfilId(l.planningProfile),
+    customPlanningFields: normalisiereFeldListe(l.customPlanningFields),
+    preferredExportLayout: l.preferredExportLayout ? normalisiereLayoutId(l.preferredExportLayout) : '',
   });
 
   // Stable serialization for change detection (no IDs, no timestamps).
@@ -6379,6 +6507,9 @@ function LessonView({
         remarks: p.remarks || '',
         // Ohne die Hilfen hier bliebe eine geänderte Hilfe ungespeichert.
         scaffolds: normalisiereScaffolds(p.scaffolds),
+        // Und ohne die zusätzlichen Planungsfelder bliebe jede Eingabe
+        // darin ungespeichert – der Vergleich sähe sie schlicht nicht.
+        ...Object.fromEntries(NEUE_PHASENFELDER.map(k => [k, String(p[k] || '')])),
       })),
       /* Diese Aufzählung entscheidet, OB überhaupt gespeichert wird:
          was hier fehlt, sieht der Vergleich nicht, und die Änderung
@@ -6389,6 +6520,9 @@ function LessonView({
       speechActs: normalisiereSprechabsichten(n.speechActs),
       languageResources: normalisiereMittel(n.languageResources),
       progressionNote: String(n.progressionNote || ''),
+      planningProfile: normalisiereProfilId(n.planningProfile),
+      customPlanningFields: normalisiereFeldListe(n.customPlanningFields),
+      preferredExportLayout: String(n.preferredExportLayout || ''),
     };
     return JSON.stringify(simple);
   };
@@ -6504,6 +6638,38 @@ function LessonView({
 
   const lessonStartHHMM = useMemo(()=>getLessonStartTime(schoolCalendar, slotIndex), [schoolCalendar, slotIndex]);
   const phaseTimes = useMemo(()=>computePhaseTimes(local.phases, lessonStartHHMM), [local.phases, lessonStartHHMM]);
+
+  /* Das Planungsprofil dieser Stunde. Es entscheidet ausschliesslich
+     über Sichtbarkeit – gespeichert bleibt in jedem Fall alles. */
+  const planungsprofil = normalisiereProfilId(local.planningProfile);
+  const sichtbareFelder = useMemo(
+    ()=> profilFelder(planungsprofil, local.customPlanningFields),
+    [planungsprofil, local.customPlanningFields]
+  );
+
+  /* Was nicht schon offen in der Karte steht, sammelt sich unter
+     "Weitere Angaben": die zusätzlichen Felder des Profils – und
+     ausserdem jedes Feld, das ausserhalb des Profils liegt, aber
+     bereits Text enthält. Ohne diesen zweiten Teil wäre ein Wechsel
+     auf ein knapperes Profil zwar verlustfrei, aber blind. */
+  const zusatzFelderFuer = useCallback((phase)=>{
+    const ids = new Set(sichtbareFelder);
+    for (const feld of PLANUNGSFELDER){
+      if (feld.basis || feld.id === 'time' || feld.eingabe === 'scaffolds') continue;
+      if (feldHatInhalt(phase, feld.id)) ids.add(feld.id);
+    }
+    const reihenfolge = planungsprofil === 'eigenes'
+      ? [...sichtbareFelder, ...PLANUNGSFELDER.map(f => f.id)]
+      : PLANUNGSFELDER.map(f => f.id);
+    const gesehen = new Set();
+    return reihenfolge.filter(id => {
+      if (gesehen.has(id) || !ids.has(id)) return false;
+      const feld = feldDefinition(id);
+      if (!feld || feld.basis || feld.id === 'time' || feld.eingabe === 'scaffolds') return false;
+      gesehen.add(id);
+      return true;
+    });
+  }, [sichtbareFelder, planungsprofil]);
 
 const gKey = useMemo(()=>groupKey(local.classGroup, local.subject), [local.classGroup, local.subject]);
 const gColor = useMemo(()=>{
@@ -6671,6 +6837,21 @@ const gColor = useMemo(()=>{
     [checkOffen, local, checkSeed]
   );
 
+  /* Zu einer bestimmten Phase scrollen – aus dem Exportdialog heraus,
+     wenn dort eine Angabe fehlt. Es wird nichts verändert, nur gezeigt,
+     wo die Lücke ist. */
+  const springeZuPhase = (index)=>{
+    const ph = local.phases?.[index];
+    if (!ph) return;
+    setTimeout(()=>{
+      const el = document.getElementById(`phase-${ph.id}`);
+      if (!el) return;
+      try { el.scrollIntoView({ behavior:'smooth', block:'center' }); } catch { el.scrollIntoView(); }
+      // Die fehlende Angabe steht oft unter "Weitere Angaben".
+      el.querySelector('details.phaseZusatz')?.setAttribute('open', 'open');
+    }, 60);
+  };
+
   /* Sanft zum betroffenen Ort scrollen. Es werden keine Daten verändert –
      der Check schlägt vor, er greift nicht ein. */
   const springeZu = (impuls)=>{
@@ -6739,7 +6920,7 @@ const gColor = useMemo(()=>{
   const addPhase = () => {
     setPhases((() => {
       const phases = deepClone(local.phases);
-      const newPhase = { id: uid(), title: 'Neue Phase', duration: 5, socialForm: '', content: '', materialsMedia: '', remarks: '' };
+      const newPhase = neuePhase('Neue Phase', 5);
       // Erste Phase einer Stunde ohne Phasen: sie bekommt die ganze Zeit.
       // Ohne diesen Fall griff die Suche unten auf phases[0] zu.
       if (!phases.length) {
@@ -6771,22 +6952,34 @@ const gColor = useMemo(()=>{
     })());
   };
 
-  const exportPdf = () => {
-    const html = buildLessonPdfHtml({ title: lessonTitle, dateISO, dayIndex, slotIndex, schoolCalendar, lesson: local });
+  /* Der Export läuft ab jetzt über einen kleinen Zwischenschritt: Layout
+     wählen, Vollständigkeit sehen, Vorschau prüfen. Er hält niemanden
+     auf – die Schaltfläche im Dialog exportiert in jedem Zustand. */
+  const [exportZiel, setExportZiel] = useState(null);
+  const exportLayout = normalisiereLayoutId(local.preferredExportLayout || STANDARD_LAYOUT);
+  const eigenesExportLayout = normalisiereEigenesLayout(appSettings?.customExportLayout);
+
+  const fuehreExportAus = () => {
+    const ziel = exportZiel;
+    setExportZiel(null);
+    if (!ziel) return;
+    const html = buildLessonPdfHtml({
+      title: lessonTitle, dateISO, dayIndex, slotIndex, schoolCalendar, lesson: local,
+      layout: exportLayout, eigenesLayout: eigenesExportLayout,
+    });
     // Filename uses a safe format (dots can be awkward on some systems); keep ISO for filenames.
-    const suggested = `Unterricht_${dateISO}_${slotIndex+1}.Stunde.pdf`;
-    onExportPdf(html, suggested);
+    if (ziel === 'docx') onExportDocx?.(html, `Unterricht_${dateISO}_${slotIndex+1}.Stunde.doc`);
+    else onExportPdf?.(html, `Unterricht_${dateISO}_${slotIndex+1}.Stunde.pdf`);
   };
 
+  const exportPdf = () => setExportZiel('pdf');
 
 const exportDocx = () => {
   if (typeof onExportDocx !== 'function') {
     ui.toast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
     return;
   }
-  const html = buildLessonPdfHtml({ title: lessonTitle, dateISO, dayIndex, slotIndex, schoolCalendar, lesson: local });
-  const suggested = `Unterricht_${dateISO}_${slotIndex+1}.Stunde.doc`;
-  onExportDocx(html, suggested);
+  setExportZiel('docx');
 };
 
   const startExecution = () => {
@@ -6914,6 +7107,19 @@ const exportDocx = () => {
         ergebnis={checkErgebnis}
         onClose={()=>setCheckOffen(false)}
         onSpringeZu={springeZu}
+      />
+
+      <ExportLayoutDialog
+        offen={Boolean(exportZiel)}
+        ziel={exportZiel}
+        phasen={local.phases}
+        layout={exportLayout}
+        eigenesLayout={eigenesExportLayout}
+        onChangeLayout={(id)=>setField('preferredExportLayout', normalisiereLayoutId(id))}
+        onChangeEigenesLayout={(next)=>onUpdateAppSettings?.({ customExportLayout: normalisiereEigenesLayout(next) })}
+        onExport={fuehreExportAus}
+        onClose={()=>setExportZiel(null)}
+        onSpringeZuPhase={(i)=>springeZuPhase(i)}
       />
 
       <CarryOverPanel
@@ -7063,15 +7269,21 @@ const exportDocx = () => {
       <div className="split">
         <PhaseTimeline phases={local.phases} onChange={setPhases} startTime={lessonStartHHMM} />
         <div>
-          <div className="row" style={{justifyContent:'space-between'}}>
+          <div className="row wrap" style={{justifyContent:'space-between'}}>
             <div>
-              <div style={{fontWeight:800}}>Phasen & Inhalte</div>
-              <div className="muted small">Phasenname & Sozialform werden vorgeschlagen und gemerkt.</div>
+              <div style={{fontWeight:800}}>Phasen &amp; Inhalte</div>
+              <div className="muted small">Phasenname &amp; Sozialform werden vorgeschlagen und gemerkt.</div>
             </div>
-            <div className="row" style={{gap:8}}>
+            <div className="row wrap" style={{gap:8}}>
+              <PlanungsprofilWahl
+                profil={planungsprofil}
+                eigeneFelder={local.customPlanningFields}
+                onChangeProfil={(id)=>setField('planningProfile', normalisiereProfilId(id))}
+                onChangeFelder={(ids)=>setField('customPlanningFields', normalisiereFeldListe(ids))}
+              />
               {languageMode ? (
                 <button className="btn btnLeise" onClick={()=>setCheckOffen(true)}
-                        title="Wenige ausgewählte Fragen zu dieser Planung – keine Bewertung">
+                        title="Wenige ausgewählte Fragen zu dieser Planung">
                   <CircleHelp {...ICON_SM} /> Didaktik-Check
                 </button>
               ) : null}
@@ -7082,106 +7294,180 @@ const exportDocx = () => {
           <div style={{height:10}} />
 
           <div className="phaseEditorList">
-            {local.phases.map((ph, idx)=>(
+            {local.phases.map((ph, idx)=>{
+              /* Welche Angaben diese Phase zeigt, entscheidet das
+                 Planungsprofil – mit einer Ausnahme: was bereits
+                 ausgefüllt ist, bleibt sichtbar. Sonst verschwände beim
+                 Wechsel auf ein knapperes Profil vorhandener Text aus
+                 dem Blick, obwohl er weiter gespeichert ist und weiter
+                 exportiert werden kann. */
+              const zeigt = (feldId) => sichtbareFelder.includes(feldId) || feldHatInhalt(ph, feldId);
+              const setzeFeld = (key, v) => {
+                setPhases(local.phases.map((p,i)=> i===idx ? { ...p, [key]: v } : p));
+              };
+              const zusatzFelder = zusatzFelderFuer(ph);
+              /* Eine Phase, in der ausser dem Namen noch nichts steht,
+                 ist nicht unvollständig – sie ist unangetastet. Der
+                 Hinweis erscheint erst, wenn hier tatsächlich geplant
+                 wird; sonst stünde er auf jeder neuen Stunde viermal. */
+              const begonnen = sichtbareFelder.some(id => id !== 'time' && id !== 'phase' && feldHatInhalt(ph, id));
+              const offen = begonnen ? offeneFelderDerPhase(ph, sichtbareFelder) : [];
+              const zeigtHilfen = languageMode || zeigt('scaffolding');
+              return (
               <div key={ph.id} id={`phase-${ph.id}`} className="phaseEditor">
                 <div className="phaseEditorHeader">
                   <div style={{fontWeight:800}}>{idx+1}. Phase</div>
                   <div className="row" style={{gap:8}}>
+                    {/* Ein neutraler Hinweis, keine Warnung: eine Phase
+                        darf bewusst unvollständig bleiben. */}
+                    {offen.length ? (
+                      <span className="offenHinweis"
+                            title={`Noch ohne Angabe: ${offen.map(id => feldDefinition(id)?.label || id).join(', ')}`}>
+                        {offen.length === 1 ? '1 Angabe offen' : `${offen.length} Angaben offen`}
+                      </span>
+                    ) : null}
                     <span className="badge" title={(phaseTimes?.[idx]?.end && phaseTimes?.[idx]?.start) ? `${phaseTimes[idx].start} – ${phaseTimes[idx].end}` : ''}>
                       {phaseTimes?.[idx]?.start ? `${phaseTimes[idx].start} · ` : ''}{ph.duration} min
                     </span>
-                    <button className="btn danger" onClick={()=>removePhase(idx)} disabled={local.phases.length<=1}>Entfernen</button>
+                    {/* Das Entfernen einer Phase ist eine Nebenhandlung.
+                        Als grosse rote Schaltfläche zog es mehr
+                        Aufmerksamkeit auf sich als die Planung selbst –
+                        jetzt steht es als ruhiges Symbol daneben. */}
+                    <button className="iconBtn danger phaseEntfernen" onClick={()=>removePhase(idx)}
+                            disabled={local.phases.length<=1}
+                            title="Phase entfernen" aria-label={`Phase ${idx+1} entfernen`}>
+                      <Trash2 {...ICON_SM} />
+                    </button>
                   </div>
                 </div>
 
                 <div className="row wrap">
-                  <div className="grow">
-                    <label className="small muted">Phasenname</label>
-                    <PhaseNameInput
-                      value={ph.title}
-                      suggestions={phaseNameSuggestions || []}
-                      onChange={(v)=>{
-                        setPhases(local.phases.map((p,i)=> i===idx ? { ...p, title: v } : p));
-                      }}
-                      onCommit={(v)=>onRememberPhaseName?.(v)}
-                      onHideSuggestion={(v)=>onHidePhaseNameSuggestion?.(v)}
-                    />
-                  </div>
-                  <div style={{width:260}}>
-                    <label className="small muted">Sozialform</label>
-                    <SocialFormInput
-                      value={ph.socialForm}
-                      suggestions={suggestions}
-                      onChange={(v)=>{
-                        setPhases(local.phases.map((p,i)=> i===idx ? { ...p, socialForm: v } : p));
-                      }}
-                      onCommit={(v)=>onRememberSocialForm(v)}
-                      onHideSuggestion={(v)=>onHideSocialFormSuggestion?.(v)}
-                    />
-                  </div>
+                  {zeigt('phase') ? (
+                    <div className="grow">
+                      <label className="small muted">Phasenname</label>
+                      <PhaseNameInput
+                        value={ph.title}
+                        suggestions={phaseNameSuggestions || []}
+                        onChange={(v)=>setzeFeld('title', v)}
+                        onCommit={(v)=>onRememberPhaseName?.(v)}
+                        onHideSuggestion={(v)=>onHidePhaseNameSuggestion?.(v)}
+                      />
+                    </div>
+                  ) : null}
+                  {zeigt('socialForm') ? (
+                    <div style={{width:260}}>
+                      <label className="small muted">Sozialform</label>
+                      <SocialFormInput
+                        value={ph.socialForm}
+                        suggestions={suggestions}
+                        onChange={(v)=>setzeFeld('socialForm', v)}
+                        onCommit={(v)=>onRememberSocialForm(v)}
+                        onHideSuggestion={(v)=>onHideSocialFormSuggestion?.(v)}
+                      />
+                    </div>
+                  ) : null}
                 </div>
 
-                <div style={{height:10}} />
-                <div className="phaseContentHead">
-                  <label className="small muted">Inhalt / Ablauf</label>
-                  <PhaseHelpCard
-                    phaseTitle={ph.title}
-                    lesson={local}
-                    phase={ph}
-                    phaseIndex={idx}
-                    languageMode={languageMode}
-                  />
-                </div>
-                <RichTextEditor
-                  value={ph.content}
-                  onChange={(v)=>{
-                    setPhases(local.phases.map((p,i)=> i===idx ? { ...p, content: v } : p));
-                  }}
-                  placeholder="Was passiert in dieser Phase? Material? Fragen? Differenzierung?"
-                />
+                {zeigt('content') ? (
+                  <>
+                    <div style={{height:10}} />
+                    <div className="phaseContentHead">
+                      <label className="small muted">Inhalt / Ablauf</label>
+                      <PhaseHelpCard
+                        phaseTitle={ph.title}
+                        lesson={local}
+                        phase={ph}
+                        phaseIndex={idx}
+                        languageMode={languageMode}
+                      />
+                    </div>
+                    <RichTextEditor
+                      value={ph.content}
+                      onChange={(v)=>setzeFeld('content', v)}
+                      placeholder="Was passiert in dieser Phase? Material? Fragen? Differenzierung?"
+                    />
+                  </>
+                ) : null}
 
-                <div style={{height:10}} />
-                <div className="row wrap" style={{gap:10}}>
-                  <div className="grow">
-                    <label className="small muted">Materialien & Medien</label>
-                    <RichTextEditor
-                      value={ph.materialsMedia || ''}
-                      onChange={(v)=>{
-                        setPhases(local.phases.map((p,i)=> i===idx ? { ...p, materialsMedia: v } : p));
-                      }}
-                      placeholder="z. B. AB, Tafelbild, Beamer, Karten, ..."
-                    />
-                  </div>
-                  <div className="grow">
-                    <label className="small muted">Bemerkungen</label>
-                    <RichTextEditor
-                      value={ph.remarks || ''}
-                      onChange={(v)=>{
-                        setPhases(local.phases.map((p,i)=> i===idx ? { ...p, remarks: v } : p));
-                      }}
-                      placeholder="z. B. Hinweise, Beobachtungen, Alternativen, ..."
-                    />
-                  </div>
-                </div>
+                {(zeigt('materialsMedia') || zeigt('remarks')) ? (
+                  <>
+                    <div style={{height:10}} />
+                    <div className="row wrap" style={{gap:10}}>
+                      {zeigt('materialsMedia') ? (
+                        <div className="grow">
+                          <label className="small muted">Materialien &amp; Medien</label>
+                          <RichTextEditor
+                            value={ph.materialsMedia || ''}
+                            onChange={(v)=>setzeFeld('materialsMedia', v)}
+                            placeholder="z. B. AB, Tafelbild, Beamer, Karten, ..."
+                          />
+                        </div>
+                      ) : null}
+                      {zeigt('remarks') ? (
+                        <div className="grow">
+                          <label className="small muted">Bemerkungen</label>
+                          <RichTextEditor
+                            value={ph.remarks || ''}
+                            onChange={(v)=>setzeFeld('remarks', v)}
+                            placeholder="z. B. Hinweise, Beobachtungen, Alternativen, ..."
+                          />
+                        </div>
+                      ) : null}
+                    </div>
+                  </>
+                ) : null}
+
+                {/* Alles Weitere steht hinter EINEM Griff. So bleibt die
+                    Phasenplanung auch im ausführlichsten Profil eine
+                    Karte und keine Formularwand. */}
+                {zusatzFelder.length ? (
+                  <>
+                    <div style={{height:10}} />
+                    <details className="phaseZusatz">
+                      <summary className="phaseZusatzKopf">
+                        <ChevronDown {...ICON_SM} />
+                        <span>Weitere Angaben</span>
+                        <span className="muted small">
+                          {zusatzFelder.length === 1 ? '1 Feld' : `${zusatzFelder.length} Felder`}
+                        </span>
+                      </summary>
+                      <div className="phaseZusatzInhalt">
+                        {zusatzFelder.map((feldId)=>{
+                          const feld = feldDefinition(feldId);
+                          if (!feld) return null;
+                          return (
+                            <PhasenFeld
+                              key={feldId}
+                              feld={feld}
+                              wert={ph[feld.key]}
+                              ausserhalbDesProfils={!sichtbareFelder.includes(feldId)}
+                              onChange={(v)=>setzeFeld(feld.key, v)}
+                            />
+                          );
+                        })}
+                      </div>
+                    </details>
+                  </>
+                ) : null}
 
                 {/* Hilfen gehören zur Phase und stehen deshalb hier –
-                    aber nur im Fremdsprachenmodus und nur auf Klick. */}
-                {languageMode ? (
+                    im Fremdsprachenmodus oder wenn das Planungsprofil
+                    die sprachliche Unterstützung vorsieht. */}
+                {zeigtHilfen ? (
                   <>
                     <div style={{height:10}} />
                     <PhaseScaffolds
                       scaffolds={ph.scaffolds}
                       vorschlaege={scaffoldSuggestions}
-                      onChange={(next)=>{
-                        setPhases(local.phases.map((p,i)=> i===idx ? { ...p, scaffolds: next } : p));
-                      }}
+                      onChange={(next)=>setzeFeld('scaffolds', next)}
                       onRemember={(v)=>onRememberScaffoldLabel?.(v)}
                       onHideSuggestion={(v)=>onHideScaffoldSuggestion?.(v)}
                     />
                   </>
                 ) : null}
               </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="hr" />
@@ -9596,6 +9882,369 @@ function PhaseScaffolds({ scaffolds, vorschlaege, onChange, onRemember, onHideSu
 /* Ab so vielen auswählbaren Kompetenzen erscheint die Suche. Der
    Systemkatalog allein bleibt darunter – die Suche kommt also erst,
    wenn eigene Einträge die Liste tatsächlich haben wachsen lassen. */
+/* ============================================================
+   Planungsprofile und Exportlayouts – die Bausteine
+
+   Ein Feld, eine Feldliste, eine Auswahl. Dieselben drei Bausteine
+   tragen die Sichtbarkeit in der Phasenplanung UND die Spalten im
+   Export; es gibt keine zweite Fassung davon für den Export.
+   ============================================================ */
+
+/* Eine zusätzliche Angabe zur Phase. Welche Eingabeart es wird, steht
+   in der Registry – hier wird sie nur ausgeführt. */
+function PhasenFeld({ feld, wert, onChange, ausserhalbDesProfils = false }){
+  const beschriftung = (
+    <label className="small muted">
+      {feld.label}
+      {ausserhalbDesProfils ? (
+        <span className="feldFremd" title="Dieses Feld gehört nicht zum gewählten Planungsprofil, enthält aber bereits eine Angabe. Sie bleibt gespeichert.">
+          ausserhalb des Profils
+        </span>
+      ) : null}
+    </label>
+  );
+
+  if (feld.eingabe === 'rich') {
+    return (
+      <div className="phasenFeld phasenFeld--breit">
+        {beschriftung}
+        <RichTextEditor value={wert || ''} onChange={onChange} placeholder={feld.platzhalter || ''} />
+      </div>
+    );
+  }
+  return (
+    <div className="phasenFeld">
+      {beschriftung}
+      <input className="input" value={wert || ''} placeholder={feld.platzhalter || ''}
+             onChange={(e)=>onChange(e.target.value)} />
+    </div>
+  );
+}
+
+/* Sichtbarkeit und Reihenfolge einer Feldliste.
+
+   Wird zweimal benutzt: für das benutzerdefinierte Planungsprofil (nur
+   Häkchen und Reihenfolge) und für das benutzerdefinierte Exportlayout
+   (zusätzlich Breite und eigene Spaltenüberschrift). Deshalb sind
+   Breiten und Bezeichnungen optional – fehlen die Rückrufe, erscheinen
+   die Spalten schlicht nicht.
+
+   Ziehen ordnet um; die Pfeiltasten daneben tun dasselbe ohne Maus. */
+function FeldListeEditor({ ausgewaehlt, onChange, breiten = null, onChangeBreite = null,
+                           bezeichnungen = null, onChangeBezeichnung = null }){
+  const [gezogen, setGezogen] = useState(-1);
+  const gewaehlt = normalisiereFeldListe(ausgewaehlt);
+  const rest = PLANUNGSFELDER.map(f => f.id).filter(id => !gewaehlt.includes(id));
+  const reihen = [...gewaehlt, ...rest];
+
+  const umschalten = (id) => {
+    const feld = feldDefinition(id);
+    if (feld?.pflicht) return;
+    if (gewaehlt.includes(id)) onChange(gewaehlt.filter(x => x !== id));
+    else onChange([...gewaehlt, id]);
+  };
+
+  const verschieben = (id, delta) => {
+    const i = gewaehlt.indexOf(id);
+    const ziel = i + delta;
+    if (i < 0 || ziel < 0 || ziel >= gewaehlt.length) return;
+    const next = [...gewaehlt];
+    next.splice(ziel, 0, next.splice(i, 1)[0]);
+    onChange(next);
+  };
+
+  const ablegen = (zielId) => {
+    if (gezogen < 0) return;
+    const quelleId = gewaehlt[gezogen];
+    setGezogen(-1);
+    if (!quelleId || quelleId === zielId) return;
+    const ziel = gewaehlt.indexOf(zielId);
+    if (ziel < 0) return;
+    const next = gewaehlt.filter(x => x !== quelleId);
+    next.splice(ziel, 0, quelleId);
+    onChange(next);
+  };
+
+  return (
+    <div className="feldListe">
+      {reihen.map((id)=>{
+        const feld = feldDefinition(id);
+        if (!feld) return null;
+        const an = gewaehlt.includes(id);
+        const pos = gewaehlt.indexOf(id);
+        return (
+          <div key={id}
+               className={`feldZeile${an ? '' : ' feldZeile--aus'}`}
+               draggable={an}
+               onDragStart={()=>setGezogen(pos)}
+               onDragOver={(e)=>{ if (an && gezogen >= 0) e.preventDefault(); }}
+               onDrop={(e)=>{ e.preventDefault(); ablegen(id); }}
+               onDragEnd={()=>setGezogen(-1)}>
+            <span className="feldGriff" aria-hidden="true">{an ? '☰' : ''}</span>
+            <label className="feldName">
+              <input type="checkbox" checked={an} disabled={Boolean(feld.pflicht)}
+                     onChange={()=>umschalten(id)} />
+              <span>{feld.label}</span>
+              {feld.pflicht ? <span className="muted small">(immer dabei)</span> : null}
+            </label>
+
+            {(an && onChangeBezeichnung) ? (
+              <input className="input feldLabelEingabe"
+                     value={bezeichnungen?.[id] ?? ''}
+                     placeholder={feld.kurz}
+                     title="Eigene Spaltenüberschrift"
+                     onChange={(e)=>onChangeBezeichnung(id, e.target.value)} />
+            ) : null}
+
+            {(an && onChangeBreite) ? (
+              <span className="feldBreite" title="Richtwert der Spaltenbreite">
+                <input className="input" type="number" min="4" max="60"
+                       value={breiten?.[id] ?? feld.breite}
+                       onChange={(e)=>onChangeBreite(id, e.target.value)} />
+              </span>
+            ) : null}
+
+            <span className="feldPfeile">
+              <button type="button" className="btn btnMini" disabled={!an || pos <= 0}
+                      title="Nach oben" aria-label={`${feld.label} nach oben`}
+                      onClick={()=>verschieben(id, -1)}>↑</button>
+              <button type="button" className="btn btnMini" disabled={!an || pos < 0 || pos >= gewaehlt.length - 1}
+                      title="Nach unten" aria-label={`${feld.label} nach unten`}
+                      onClick={()=>verschieben(id, 1)}>↓</button>
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* Die Auswahl des Planungsprofils. Gut erreichbar, aber ruhig: ein
+   Auswahlfeld neben "+ Phase", kein eigener Bereich. */
+function PlanungsprofilWahl({ profil, eigeneFelder, onChangeProfil, onChangeFelder }){
+  const [offen, setOffen] = useState(false);
+  const istEigen = profil === 'eigenes';
+  return (
+    <>
+      <label className="profilWahl" title="Bestimmt, welche Angaben in der Phasenplanung erscheinen. Gespeicherte Angaben bleiben in jedem Fall erhalten.">
+        <span className="small muted">Planungsprofil</span>
+        <select value={profil} onChange={(e)=>onChangeProfil(e.target.value)}>
+          {PLANUNGSPROFILE.map(pr => <option key={pr.id} value={pr.id}>{pr.name}</option>)}
+        </select>
+      </label>
+      {istEigen ? (
+        <button className="btn btnLeise" onClick={()=>setOffen(true)}>
+          <Settings {...ICON_SM} /> Felder wählen
+        </button>
+      ) : null}
+
+      {offen ? (
+        <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) setOffen(false); }}>
+          <div className="modalCard modalCard--breit" role="dialog" aria-modal="true" aria-label="Felder der Phasenplanung"
+               onKeyDown={(e)=>{ if (e.key === 'Escape') setOffen(false); }}>
+            <h3 className="dialogTitle">Felder der Phasenplanung</h3>
+            <p className="dialogBody" style={{marginTop:0}}>
+              Häkchen bestimmen die Sichtbarkeit, Ziehen die Reihenfolge. Abgewählte
+              Felder werden nur ausgeblendet – bereits eingetragene Angaben bleiben
+              gespeichert und weiterhin exportierbar.
+            </p>
+            <FeldListeEditor ausgewaehlt={eigeneFelder} onChange={onChangeFelder} />
+            <div className="dialogActions">
+              <button className="btn primary" onClick={()=>setOffen(false)}>Fertig</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/* Der Exportdialog.
+
+   Er prüft, er blockiert nicht. Die Prüfung stellt genau eine Frage je
+   Spalte: steht in dieser Phase etwas? Sie beurteilt ausdrücklich
+   NICHT, ob das Eingetragene fachlich gut ist – kein Score, keine Note,
+   keine automatische Bewertung. Der Export ist in jedem Zustand
+   möglich, auch mit vollständig leeren Angaben. */
+function ExportLayoutDialog({ offen, ziel, phasen, layout, eigenesLayout,
+                              onChangeLayout, onChangeEigenesLayout,
+                              onExport, onClose, onSpringeZuPhase }){
+  const [spaltenOffen, setSpaltenOffen] = useState(false);
+  useEffect(()=>{ if (offen) setSpaltenOffen(layout === 'eigenes'); }, [offen, layout]);
+  if (!offen) return null;
+
+  const eigen = normalisiereEigenesLayout(eigenesLayout);
+  const pruefung = exportPruefung(layout, phasen, { eigenesLayout: eigen });
+  const { spalten, zeilen, unvollstaendig, leer, zuVieleSpalten, anzahlPhasen } = pruefung;
+
+  const ersteLuecke = unvollstaendig[0] || zeilen.find(z => z.offen > 0) || null;
+  const zielName = ziel === 'docx' ? 'Word' : 'PDF';
+
+  const setzeSpalten = (ids) => onChangeEigenesLayout({ ...eigen, spalten: normalisiereFeldListe(ids) });
+  const setzeBreite = (id, wert) => {
+    const n = Number(wert);
+    const breiten = { ...eigen.breiten };
+    if (Number.isFinite(n) && n > 0) breiten[id] = Math.min(60, Math.max(4, Math.round(n)));
+    else delete breiten[id];
+    onChangeEigenesLayout({ ...eigen, breiten });
+  };
+  const setzeBezeichnung = (id, wert) => {
+    const bezeichnungen = { ...eigen.bezeichnungen };
+    const t = String(wert || '').trim();
+    if (t) bezeichnungen[id] = t.slice(0, 60);
+    else delete bezeichnungen[id];
+    onChangeEigenesLayout({ ...eigen, bezeichnungen });
+  };
+
+  return (
+    <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onClose?.(); }}>
+      <div className="modalCard modalCard--breit exportCard" role="dialog" aria-modal="true"
+           aria-label="Verlaufsplan exportieren"
+           onKeyDown={(e)=>{ if (e.key === 'Escape') onClose?.(); }}>
+        <h3 className="dialogTitle">Verlaufsplan exportieren</h3>
+
+        <div className="exportZeile">
+          <label className="profilWahl">
+            <span className="small muted">Exportlayout</span>
+            <select value={layout} onChange={(e)=>onChangeLayout(e.target.value)}>
+              {EXPORTLAYOUTS.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+          </label>
+          <span className="muted small">
+            {EXPORTLAYOUTS.find(l => l.id === layout)?.beschreibung || ''}
+          </span>
+        </div>
+
+        <p className="muted small" style={{margin:'0 0 10px'}}>
+          Das Exportlayout ist unabhängig vom Planungsprofil. Es bestimmt allein,
+          welche der vorhandenen Angaben ausgegeben werden – gespeichert bleibt alles.
+        </p>
+
+        {/* Vollständigkeit prüfen */}
+        <section className="exportAbschnitt">
+          <h4 className="settingsHeading">Vollständigkeit prüfen</h4>
+          {zeilen.length === 0 ? (
+            <p className="muted small" style={{margin:0}}>
+              Dieses Layout gibt nur die Grundspalten aus – hier ist nichts zu prüfen.
+            </p>
+          ) : (
+            <ul className="exportPruefListe">
+              {zeilen.map(z => (
+                <li key={z.id}>
+                  <span className="exportPruefName">{z.label}</span>
+                  <span className={`exportPruefWert${z.offen ? ' exportPruefWert--offen' : ''}`}
+                        title={z.ausgegeben ? '' : 'In allen Phasen ohne Angabe – diese Spalte wird nicht ausgegeben.'}>
+                    {z.offen === 0
+                      ? 'vollständig'
+                      : (z.ausgegeben
+                          ? (z.offen === 1 ? '1 Phase ohne Angabe' : `${z.offen} Phasen ohne Angabe`)
+                          : 'überall ohne Angabe · nicht ausgegeben')}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {leer.length ? (
+            <p className="muted small" style={{marginBottom:0}}>
+              {leer.length === 1
+                ? `Eine vorgesehene Spalte ist in allen ${anzahlPhasen} Phasen leer und wird nicht ausgegeben.`
+                : `${leer.length} vorgesehene Spalten sind in allen Phasen leer und werden nicht ausgegeben.`}
+              {layout === 'eigenes' ? ' Ausdrücklich angehakte Spalten bleiben trotzdem stehen.' : ''}
+            </p>
+          ) : null}
+        </section>
+
+        {zuVieleSpalten ? (
+          <div className="inlineNotice inlineNotice--warning">
+            Dieses Layout enthält {spalten.length} Spalten. Die Lesbarkeit im
+            A4-Querformat kann eingeschränkt sein. Weniger Spalten oder ein
+            knapperes Layout hilft – geändert wird hier nichts von selbst.
+          </div>
+        ) : null}
+
+        {/* Spalten anpassen */}
+        {spaltenOffen ? (
+          <section className="exportAbschnitt">
+            <h4 className="settingsHeading">Spalten anpassen</h4>
+            {layout === 'eigenes' ? (
+              <>
+                <p className="muted small" style={{marginTop:0}}>
+                  Häkchen blenden ein und aus, Ziehen ordnet um, die Zahl rechts ist
+                  der Richtwert der Spaltenbreite. Eine angehakte Spalte wird auch
+                  dann ausgegeben, wenn sie leer ist.
+                </p>
+                <FeldListeEditor
+                  ausgewaehlt={eigen.spalten}
+                  onChange={setzeSpalten}
+                  breiten={eigen.breiten}
+                  onChangeBreite={setzeBreite}
+                  bezeichnungen={eigen.bezeichnungen}
+                  onChangeBezeichnung={setzeBezeichnung}
+                />
+              </>
+            ) : (
+              <p className="muted small" style={{margin:0}}>
+                Eigene Spalten gibt es im Layout „Benutzerdefiniert“.{' '}
+                <button className="btn btnMini" onClick={()=>onChangeLayout('eigenes')}>
+                  Dorthin wechseln
+                </button>
+              </p>
+            )}
+          </section>
+        ) : null}
+
+        {/* Vorschau */}
+        <section className="exportAbschnitt">
+          <h4 className="settingsHeading">Vorschau · A4 quer</h4>
+          <div className="exportVorschau">
+            <table className="exportVorschauTabelle">
+              <thead>
+                <tr>{spalten.map(c => (
+                  <th key={c.id} style={{width:`${c.breite}%`}}>{c.label}</th>
+                ))}</tr>
+              </thead>
+              <tbody>
+                {(phasen || []).map((ph, i) => (
+                  <tr key={ph.id || i}>
+                    {spalten.map(c => (
+                      <td key={c.id}>
+                        {c.id === 'time' ? `${ph.duration} min` : feldText(ph, c.id)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+                {(phasen || []).length === 0 ? (
+                  <tr><td colSpan={spalten.length} className="muted">(keine Phasen)</td></tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+          <p className="muted small" style={{marginBottom:0}}>
+            Spalten, Reihenfolge und Breiten wie im Export. Formatierungen im Text
+            erscheinen erst in der fertigen Datei.
+          </p>
+        </section>
+
+        <div className="dialogActions exportAktionen">
+          {ersteLuecke ? (
+            <button className="btn btnLeise"
+                    onClick={()=>{ onSpringeZuPhase?.(ersteLuecke.phasen[0] ?? 0); onClose?.(); }}>
+              Fehlende Angaben ergänzen
+            </button>
+          ) : null}
+          {!spaltenOffen ? (
+            <button className="btn btnLeise" onClick={()=>setSpaltenOffen(true)}>Layout anpassen</button>
+          ) : null}
+          <button className="btn" onClick={onClose}>Abbrechen</button>
+          <button className="btn primary" onClick={onExport}>
+            {ersteLuecke ? `Trotzdem als ${zielName} speichern` : `Als ${zielName} speichern`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const KOMPETENZ_SUCHE_AB = 24;
 
 function CompetencyEditor({
@@ -10196,7 +10845,7 @@ function sprachhandelnAlsHtml(lesson){
 }
 
 /* Die Hilfen einer Phase, kompakt in einer Zelle. */
-function scaffoldsAlsHtml(phase){
+function scaffoldsAlsHtml(phase, { ohneVorspann = false } = {}){
   const liste = normalisiereScaffolds(phase?.scaffolds).filter(sc => !istLeererScaffold(sc));
   if (!liste.length) return '';
   const eintraege = liste.map((sc)=>{
@@ -10208,6 +10857,10 @@ function scaffoldsAlsHtml(phase){
     ].filter(Boolean).join(' ');
     return `<div>${teile}</div>`;
   }).join('');
+  /* Als eigene Spalte braucht die Liste keine Überschrift – die steht
+     schon im Tabellenkopf. Hängt sie dagegen an den Bemerkungen, muss
+     erkennbar bleiben, wo die Bemerkung aufhört. */
+  if (ohneVorspann) return `<div class="scaffSpalte">${eintraege}</div>`;
   return `<div class="scaff"><em>Hilfen:</em>${eintraege}</div>`;
 }
 
@@ -10221,7 +10874,23 @@ function kopfBlock(beschriftung, inhaltHtml){
     </div>`;
 }
 
-function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalendar, lesson }){
+/* Eine Zelle des Verlaufsplans. Wie sie aussieht, steht in der
+   Registry (`zelle`) – nicht hier und nicht ein zweites Mal im
+   Word-Export: beide Wege nehmen dieselbe Tabelle. */
+function verlaufsZelle(phase, spalte, zeit){
+  if (spalte.zelle === 'zeit') {
+    return (zeit?.start ? `<div class="tStart"><strong>${escapeHtml(zeit.start)}</strong></div>` : '') +
+      `<div class="tDur">(${escapeHtml(String(phase.duration || ''))} min)</div>`;
+  }
+  if (spalte.zelle === 'scaffolds') return scaffoldsAlsHtml(phase, { ohneVorspann: true });
+  const wert = feldWert(phase, spalte.id);
+  if (spalte.zelle === 'stark') return `<strong>${escapeHtml(String(wert || ''))}</strong>`;
+  if (spalte.zelle === 'rich') return sanitizeRichForExport(wert || '');
+  return escapeHtml(String(wert || ''));
+}
+
+function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalendar, lesson,
+                              layout = STANDARD_LAYOUT, eigenesLayout = null }){
   const l = normalizeLesson(lesson || {});
   const phases = normalizePhases(l.phases || []);
   const lessonStart = getLessonStartTime(schoolCalendar, slotIndex);
@@ -10267,21 +10936,40 @@ function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalenda
   const aufgabenBlock = kopfBlock('Kommunikative Aufgabe', aufgabeAlsHtml(l.communicativeTask));
   const sprachBlock = kopfBlock('Sprachhandeln & sprachliche Mittel', sprachhandelnAlsHtml(l));
 
+  /* Die eine Stelle, an der Spalten entstehen. PDF, Word und die
+     Vorschau im Exportdialog fragen dieselbe Funktion – deshalb kann
+     die Ausgabe zwischen ihnen nicht auseinanderlaufen.
+
+     Sind die Hilfen keine eigene Spalte, hängen sie wie bisher an den
+     Bemerkungen: eine geplante Hilfe verschwindet nie stillschweigend
+     aus dem Export. */
+  const spalten = getLessonPlanExportColumns(layout, phases, { eigenesLayout });
+  const hilfenAlsSpalte = spalten.some(c => c.id === 'scaffolding');
+  const anhangSpalte = hilfenAlsSpalte
+    ? ''
+    : (spalten.find(c => c.id === 'remarks') || spalten[spalten.length - 1] || {}).id;
+
+  const kopfZeile = spalten
+    .map(c => `<th class="col-${c.id}">${escapeHtml(c.label)}</th>`)
+    .join('');
+
   const rows = phases.map((p, i)=>{
     const t = times[i] || { start:'', end:'' };
-    const timeCell = (t.start ? `<div class="tStart"><strong>${escapeHtml(t.start)}</strong></div>` : '') +
-      `<div class="tDur">(${escapeHtml(String(p.duration || ''))} min)</div>`;
+    const zellen = spalten.map((c)=>{
+      const inhalt = verlaufsZelle(p, c, t);
+      const anhang = (!hilfenAlsSpalte && c.id === anhangSpalte) ? scaffoldsAlsHtml(p) : '';
+      return `<td class="col-${c.id}">${inhalt}${anhang}</td>`;
+    }).join('');
     return `
       <tr>
-        <td class="colTime">${timeCell}</td>
-        <td class="colPhase"><strong>${escapeHtml(p.title || '')}</strong></td>
-        <td class="colContent">${sanitizeRichForExport(p.content || '')}</td>
-        <td class="colSocial">${escapeHtml(p.socialForm || '')}</td>
-        <td class="colMat">${sanitizeRichForExport(p.materialsMedia || '')}</td>
-        <td class="colNotes">${sanitizeRichForExport(p.remarks || '')}${scaffoldsAlsHtml(p)}</td>
+        ${zellen}
       </tr>
     `;
   }).join('');
+
+  const spaltenCss = spalten
+    .map(c => `    .col-${c.id}{width:${c.breite}%${c.id === 'time' ? '; white-space:nowrap' : ''}}`)
+    .join('\n');
 
   const dayLabel = (typeof dayIndex === 'number' && dayIndex >= 0 && dayIndex < DAYS.length) ? DAYS[dayIndex] : '';
   const dateLabel = dateISO ? formatDateDE(dateISO) : '';
@@ -10309,12 +10997,7 @@ function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalenda
     th,td{border:1px solid #9ca3af; padding:6px; vertical-align:top}
     th{background:#d1d5db; text-align:left; font-weight:800}
 
-    .colTime{width:9%; white-space:nowrap}
-    .colPhase{width:16%}
-    .colContent{width:44%}
-    .colSocial{width:10%}
-    .colMat{width:11%}
-    .colNotes{width:10%}
+${spaltenCss}
 
     .tStart{font-size:12px}
     .tDur{color:#374151; font-size:10px; margin-top:1mm}
@@ -10323,6 +11006,7 @@ function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalenda
     .dMeta{margin-top:1mm; font-size:10px; color:#374151}
     .dTag{margin-right:3mm; white-space:nowrap}
     .scaff{margin-top:1mm; padding-top:1mm; border-top:1px dashed #9ca3af; font-size:10px}
+    .scaffSpalte{font-size:10px}
   </style>
 </head>
 <body>
@@ -10352,12 +11036,7 @@ function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalenda
   <table>
     <thead>
       <tr>
-        <th class="colTime">Zeit</th>
-        <th class="colPhase">Phase</th>
-        <th class="colContent">Inhalt, Aktivität, methodisches Vorgehen</th>
-        <th class="colSocial">Sozialform</th>
-        <th class="colMat">Materialien und Medien</th>
-        <th class="colNotes">Bemerkungen</th>
+        ${kopfZeile}
       </tr>
     </thead>
     <tbody>

@@ -701,6 +701,44 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 }
 
 /* ============================================================
+   Fachdidaktischer Planungscheck
+
+   Nichts hier signalisiert einen Missstand: kein Rot, keine Ampel, kein
+   Balken, keine Zahl. Die Impulse tragen denselben getönten Grund wie
+   die Hilfekarte – sie sind derselben Art von Hinweis, nur aus der
+   konkreten Planung abgeleitet.
+   ============================================================ */
+.checkCard { max-width: 640px; width: min(640px, 94vw); }
+.checkAbschnitt { margin-top: 14px; }
+
+.checkStaerken { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.checkStaerken li { display: flex; align-items: flex-start; gap: 8px; }
+.checkStaerken svg { color: var(--success); flex-shrink: 0; margin-top: 2px; }
+.checkStaerkeTitel { font-size: var(--fs-base); font-weight: var(--fw-medium); }
+
+.checkImpulse { display: flex; flex-direction: column; gap: 8px; }
+.checkImpuls {
+  border: 1px solid var(--border-light);
+  background: var(--parchment);
+  padding: 8px 10px;
+}
+.checkImpulsKopf { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.checkKategorie {
+  font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); font-weight: var(--fw-medium);
+}
+.checkImpulsTitel { font-size: var(--fs-sm); font-weight: var(--fw-bold); color: var(--primary-ink); }
+.checkImpulsKopf > button { margin-left: auto; }
+.checkImpulsText { font-size: var(--fs-base); line-height: 1.45; margin-top: 3px; }
+
+/* Der Zusatz in der Hilfekarte: abgesetzt, aber derselbe Ton. */
+.phaseHelpZusatz { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.phaseHelpZusatzTitel {
+  font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); font-weight: var(--fw-medium); margin-bottom: 2px;
+}
+
+/* ============================================================
    Nachbereitung
 
    Ruhig und neutral. Kein Rot für "offen geblieben" – eine Planung ist

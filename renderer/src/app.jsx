@@ -14,6 +14,7 @@ import {
   katalogNachBereichen, filterKatalog, alleBereiche, bereichVon,
   istSystemKompetenz, istSystemBereich,
 } from './competencies.js';
+import { erstelleDidaktikCheck, phasenDidaktikImpuls } from './didaktik-check.js';
 import {
   PHASEN_STATUS, statusZeichen, statusName,
   normalisiereReview, leeresReview, hatNachbereitung, offeneCarryOver,
@@ -113,13 +114,24 @@ function getPhaseHelpEntry(phaseTitle){
   ) || null;
 }
 
-function PhaseHelpCard({ phaseTitle }){
+/* Die Hilfekarte bleibt, was sie ist: allgemeine Leitfragen zum
+   Phasennamen, sichtbar nur auf Klick.
+
+   Im Fremdsprachenmodus kommt höchstens EIN fachdidaktischer Zusatz
+   dazu – abgeleitet aus dem, was in der Stunde steht. Die vorhandenen
+   Leitfragen bleiben unverändert; sie gelten für jedes Fach. */
+function PhaseHelpCard({ phaseTitle, lesson = null, phase = null, phaseIndex = 0, languageMode = false }){
   const [open, setOpen] = useState(false);
   const helpEntry = getPhaseHelpEntry(phaseTitle);
 
+  const zusatz = useMemo(
+    ()=> (languageMode && open ? phasenDidaktikImpuls(lesson, phase || { title: phaseTitle }, phaseIndex) : null),
+    [languageMode, open, lesson, phase, phaseTitle, phaseIndex]
+  );
+
   if (!helpEntry) return null;
 
-  const [phase, questions] = helpEntry;
+  const [phaseName, questions] = helpEntry;
   return (
     <div className="phaseHelp">
       <button
@@ -134,8 +146,14 @@ function PhaseHelpCard({ phaseTitle }){
 
       {open ? (
         <div className="phaseHelpCard" role="note">
-          <div className="phaseHelpTitle">Leitfragen – {phase}</div>
+          <div className="phaseHelpTitle">Leitfragen – {phaseName}</div>
           <div className="phaseHelpText">{questions}</div>
+          {zusatz ? (
+            <div className="phaseHelpZusatz">
+              <div className="phaseHelpZusatzTitel">Fremdsprachendidaktischer Impuls</div>
+              <div className="phaseHelpText">{zusatz}</div>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -1969,6 +1987,90 @@ function CompetencyProfileView({ profil }){
           </details>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ============================================================
+   Fachdidaktischer Planungscheck
+
+   Ein Dialog nach dem vorhandenen Muster. Er rechnet aus dem gerade
+   bearbeiteten Entwurf, nicht aus dem gespeicherten Stand – sonst
+   fehlte alles, was in den letzten Sekunden getippt wurde.
+
+   Was er zeigt, ist eine Auswahl, kein Katalog: höchstens zwei
+   Feststellungen und sechs Fragen. Und er zeigt nichts an, was er
+   nicht aus den Feldern belegen kann.
+   ============================================================ */
+function DidaktikCheckDialog({ open, ergebnis, onClose, onSpringeZu }){
+  const schliessenRef = useRef(null);
+  useEffect(()=>{ if (open) schliessenRef.current?.focus(); }, [open]);
+  if (!open || !ergebnis) return null;
+
+  const { strengths, prompts } = ergebnis;
+
+  return (
+    <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onClose?.(); }}>
+      <div className="modalCard checkCard" role="dialog" aria-modal="true"
+           aria-label="Fachdidaktischer Planungscheck"
+           onKeyDown={(e)=>{ if (e.key === 'Escape') onClose?.(); }}>
+        <h3 className="dialogTitle">Fachdidaktischer Planungscheck</h3>
+        <p className="dialogBody" style={{marginTop:0}}>
+          Einige ausgewählte Fragen zu dieser Planung. Kein Score und keine Bewertung.
+        </p>
+
+        {strengths.length ? (
+          <section className="checkAbschnitt">
+            <h4 className="settingsHeading">Bereits angelegt</h4>
+            <ul className="checkStaerken">
+              {strengths.map((s)=>(
+                <li key={s.id}>
+                  <Check {...ICON_SM} />
+                  <div>
+                    <div className="checkStaerkeTitel">{s.title}</div>
+                    <div className="muted small">{s.text}</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        <section className="checkAbschnitt">
+          <h4 className="settingsHeading">
+            {strengths.length ? 'Noch einen Blick wert' : 'Fragen zu dieser Planung'}
+          </h4>
+          {prompts.length === 0 ? (
+            <p className="muted small" style={{margin:0}}>
+              Aus den vorhandenen Angaben ergibt sich gerade keine Frage.
+            </p>
+          ) : (
+            <div className="checkImpulse">
+              {prompts.map((p)=>(
+                <div key={p.id} className="checkImpuls">
+                  <div className="checkImpulsKopf">
+                    <span className="checkKategorie">{p.category}</span>
+                    <span className="checkImpulsTitel">{p.title}</span>
+                    {(p.phaseId || p.target !== 'phases') ? (
+                      <button type="button" className="btn btnMini"
+                              onClick={()=>onSpringeZu?.(p)}>
+                        {p.phaseId ? 'Zur Phase' : 'Zur Planung'}
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="checkImpulsText">{p.text}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <div className="dialogActions">
+          <button ref={schliessenRef} type="button" className="btn primary" onClick={onClose}>
+            Schließen
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -6555,6 +6657,36 @@ const gColor = useMemo(()=>{
     if (res && res.ok === false && res.error) ui.toast(`Konnte Ablage nicht öffnen: ${res.error}`, { tone: 'danger' });
   };
 
+  /* Der Check rechnet aus `local`, also aus dem gerade bearbeiteten
+     Entwurf. Aus `lesson` gerechnet fehlte alles, was das verzögerte
+     Speichern noch nicht geschrieben hat.
+
+     Gerechnet wird erst beim Öffnen: useMemo hängt an checkOffen, damit
+     nicht jeder Tastendruck die Analyse auslöst. */
+  const [checkOffen, setCheckOffen] = useState(false);
+  const checkSeed = `${weekStart}-${dayIndex}-${slotIndex}`;
+  const checkErgebnis = useMemo(
+    ()=> (checkOffen ? erstelleDidaktikCheck(local, { seed: checkSeed }) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [checkOffen, local, checkSeed]
+  );
+
+  /* Sanft zum betroffenen Ort scrollen. Es werden keine Daten verändert –
+     der Check schlägt vor, er greift nicht ein. */
+  const springeZu = (impuls)=>{
+    setCheckOffen(false);
+    const ziel = impuls?.phaseId
+      ? `phase-${impuls.phaseId}`
+      : (impuls?.target === 'criteria' ? 'lesson-kriterien' : 'lesson-didaktik');
+    setTimeout(()=>{
+      const el = document.getElementById(ziel);
+      if (!el) return;
+      try { el.scrollIntoView({ behavior:'smooth', block:'center' }); } catch { el.scrollIntoView(); }
+      // Der fachdidaktische Block ist zugeklappt, wenn nichts darin steht.
+      if (ziel === 'lesson-didaktik') setFachdidaktikOffen(true);
+    }, 60);
+  };
+
   /* Der fachdidaktische Block startet aufgeklappt, wenn schon etwas
      darin steht – sonst wären ausgefüllte Angaben versteckt. Sonst
      bleibt die Stundenplanung so kurz wie zuvor. */
@@ -6777,6 +6909,13 @@ const exportDocx = () => {
 
       <div style={{height:10}} />
 
+      <DidaktikCheckDialog
+        open={checkOffen}
+        ergebnis={checkErgebnis}
+        onClose={()=>setCheckOffen(false)}
+        onSpringeZu={springeZu}
+      />
+
       <CarryOverPanel
         punkte={offenePunkte}
         onUebernehmenAlsPhase={(liste)=>uebernehmeAlsPhasen(liste)}
@@ -6882,6 +7021,7 @@ const exportDocx = () => {
 
       {/* Fachunabhängig – deshalb auch ohne Fremdsprachenmodus da. */}
       <SuccessCriteriaEditor
+        id="lesson-kriterien"
         kriterien={local.successCriteria}
         onChange={(next)=>setField('successCriteria', next)}
       />
@@ -6891,7 +7031,7 @@ const exportDocx = () => {
       {languageMode ? (
         <>
           <div style={{height:10}} />
-          <details className="didaktikBlock" open={fachdidaktikOffen}
+          <details id="lesson-didaktik" className="didaktikBlock" open={fachdidaktikOffen}
                    onToggle={(e)=>setFachdidaktikOffen(e.currentTarget.open)}>
             <summary className="didaktikKopf">
               <span className="didaktikTitel">Fachdidaktische Planung</span>
@@ -6928,14 +7068,22 @@ const exportDocx = () => {
               <div style={{fontWeight:800}}>Phasen & Inhalte</div>
               <div className="muted small">Phasenname & Sozialform werden vorgeschlagen und gemerkt.</div>
             </div>
-            <button className="btn" onClick={addPhase}>+ Phase</button>
+            <div className="row" style={{gap:8}}>
+              {languageMode ? (
+                <button className="btn btnLeise" onClick={()=>setCheckOffen(true)}
+                        title="Wenige ausgewählte Fragen zu dieser Planung – keine Bewertung">
+                  <CircleHelp {...ICON_SM} /> Didaktik-Check
+                </button>
+              ) : null}
+              <button className="btn" onClick={addPhase}>+ Phase</button>
+            </div>
           </div>
 
           <div style={{height:10}} />
 
           <div className="phaseEditorList">
             {local.phases.map((ph, idx)=>(
-              <div key={ph.id} className="phaseEditor">
+              <div key={ph.id} id={`phase-${ph.id}`} className="phaseEditor">
                 <div className="phaseEditorHeader">
                   <div style={{fontWeight:800}}>{idx+1}. Phase</div>
                   <div className="row" style={{gap:8}}>
@@ -6976,7 +7124,13 @@ const exportDocx = () => {
                 <div style={{height:10}} />
                 <div className="phaseContentHead">
                   <label className="small muted">Inhalt / Ablauf</label>
-                  <PhaseHelpCard phaseTitle={ph.title} />
+                  <PhaseHelpCard
+                    phaseTitle={ph.title}
+                    lesson={local}
+                    phase={ph}
+                    phaseIndex={idx}
+                    languageMode={languageMode}
+                  />
                 </div>
                 <RichTextEditor
                   value={ph.content}
@@ -9119,7 +9273,7 @@ function CompetencyPrimaryInput({ value, suggestions, onChange, onCommit, onHide
    hätte deshalb kein Ziel, an dem sie hängen könnte. Die Kriterien
    gehören darum zur Stunde – so wie die Lernziele selbst.
    ============================================================ */
-function SuccessCriteriaEditor({ kriterien, onChange }){
+function SuccessCriteriaEditor({ id, kriterien, onChange }){
   const liste = Array.isArray(kriterien) ? kriterien : [];
   // Aufgeklappt, sobald etwas drinsteht – sonst versteckte Inhalte.
   const [offen, setOffen] = useState(liste.length > 0);
@@ -9130,14 +9284,14 @@ function SuccessCriteriaEditor({ kriterien, onChange }){
 
   if (!offen) {
     return (
-      <button type="button" className="btn btnLeise" onClick={ergaenzen}>
+      <button type="button" id={id} className="btn btnLeise" onClick={ergaenzen}>
         <Plus {...ICON_SM} /> Erfolgskriterien
       </button>
     );
   }
 
   return (
-    <div className="kriterienBox">
+    <div id={id} className="kriterienBox">
       <div className="row" style={{justifyContent:'space-between', alignItems:'baseline'}}>
         <div>
           <div className="kriterienTitel">Erfolgskriterien</div>

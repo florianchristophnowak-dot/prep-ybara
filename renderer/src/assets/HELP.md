@@ -40,6 +40,15 @@ Dieses Hilfe‑Dokument erklärt die wichtigsten Funktionen von **Prép‑ybara*
 - Du kannst Kompetenzen als Tags pflegen und eine **primäre Kompetenz** markieren.
 - Stunden können einer **Unterrichtssequenz** zugeordnet werden (für den Makro‑Plan).
 
+### Didaktik-Check (nur im Fremdsprachenmodus)
+- Neben „+ Phase" liegt der Knopf **Didaktik-Check**. Er zeigt wenige ausgewählte
+  Reflexionsfragen zur gerade offenen Planung.
+- Er **bewertet nichts**: kein Score, keine Prozentzahl, keine Ampel. Er stellt Fragen,
+  wo sich ein zweiter Blick lohnen könnte, und nennt höchstens zwei Dinge, die aus den
+  Feldern erkennbar bereits angelegt sind.
+- Alles wird **lokal aus deiner Planung** abgeleitet – ohne Internet und ohne KI.
+  Gespeichert wird dabei nichts.
+
 ---
 
 ## 3) „In nächste Woche übernehmen“

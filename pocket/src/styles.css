@@ -569,3 +569,48 @@ button, input, select, textarea { font: inherit; color: inherit; }
   padding: 10px 0 2px;
   background: linear-gradient(to top, var(--bg) 70%, transparent);
 }
+
+/* ---- Leiste über der Fussnavigation ----------------------------------
+   Für neue Fassung und Installationshinweis. Schmal, ruhig, wegtippbar –
+   und immer über der Navigation, damit sie den Daumenweg nicht
+   blockiert. */
+.leiste {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: calc(var(--fuss-hoehe) + env(safe-area-inset-bottom));
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px var(--rand);
+  background: var(--parchment);
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.leisteText { flex: 1; min-width: 180px; }
+
+.leisteAktionen {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.leisteZu {
+  min-width: 36px;
+  min-height: 36px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+.leisteZu:active { background: var(--bg-subtle); }
+
+/* Steht eine Leiste, rückt die Meldung darüber. */
+.leiste ~ .meldung { bottom: calc(var(--fuss-hoehe) + 70px + env(safe-area-inset-bottom)); }

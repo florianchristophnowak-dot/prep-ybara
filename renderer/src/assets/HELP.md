@@ -126,4 +126,47 @@ Nach dem Einfügen bleibt alles flexibel: Stunden können gelöscht, hinzugefüg
 
 ---
 
+## 9) Prép-ybara Pocket (mobile Begleit-App)
+
+**Pocket erfasst – Prép-ybara organisiert.** Pocket ist eine kleine Web-App
+fürs Smartphone, mit der du unterwegs einzelne Stunden planst. Der Austausch
+läuft ausschliesslich über Dateien – es gibt **keine Verbindung** und keine
+gemeinsame Datenbank zwischen Telefon und PC.
+
+### Profil aufs Telefon bringen
+1. **Einstellungen → Prép-ybara Pocket → Pocket-Profil exportieren**
+   (oder im Menü **Import / Export → Prép-ybara Pocket**).
+2. Die Datei `.prepybara-profile` auf das Telefon bringen (Mail, Cloud, Kabel).
+3. In Pocket: **Einstellungen → Prép-ybara-Profil importieren**.
+
+Das Profil enthält Lerngruppen, Fächer, den Stundenplan der nächsten Wochen,
+Kompetenzen, Sprechabsichten, Sozialformen und Phasentypen – **keine
+Schülerdaten, keine Noten, keine Nachbereitung**. Ein neues Profil löscht in
+Pocket keine Entwürfe.
+
+### Stunde vom Telefon übernehmen
+1. In Pocket: **Für Prép-ybara exportieren** → Teilen oder Herunterladen.
+2. Hier: **Einstellungen → Prép-ybara Pocket → Pocket-Import öffnen**.
+3. Datei auswählen oder auf die Fläche ziehen.
+4. **Vorschau prüfen** → **Importieren**.
+
+Lerngruppe, Fach und Termin werden automatisch erkannt; Datum und Stunde
+lassen sich in der Vorschau ändern.
+
+### Wenn am Termin schon etwas steht
+Es wird **nie automatisch überschrieben**. Du wählst:
+- Desktopplanung beibehalten (Voreinstellung),
+- Pocketplanung als neue Stunde importieren,
+- Pocket-Phasen an die bestehende Stunde anhängen,
+- Pocketplanung verwenden (ersetzt die bisherige Planung).
+
+Jeder Import lässt sich mit **Strg+Z** zurücknehmen.
+
+### Neue Kompetenzen aus Pocket
+Wurde unterwegs eine Kompetenz oder Sprechabsicht frei eingegeben, fragt die
+Vorschau, ob sie **dauerhaft in die Bibliothek** soll. Ohne Häkchen steht sie
+nur in dieser einen Stunde.
+
+---
+
 Wenn du irgendwo nicht weiterkommst: Notiere kurz, **in welcher Ansicht** du bist und was genau du erwartest – dann lässt sich das sehr schnell verbessern.

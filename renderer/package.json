@@ -1,0 +1,6 @@
+{
+  "name": "prepybara-renderer",
+  "private": true,
+  "//": "Nur eine Auszeichnung, kein eigenes Paket: Die Quellen unter renderer/src sind ESM. Ohne diesen Vermerk liest Node .js-Dateien hier als CommonJS und die Testlaeufe scheitern an 'export'. Vite und electron-builder bleiben davon unberuehrt - die Desktop-App wird weiterhin ueber die Wurzel gebaut.",
+  "type": "module"
+}

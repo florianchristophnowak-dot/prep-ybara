@@ -314,6 +314,29 @@ function installAppMenu(mainWin){
       ]
     },
     {
+      /* Import / Export – bisher lagen diese Wege nur in den
+         Einstellungen. Der Austausch mit Prép-ybara Pocket gehört
+         dorthin, wo man ihn sucht: in die Menüleiste. Beide Punkte
+         melden sich beim Renderer; dort liegen Prüfung, Vorschau und
+         Konfliktbehandlung. */
+      label: 'Import / Export',
+      submenu: [
+        {
+          label: 'Prép-ybara Pocket',
+          submenu: [
+            {
+              label: 'Pocket-Profil exportieren …',
+              click: () => { try { mainWin.webContents.send('menu:pocket', 'export-profile'); } catch {} }
+            },
+            {
+              label: 'Pocket-Import öffnen …',
+              click: () => { try { mainWin.webContents.send('menu:pocket', 'import'); } catch {} }
+            }
+          ]
+        }
+      ]
+    },
+    {
       label: 'Hilfe',
       submenu: [
         {
@@ -506,6 +529,38 @@ ipcMain.handle('backup:import', async () => {
   if (imported.schemaVersion < SCHEMA_VERSION) imported.schemaVersion = SCHEMA_VERSION;
   setDB(imported);
   return imported;
+});
+
+/* ---- Prép-ybara Pocket ------------------------------------------------
+   Nur Dateiein- und -ausgabe. Was in der Datei steht, erzeugt und prüft
+   der Renderer über die gemeinsame Schicht in shared/exchange – hier
+   gibt es bewusst keine zweite Umsetzung des Formats. */
+
+const POCKET_PROFILE_FILTER = { name: 'Prép-ybara Pocket-Profil', extensions: ['prepybara-profile'] };
+const POCKET_LESSON_FILTER = { name: 'Prép-ybara Pocket', extensions: ['prepybara-lesson', 'prepybara-lessons'] };
+
+ipcMain.handle('pocket:export-profile', async (_evt, payload) => {
+  const p = (payload && typeof payload === 'object') ? payload : {};
+  const content = String(p.content || '');
+  if (!content) return null;
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    defaultPath: String(p.fileName || 'Prepybara-Pocket-Profil.prepybara-profile'),
+    filters: [POCKET_PROFILE_FILTER, { name: 'Alle Dateien', extensions: ['*'] }]
+  });
+  if (canceled || !filePath) return null;
+  fs.writeFileSync(filePath, content, 'utf-8');
+  return filePath;
+});
+
+ipcMain.handle('pocket:import-file', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [POCKET_LESSON_FILTER, POCKET_PROFILE_FILTER, { name: 'Alle Dateien', extensions: ['*'] }]
+  });
+  if (canceled || !filePaths?.[0]) return null;
+  // Der Inhalt wird als Text zurückgegeben; das Prüfen bleibt im Renderer.
+  const content = fs.readFileSync(filePaths[0], 'utf-8');
+  return { name: path.basename(filePaths[0]), content };
 });
 
 ipcMain.handle('execution:open', async (_evt, snapshot) => {

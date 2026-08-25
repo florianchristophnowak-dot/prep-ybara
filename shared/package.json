@@ -1,0 +1,6 @@
+{
+  "name": "prepybara-shared",
+  "private": true,
+  "//": "Gemeinsame Schicht von Desktop und Pocket: Austauschschema, stabile Kennungen, Pruefung. Kein eigenes Paket mit Abhaengigkeiten - nur die Auszeichnung als ESM.",
+  "type": "module"
+}

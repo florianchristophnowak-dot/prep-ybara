@@ -1,0 +1,571 @@
+/* ============================================================
+   Prép-ybara Pocket – mobiles Designsystem
+
+   Verwandt mit Prép-ybara, aber nicht dessen Verkleinerung. Dieselbe
+   Leitfarbe, dieselbe Schrift, dieselbe ruhige Papierfläche – und
+   sonst andere Regeln:
+
+     eine Spalte, immer
+     Berührungsziele ab 44px
+     Karten statt Tabellen
+     Chips statt Auswahllisten
+     grosse Eingabefelder
+     wenige Dialoge, dafür Blätter von unten
+
+   Es gibt bewusst nichts, was von einem Mauszeiger abhängt: kein
+   Hover-Menü, keine winzigen Symbolknöpfe, keine Seitenleiste.
+   ============================================================ */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  /* Dieselbe mitgelieferte Schrift wie die Desktop-App – die Datei wird
+     in das Pocket-Bündel kopiert, nicht nachgeladen. */
+  src: url('../../renderer/src/assets/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../../renderer/src/assets/fonts/inter-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #f8f9fc;
+  --bg-subtle: #f3f4f8;
+  --card: #ffffff;
+  --parchment: #eff6ff;
+
+  --text: #1a1d26;
+  --text-secondary: #4a5068;
+  --muted: #6b7280;
+
+  --border: #e2e4eb;
+  --border-light: #eef0f5;
+  --border-strong: #cbd5e1;
+
+  --primary: #4f6ef7;
+  --primary-hover: #3d5ce5;
+  --primary-ink: #1d4ed8;
+  --primary-soft: #eef1fe;
+  --on-primary: #ffffff;
+
+  --danger: #ef4444;
+  --danger-soft: #fef2f2;
+  --success: #10b981;
+  --success-soft: #ecfdf5;
+  --warning: #f59e0b;
+  --warning-soft: #fffbeb;
+
+  --scrim: rgba(26, 29, 38, 0.46);
+
+  --radius: 14px;
+  --radius-sm: 10px;
+  --tap: 44px;                 /* kleinstes Berührungsziel */
+  --kopf-hoehe: 56px;
+  --fuss-hoehe: 60px;
+  --rand: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161c;
+    --bg-subtle: #1a1d25;
+    --card: #1e212a;
+    --parchment: #1c2438;
+
+    --text: #f2f4f8;
+    --text-secondary: #c2c7d4;
+    --muted: #9aa1b1;
+
+    --border: #2c3040;
+    --border-light: #262a36;
+    --border-strong: #3a4054;
+
+    --primary: #7d95ff;
+    --primary-hover: #93a7ff;
+    --primary-ink: #b9c6ff;
+    --primary-soft: #232a44;
+    --on-primary: #10142a;
+
+    --danger: #f87171;
+    --danger-soft: #33212a;
+    --success: #34d399;
+    --success-soft: #16302a;
+    --warning: #fbbf24;
+    --warning-soft: #33291a;
+
+    --scrim: rgba(0, 0, 0, 0.6);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 16px;              /* nie kleiner: iOS zoomt sonst beim Tippen */
+  line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: none;
+}
+
+button, input, select, textarea { font: inherit; color: inherit; }
+
+/* ---- Gerüst ---------------------------------------------------------- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  min-height: 100dvh;
+}
+
+.kopf {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--kopf-hoehe);
+  padding: 8px var(--rand);
+  padding-top: calc(8px + env(safe-area-inset-top));
+  background: var(--card);
+  border-bottom: 1px solid var(--border);
+}
+
+.kopfTitel {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kopfUnter {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inhalt {
+  flex: 1;
+  padding: var(--rand);
+  padding-bottom: calc(var(--fuss-hoehe) + 32px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 640px;             /* auf dem Tablet nicht auseinanderlaufen */
+  width: 100%;
+  margin: 0 auto;
+}
+
+.fuss {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  background: var(--card);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.fussKnopf {
+  min-height: var(--fuss-hoehe);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fussKnopf.aktiv { color: var(--primary); }
+.fussKnopf .fussSymbol { font-size: 20px; line-height: 1; }
+
+/* ---- Karten und Abschnitte ------------------------------------------- */
+
+.abschnitt { display: flex; flex-direction: column; gap: 10px; }
+
+.abschnittTitel {
+  margin: 6px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.karte {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.karte--flach { padding: 12px 14px; gap: 6px; }
+
+.karteKnopf {
+  width: 100%;
+  text-align: left;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: var(--tap);
+}
+.karteKnopf:active { background: var(--bg-subtle); }
+
+.karteTitel { font-weight: 640; font-size: 16px; }
+.karteZeile { font-size: 13px; color: var(--text-secondary); }
+.leise { color: var(--muted); font-size: 13px; }
+.klein { font-size: 12px; }
+
+.reihe { display: flex; align-items: center; gap: 8px; }
+.reihe--umbruch { flex-wrap: wrap; }
+.wachs { flex: 1; min-width: 0; }
+
+.trenner { height: 1px; background: var(--border-light); margin: 2px 0; }
+
+/* ---- Knöpfe ---------------------------------------------------------- */
+
+.knopf {
+  min-height: var(--tap);
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--card);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 15px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.knopf:active { background: var(--bg-subtle); }
+.knopf[disabled] { opacity: 0.5; cursor: default; }
+
+.knopf--primaer {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+.knopf--primaer:active { background: var(--primary-hover); }
+
+.knopf--gefahr { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.knopf--breit { width: 100%; }
+.knopf--leise { border-color: transparent; background: transparent; color: var(--primary); }
+.knopf--klein { min-height: 38px; padding: 6px 12px; font-size: 14px; }
+
+/* Symbolknopf – trotzdem 44px gross, nur optisch zurückgenommen. */
+.symbolKnopf {
+  min-width: var(--tap);
+  min-height: var(--tap);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+}
+.symbolKnopf:active { background: var(--bg-subtle); }
+.symbolKnopf[disabled] { opacity: 0.35; }
+
+/* ---- Eingaben -------------------------------------------------------- */
+
+.feld { display: flex; flex-direction: column; gap: 6px; }
+
+.feldName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.eingabe, .flaeche, .auswahl {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 11px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  color: var(--text);
+  font-size: 16px;
+}
+
+.flaeche { resize: none; overflow: hidden; line-height: 1.5; }
+
+.eingabe:focus, .flaeche:focus, .auswahl:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-color: var(--primary);
+}
+
+.eingabe::placeholder, .flaeche::placeholder { color: var(--muted); }
+
+/* ---- Chips ----------------------------------------------------------- */
+
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.chip {
+  min-height: 38px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--card);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 550;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.chip:active { background: var(--bg-subtle); }
+
+.chip.gewaehlt {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary-ink);
+}
+
+.chip.primaer {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+
+.chip--neu { border-style: dashed; color: var(--primary); }
+
+.chipStern { font-size: 12px; }
+
+/* ---- Aufklappbares --------------------------------------------------- */
+
+.klapp {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.klappGriff {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.klappZeichen { color: var(--muted); font-size: 13px; }
+.klappZahl {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--primary-ink);
+  background: var(--primary-soft);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+.klappInhalt {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---- Phasen ---------------------------------------------------------- */
+
+.phase {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  overflow: hidden;
+}
+
+.phaseKopf {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.phaseNummer {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 8px;
+  background: var(--primary-soft);
+  color: var(--primary-ink);
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.phaseTitel { font-weight: 640; font-size: 15px; }
+.phaseDauer { font-size: 13px; color: var(--muted); white-space: nowrap; }
+
+.phaseKoerper { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+
+.phaseWerkzeuge {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px 12px;
+  flex-wrap: wrap;
+}
+
+.dauerReihe { display: flex; align-items: center; gap: 8px; }
+.dauerWert { min-width: 74px; text-align: center; font-weight: 600; }
+
+/* ---- Blatt (Dialog von unten) ---------------------------------------- */
+
+.blattHuelle {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--scrim);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.blatt {
+  width: 100%;
+  max-width: 640px;
+  max-height: 88dvh;
+  overflow-y: auto;
+  background: var(--card);
+  border-radius: 18px 18px 0 0;
+  padding: 18px var(--rand);
+  padding-bottom: calc(18px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: blattAuf 0.18s ease-out;
+}
+
+@keyframes blattAuf { from { transform: translateY(14px); opacity: 0.6; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .blatt { animation: none; } }
+
+.blattTitel { margin: 0; font-size: 18px; font-weight: 680; }
+
+/* ---- Hinweise -------------------------------------------------------- */
+
+.hinweis {
+  border-radius: var(--radius-sm);
+  padding: 11px 13px;
+  font-size: 14px;
+  background: var(--parchment);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+.hinweis--warnung { background: var(--warning-soft); border-color: var(--warning); color: var(--text); }
+.hinweis--fehler { background: var(--danger-soft); border-color: var(--danger); color: var(--text); }
+.hinweis--gut { background: var(--success-soft); border-color: var(--success); color: var(--text); }
+
+.meldung {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--fuss-hoehe) + 16px + env(safe-area-inset-bottom));
+  z-index: 70;
+  max-width: min(92vw, 520px);
+  background: var(--text);
+  color: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 11px 15px;
+  font-size: 14px;
+  font-weight: 550;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+}
+
+/* ---- Listenzeile mit Auswahlkästchen (Mehrfachexport) ---------------- */
+
+.wahlZeile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  cursor: pointer;
+  min-height: var(--tap);
+}
+.wahlZeile input { width: 22px; height: 22px; accent-color: var(--primary); flex: none; }
+
+/* ---- Leerer Zustand -------------------------------------------------- */
+
+.leerBild {
+  text-align: center;
+  padding: 26px 10px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.leerBild .gross { font-size: 30px; }
+
+/* Fussleiste beim Bearbeiten: die Haupthandlung bleibt erreichbar,
+   ohne dass man ans Ende scrollen muss. */
+.aktionsLeiste {
+  position: sticky;
+  bottom: calc(env(safe-area-inset-bottom));
+  display: flex;
+  gap: 8px;
+  padding: 10px 0 2px;
+  background: linear-gradient(to top, var(--bg) 70%, transparent);
+}

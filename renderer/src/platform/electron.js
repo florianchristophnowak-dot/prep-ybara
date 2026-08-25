@@ -97,6 +97,8 @@ export function createElectronPlatform(api){
       revealInFolder: typeof api.revealPath === 'function',
       openExternally: typeof api.openPath === 'function',
       executionWindow: typeof api.openExecutionWindow === 'function',
+      // Ältere Preload-Brücken kennen den Pocket-Austausch nicht.
+      pocketFiles: typeof api.exportPocketProfile === 'function',
     },
 
     loadDB,
@@ -106,6 +108,9 @@ export function createElectronPlatform(api){
     importBackup: () => api.importBackup(),
     exportTemplates: () => api.exportTemplates(),
     importTemplates: () => api.importTemplates(),
+
+    exportPocketProfile: (payload) => api.exportPocketProfile(payload),
+    importPocketFile: () => api.importPocketFile(),
 
     exportPdf: (payload) => api.exportPdf(payload),
     exportDocx: (payload) => api.exportDocx(payload),
@@ -120,5 +125,7 @@ export function createElectronPlatform(api){
     getExecutionSnapshot: () => api.getExecutionSnapshot(),
     onExecutionInit: (cb) => (wrap(api.onExecutionInit) ? api.onExecutionInit(cb) : ()=>{}),
     onOpenHelp: (cb) => (wrap(api.onOpenHelp) ? api.onOpenHelp(cb) : ()=>{}),
+    /* Menüpunkt "Import / Export → Prép-ybara Pocket". */
+    onPocketMenu: (cb) => (wrap(api.onPocketMenu) ? api.onPocketMenu(cb) : ()=>{}),
   };
 }

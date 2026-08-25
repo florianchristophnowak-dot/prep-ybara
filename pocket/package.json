@@ -1,0 +1,15 @@
+{
+  "name": "prepybara-pocket",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Prép-ybara Pocket – mobile Begleit-App zur Erfassung einzelner Unterrichtsstunden",
+  "author": "Florian Nowak",
+  "license": "MIT",
+  "type": "module",
+  "//": "Eigene Versionsnummer, bewusst getrennt von der Desktop-App: verträglich sind beide über die schemaVersion des Austauschformats, nicht über eine gemeinsame Versionsnummer. Abhängigkeiten stehen absichtlich NICHT hier - Pocket benutzt dieselbe Installation wie die Desktop-App (React, Vite, idb-keyval, vite-plugin-pwa liegen bereits im Wurzelverzeichnis). Ein 'npm install' im Projektordner genügt für beide Anwendungen.",
+  "scripts": {
+    "dev": "npm --prefix .. run dev:pocket",
+    "build": "npm --prefix .. run build:pocket",
+    "preview": "npm --prefix .. run preview:pocket"
+  }
+}

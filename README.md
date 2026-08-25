@@ -46,5 +46,88 @@ npm run dist:portable
 ## PDF
 - In der Einzelstundenansicht: **PDF speichern** (wird als A4-PDF erzeugt)
 
+---
+
+# Prép-ybara Pocket (mobile Begleit-App)
+
+> **Pocket erfasst – Prép-ybara organisiert.**
+
+Pocket ist eine sehr schlanke, installierbare Web-App (PWA) fürs Smartphone.
+Sie plant *einzelne Stunden unterwegs* – und ist ausdrücklich **keine
+verkleinerte Fassung** der Desktop-App: keine Jahresplanung, keine Sequenzen,
+keine Materialbibliothek, keine Nachbereitung.
+
+Alles bleibt lokal: kein Konto, keine Cloud, keine KI, keine externen Dienste,
+keine Statistik. Der Austausch mit der Desktop-App läuft **ausschliesslich über
+Dateien**.
+
+## Aufbau des Projekts
+
+```
+renderer/          Desktop-App (Electron + Browser-Fassung)   – unverändert
+electron/          Hauptprozess, Preload, Menü
+pocket/            Prép-ybara Pocket (PWA)
+  src/views/       mobile Ansichten
+  vite.config.mjs  eigener Bau, eigener Service Worker
+shared/            von beiden benutzt
+  exchange/        Austauschformat, stabile Kennungen, Prüfung
+  types/           Typbeschreibung des Formats (.d.ts)
+  datum.js         Datumsrechnung
+tests/             node:test – Format, Import, Pocket-Modell
+```
+
+Geteilt werden **Format, Kennungen und Prüfung** – keine Oberflächenbausteine.
+Desktop und Pocket haben **getrennte Versionsnummern**; verträglich sind sie
+über die `schemaVersion` der Austauschdateien.
+
+## Befehle
+
+```bash
+npm install          # einmal, für beide Anwendungen
+
+npm run dev          # Desktop (Vite + Electron)
+npm run build        # Desktop-Renderer bauen
+npm run dist:win     # Windows-Installer
+
+npm run dev:pocket   # Pocket im Browser, Port 5174
+npm run build:pocket # Pocket bauen  → dist/pocket
+npm run preview:pocket
+npm run build:all    # beides
+
+npm test             # Austauschformat, Import, Pocket-Modell
+```
+
+Zum Ausprobieren auf dem Telefon: `npm run dev:pocket` starten und im
+Handy-Browser die angezeigte Netzwerkadresse öffnen (gleiches WLAN). Für die
+Installation zum Startbildschirm braucht der Browser HTTPS oder `localhost`;
+für einen dauerhaften Einsatz `npm run build:pocket` und den Ordner
+`dist/pocket` als statische Seite bereitstellen.
+
+## Austauschdateien
+
+| Datei | Richtung | Inhalt |
+|---|---|---|
+| `.prepybara-profile` | Desktop → Pocket | Lerngruppen, Fächer, Stundenplan (4 Wochen), Kompetenzen, Sprechabsichten, Sozialformen, Phasentypen |
+| `.prepybara-lesson` | Pocket → Desktop | eine geplante Stunde |
+| `.prepybara-lessons` | Pocket → Desktop | mehrere Stunden in einer Datei |
+
+Technisch JSON, jede Datei nennt `format` und `schemaVersion`.
+**Nicht enthalten:** Schülerlisten, Noten, Leistungsdaten, Nachbereitung, To-dos.
+
+## Wege
+
+**Profil aufs Telefon:** Desktop → *Einstellungen → Prép-ybara Pocket →
+Pocket-Profil exportieren* (oder Menü *Import / Export*) → Datei aufs Telefon →
+Pocket → *Einstellungen → Profil importieren*. Ein neues Profil löscht keine
+Entwürfe.
+
+**Stunde an den PC:** Pocket → *Für Prép-ybara exportieren* (Teilen oder
+Herunterladen) → Desktop → *Einstellungen → Pocket-Import öffnen* → Datei
+wählen oder hineinziehen → **Vorschau** → *Importieren*.
+
+Steht am Zieltermin bereits eine Planung, wird **nie automatisch
+überschrieben**: beibehalten, als neue Stunde importieren, Phasen anhängen oder
+ersetzen. Jeder Import ist mit **Strg+Z** zurückzunehmen.
+
 ## Hinweis
 Wenn beim Start etwas nicht klappt, poste bitte die komplette Fehlermeldung aus PowerShell.

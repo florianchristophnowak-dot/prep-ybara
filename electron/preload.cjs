@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('api', {
   importBackup: () => ipcRenderer.invoke('backup:import'),
   exportTemplates: () => ipcRenderer.invoke('templates:export'),
   importTemplates: () => ipcRenderer.invoke('templates:import'),
+
+  // Austausch mit Prép-ybara Pocket (dateibasiert, keine Verbindung)
+  exportPocketProfile: (payload) => ipcRenderer.invoke('pocket:export-profile', payload),
+  importPocketFile: () => ipcRenderer.invoke('pocket:import-file'),
   exportPdf: (payload) => ipcRenderer.invoke('pdf:export', payload),
   exportDocx: (payload) => ipcRenderer.invoke('docx:export', payload),
 
@@ -36,5 +40,13 @@ contextBridge.exposeInMainWorld('api', {
     const handler = () => cb();
     ipcRenderer.on('menu:open-help', handler);
     return () => ipcRenderer.removeListener('menu:open-help', handler);
+  },
+
+  // Import / Export → Prép-ybara Pocket
+  onPocketMenu: (cb) => {
+    if (typeof cb !== 'function') return () => {};
+    const handler = (_evt, aktion) => cb(aktion);
+    ipcRenderer.on('menu:pocket', handler);
+    return () => ipcRenderer.removeListener('menu:pocket', handler);
   }
 });

@@ -1790,3 +1790,27 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 }
 .exportVorschauTabelle th { background: var(--bg-subtle); text-align: left; font-weight: var(--fw-bold); }
 .exportVorschauTabelle td { color: var(--muted); }
+
+/* ============================================================
+   Pocket-Import: Ablagefläche für Dateien
+
+   Zwei Wege zur selben Sache – ziehen oder auswählen. Die Fläche ist
+   gross genug, um sie beim Ziehen zu treffen, und sagt beim Überfahren,
+   dass sie bereit ist.
+   ============================================================ */
+.pocketDrop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 26px 18px;
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius-lg, 10px);
+  background: var(--bg-subtle);
+  text-align: center;
+}
+.pocketDrop.is-over {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}

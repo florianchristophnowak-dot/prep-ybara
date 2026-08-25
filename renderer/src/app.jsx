@@ -15,6 +15,15 @@ import {
   istSystemKompetenz, istSystemBereich,
 } from './competencies.js';
 import { erstelleDidaktikCheck, phasenDidaktikImpuls } from './didaktik-check.js';
+/* Austausch mit Prép-ybara Pocket. Geteilt wird ausschliesslich das
+   Format – Oberfläche und Datenmodell bleiben je Anwendung eigen. */
+import { fehlertext, leseStundenDatei, FORMAT_PROFILE } from '../../shared/exchange/index.js';
+import { formatDatum as formatDatumLang } from '../../shared/datum.js';
+import { buildPocketProfile, pocketProfilDateiname } from './pocket-profile.js';
+import {
+  MODI as POCKET_MODI, analysierePocketStunde, fuehrePocketImportAus,
+  naechsterFreierSlot, pruefeZiel, vorschauZeilen, zielFuer,
+} from './pocket-import.js';
 import {
   PLANUNGSFELDER, PLANUNGSPROFILE, EXPORTLAYOUTS, NEUE_PHASENFELDER,
   STANDARD_PROFIL, STANDARD_LAYOUT,
@@ -1718,6 +1727,7 @@ function SpeechActManager({ eigene, onRename, onDelete }){
 }
 
 function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onImportBackup,
+                        onExportPocketProfile, onOpenPocketImport,
                         weekReview, onChangeWeekReview,
                         languageMode, onChangeLanguageMode,
                         defaultPlanningProfile, onChangeDefaultPlanningProfile,
@@ -1874,6 +1884,27 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
             <button className="btn" onClick={onImportBackup}>Backup importieren</button>
           </div>
         ) : null}
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Prép-ybara Pocket</h3>
+        <p className="settingsText">
+          <strong>Pocket erfasst – Prép-ybara organisiert.</strong> Die mobile
+          Begleit-App plant einzelne Stunden unterwegs; hier werden sie eingesetzt.
+          Der Austausch läuft über Dateien, es gibt keine Verbindung und keine
+          gemeinsame Datenbank.
+        </p>
+        <p className="settingsText muted small">
+          Das Profil enthält Lerngruppen, Fächer, Stundenplan, Kompetenzen,
+          Sprechabsichten, Sozialformen und Phasentypen – ausdrücklich keine
+          Schülerdaten, Noten oder Nachbereitungen.
+        </p>
+        <div className="row wrap" style={{gap:8, marginTop:10}}>
+          {capabilities.pocketFiles ? (
+            <button className="btn primary" onClick={onExportPocketProfile}>Pocket-Profil exportieren</button>
+          ) : null}
+          <button className="btn" onClick={onOpenPocketImport}>Pocket-Import öffnen</button>
+        </div>
       </section>
 
       <section>
@@ -2879,6 +2910,386 @@ function ThemeSwitch({ value, onChange }){
   );
 }
 
+/* ============================================================
+   Pocket-Import
+
+   Der Weg zurück: eine Datei aus Prép-ybara Pocket wird zu einer
+   Stunde in der Wochenplanung.
+
+   Der Ablauf ist bewusst dreiteilig und nicht zweiteilig:
+
+       Datei wählen  →  VORSCHAU  →  Importieren
+
+   Die Vorschau ist keine Höflichkeit. Sie ist die Stelle, an der
+   sichtbar wird, wohin die Stunde geht, was dort schon steht und was an
+   ihr neu ist. Ohne sie wäre der Import ein Sprung ins Ungewisse – und
+   ein überschriebener Donnerstag wäre nicht zu bemerken, bevor er weg
+   ist.
+
+   Drei Regeln, die diese Ansicht durchhält:
+
+   1. Nichts wird automatisch überschrieben. Steht am Zieltermin bereits
+      eine Planung, gibt es vier Wege – und der voreingestellte ist
+      "Desktopplanung beibehalten".
+   2. Ein zweiter Import derselben Pocket-Kennung wird gemeldet, bevor
+      er passiert.
+   3. Neue Kompetenzen und Sprechabsichten kommen nur in die Bibliothek,
+      wenn das ausdrücklich angehakt wird. In der Stunde stehen sie in
+      jedem Fall.
+
+   Jeder Import ist über Strg+Z zurückzunehmen.
+   ============================================================ */
+
+const POCKET_MODUS_OPTIONEN = [
+  {
+    id: 'behalten',
+    name: 'Desktopplanung beibehalten',
+    beschreibung: 'Es wird nichts importiert. Die vorhandene Stunde bleibt unverändert.',
+  },
+  {
+    id: POCKET_MODI.NEU,
+    name: 'Pocketplanung als neue Stunde importieren',
+    beschreibung: 'Die vorhandene Stunde bleibt. Die Pocket-Planung kommt an den nächsten freien Platz desselben Tages.',
+  },
+  {
+    id: POCKET_MODI.ANHAENGEN,
+    name: 'Pocket-Phasen an die bestehende Stunde anhängen',
+    beschreibung: 'Thema, Ziele und Kompetenzen der vorhandenen Stunde bleiben. Nur die Phasen und die Notiz kommen dazu.',
+  },
+  {
+    id: POCKET_MODI.ERSETZEN,
+    name: 'Pocketplanung verwenden',
+    beschreibung: 'Die vorhandene Planung dieses Termins wird ersetzt. Die Sequenzzuordnung bleibt erhalten.',
+  },
+];
+
+function pocketTrefferText(treffer){
+  if (treffer === 'id') return 'automatisch erkannt';
+  if (treffer === 'name') return 'über den Namen erkannt';
+  if (treffer === 'neu') return 'im Desktop noch unbekannt – wird angelegt';
+  return 'nicht zugeordnet';
+}
+
+function PocketEintrag({ eintrag, db, onAendern, onImport, onOpenLesson }){
+  const { analyse, ziel, modus, kompetenzen, sprechabsichten, status, ergebnis } = eintrag;
+  const zielInfo = pruefeZiel(db, ziel);
+  const freierSlot = ziel ? naechsterFreierSlot(db, ziel.weekStart, ziel.dayIndex) : null;
+
+  const zeilen = vorschauZeilen(analyse);
+  const konflikt = zielInfo.konflikt;
+  const wirklicherModus = konflikt ? modus : POCKET_MODI.NEU;
+  const kannImportieren = Boolean(ziel)
+    && (!konflikt || (modus !== 'behalten' && (modus !== POCKET_MODI.NEU || freierSlot !== null)));
+
+  if (status === 'importiert') {
+    return (
+      <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="row wrap" style={{ gap: 8 }}>
+          <b>{analyse.titel}</b>
+          <span className="badge">importiert</span>
+        </div>
+        <div className="muted small">
+          {[analyse.gruppenName, ergebnis?.ziel?.dateISO ? formatDatumLang(ergebnis.ziel.dateISO, { lang: true }) : '',
+            ergebnis?.ziel ? `${ergebnis.ziel.slotIndex + 1}. Stunde` : ''].filter(Boolean).join(' · ')}
+        </div>
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn" onClick={()=>onOpenLesson?.(ergebnis.ziel)}>Zur Stunde</button>
+          <span className="muted small">Strg+Z nimmt den Import zurück.</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div>
+        <div className="row wrap" style={{ gap: 8 }}>
+          <b style={{ fontSize: 'var(--fs-lg)' }}>{analyse.titel}</b>
+          {analyse.stunde.kind === 'quick' ? <span className="badge">Schnellplanung</span> : null}
+          {analyse.stunde.kind === 'idea' ? <span className="badge">Unterrichtsidee</span> : null}
+        </div>
+        <div className="muted small">
+          {analyse.gruppenName || 'Ohne Lerngruppe'}
+          {' · '}
+          {pocketTrefferText(analyse.klasse.treffer)}
+        </div>
+      </div>
+
+      {zeilen.length ? (
+        <div className="muted small">{zeilen.join(' · ')}</div>
+      ) : null}
+
+      {/* Eine Desktop-Stunde ist auf 45 Minuten aufgeteilt; Pocket lässt
+          die Dauer frei. Weicht die Summe ab, gleicht der Desktop die
+          letzte Phase an – das soll man vorher wissen, nicht nachher
+          bemerken. */}
+      {analyse.statistik.phasen && analyse.statistik.minuten !== 45 ? (
+        <div className="muted small">
+          Die Phasen ergeben {analyse.statistik.minuten} Minuten. Eine Stunde in Prép-ybara
+          umfasst 45 Minuten – die letzte Phase wird beim Import entsprechend angepasst.
+        </div>
+      ) : null}
+
+      {/* Termin – vorbelegt aus der Datei, hier änderbar. Ohne Datum in
+          der Datei ist das der Weg zur manuellen Zuordnung. */}
+      <div className="row wrap" style={{ gap: 10 }}>
+        <label className="grow">
+          <span className="small muted">Datum</span>
+          <input
+            type="date"
+            value={ziel?.dateISO || ''}
+            onChange={(e)=>onAendern({ ziel: zielFuer(e.target.value, ziel?.lessonNumber || 1) })}
+          />
+        </label>
+        <label>
+          <span className="small muted">Stunde</span>
+          <select
+            value={ziel?.lessonNumber || ''}
+            onChange={(e)=>onAendern({ ziel: zielFuer(ziel?.dateISO || '', e.target.value) })}
+          >
+            <option value="">–</option>
+            {[1,2,3,4,5,6,7,8,9,10].map(n => <option key={n} value={n}>{n}.</option>)}
+          </select>
+        </label>
+      </div>
+
+      {ziel ? (
+        <div className="muted small">{formatDatumLang(ziel.dateISO, { lang: true })} · {ziel.lessonNumber}. Stunde</div>
+      ) : (
+        <div className="inlineNotice inlineNotice--warning">
+          Diese Datei nennt keinen vollständigen Termin. Bitte Datum und Stunde wählen.
+        </div>
+      )}
+
+      {analyse.bereitsImportiert ? (
+        <div className="inlineNotice inlineNotice--warning">
+          Dieser Pocket-Entwurf wurde möglicherweise bereits importiert
+          {analyse.bereitsImportiert.importedAt
+            ? ` (${new Date(analyse.bereitsImportiert.importedAt).toLocaleString('de-DE')})`
+            : ''}.
+          Ein erneuter Import legt eine zweite Stunde an.
+        </div>
+      ) : null}
+
+      {konflikt ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="inlineNotice inlineNotice--warning">
+            Für diesen Termin existiert bereits eine Planung
+            {zielInfo.bestehende?.topic ? `: „${zielInfo.bestehende.topic}“` : ''}.
+          </div>
+          {POCKET_MODUS_OPTIONEN.map((o)=>{
+            const gesperrt = o.id === POCKET_MODI.NEU && freierSlot === null;
+            return (
+              <label key={o.id} className="row" style={{ gap: 8, alignItems: 'flex-start', opacity: gesperrt ? 0.5 : 1 }}>
+                <input
+                  type="radio"
+                  name={`pocket-modus-${analyse.stunde.externalId}`}
+                  checked={modus === o.id}
+                  disabled={gesperrt}
+                  onChange={()=>onAendern({ modus: o.id })}
+                  style={{ marginTop: 4 }}
+                />
+                <span>
+                  <b>{o.name}</b>
+                  <span className="muted small" style={{ display: 'block' }}>
+                    {o.beschreibung}
+                    {o.id === POCKET_MODI.NEU
+                      ? (freierSlot === null
+                        ? ' An diesem Tag ist kein Platz frei – bitte einen anderen Termin wählen.'
+                        : ` Hier: ${freierSlot + 1}. Stunde.`)
+                      : ''}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {(analyse.neueKompetenzen.length || analyse.neueSprechabsichten.length) ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div className="small" style={{ fontWeight: 600 }}>Neu aus Pocket</div>
+          <div className="muted small">
+            Diese Einträge stehen in jedem Fall in der importierten Stunde. Angehakt kommen
+            sie zusätzlich dauerhaft in die Bibliothek.
+          </div>
+          {analyse.neueKompetenzen.map((label)=>(
+            <label key={`k-${label}`} className="row" style={{ gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={kompetenzen.includes(label)}
+                onChange={(e)=>onAendern({
+                  kompetenzen: e.target.checked
+                    ? [...kompetenzen, label]
+                    : kompetenzen.filter(l => l !== label),
+                })}
+              />
+              <span>Neue Kompetenz: „{label}“ zur Bibliothek hinzufügen</span>
+            </label>
+          ))}
+          {analyse.neueSprechabsichten.map((label)=>(
+            <label key={`s-${label}`} className="row" style={{ gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={sprechabsichten.includes(label)}
+                onChange={(e)=>onAendern({
+                  sprechabsichten: e.target.checked
+                    ? [...sprechabsichten, label]
+                    : sprechabsichten.filter(l => l !== label),
+                })}
+              />
+              <span>Neue Sprechabsicht: „{label}“ zur Bibliothek hinzufügen</span>
+            </label>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="row" style={{ gap: 8 }}>
+        <button
+          className="btn primary"
+          disabled={!kannImportieren}
+          onClick={()=>onImport(wirklicherModus)}
+        >Importieren</button>
+        {konflikt && modus === 'behalten' ? (
+          <span className="muted small">Es wird nichts importiert – die Desktopplanung bleibt.</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function PocketImportView({ db, todayISO, onImport, onOpenLesson, onExportProfile }){
+  const [eintraege, setEintraege] = useState([]);
+  const [quelle, setQuelle] = useState('');
+  const [fehler, setFehler] = useState('');
+  const [ueberDatei, setUeberDatei] = useState(false);
+
+  const lies = useCallback((name, inhalt)=>{
+    setQuelle(name || '');
+    try {
+      /* Ein versehentlich abgelegtes Profil ist der wahrscheinlichste
+         Irrtum – dafür lohnt eine eigene, klare Auskunft. */
+      let vorab = null;
+      try { vorab = JSON.parse(String(inhalt || '')); } catch {}
+      if (vorab && vorab.format === FORMAT_PROFILE) {
+        setEintraege([]);
+        setFehler('Das ist ein Pocket-Profil, keine Stunde. Profile gehen von hier nach Pocket, nicht umgekehrt.');
+        return;
+      }
+      const stunden = leseStundenDatei(inhalt);
+      setEintraege(stunden.map((s)=>{
+        const analyse = analysierePocketStunde(s, db, { todayISO });
+        return {
+          analyse,
+          ziel: analyse.ziel,
+          modus: 'behalten',
+          kompetenzen: [],
+          sprechabsichten: [],
+          status: 'offen',
+          ergebnis: null,
+        };
+      }));
+      setFehler('');
+    } catch (err) {
+      setEintraege([]);
+      setFehler(fehlertext(err, 'Diese Datei ist kein gültiger Prép-ybara-Pocket-Export.'));
+    }
+  }, [db, todayISO]);
+
+  const waehleDatei = async ()=>{
+    try {
+      const datei = await platform.importPocketFile?.();
+      if (!datei) return;
+      lies(datei.name, datei.content);
+    } catch (err) {
+      setFehler(String(err?.message || err));
+    }
+  };
+
+  const beiDrop = async (e)=>{
+    e.preventDefault();
+    setUeberDatei(false);
+    const datei = e.dataTransfer?.files?.[0];
+    if (!datei) return;
+    try { lies(datei.name, await datei.text()); }
+    catch { setFehler('Die Datei konnte nicht gelesen werden.'); }
+  };
+
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div>
+        <h2 className="dialogTitle">Import aus Prép-ybara Pocket</h2>
+        <p className="muted small" style={{ margin: 0 }}>
+          Pocket erfasst unterwegs, Prép-ybara organisiert. Der Austausch läuft über
+          Dateien – es gibt keine Verbindung zwischen Telefon und PC.
+        </p>
+      </div>
+
+      <div
+        className={`pocketDrop${ueberDatei ? ' is-over' : ''}`}
+        onDragOver={(e)=>{ e.preventDefault(); setUeberDatei(true); }}
+        onDragLeave={()=>setUeberDatei(false)}
+        onDrop={beiDrop}
+      >
+        <div style={{ fontWeight: 600 }}>Datei hierher ziehen</div>
+        <div className="muted small">.prepybara-lesson oder .prepybara-lessons</div>
+        {capabilities.pocketFiles ? (
+          <button className="btn primary" onClick={waehleDatei}>Datei auswählen …</button>
+        ) : null}
+      </div>
+
+      {quelle ? <div className="muted small">Gelesen: {quelle}</div> : null}
+
+      {fehler ? <div className="inlineNotice inlineNotice--warning">{fehler}</div> : null}
+
+      {eintraege.map((eintrag, index)=>(
+        <PocketEintrag
+          key={eintrag.analyse.stunde.externalId || index}
+          eintrag={eintrag}
+          db={db}
+          onAendern={(patch)=>setEintraege(prev => prev.map((e, i) => i === index ? { ...e, ...patch } : e))}
+          onOpenLesson={onOpenLesson}
+          onImport={(modus)=>{
+            const ergebnis = onImport({
+              analyse: eintrag.analyse,
+              /* Ausgewichen wird nur bei einem echten Konflikt. Eine
+                 leere Stundenhülle am Zieltermin ist kein Grund, den
+                 gewählten Termin zu verlassen. */
+              ziel: modus === POCKET_MODI.NEU && pruefeZiel(db, eintrag.ziel).konflikt
+                ? { ...eintrag.ziel, slotIndex: naechsterFreierSlot(db, eintrag.ziel.weekStart, eintrag.ziel.dayIndex) }
+                : eintrag.ziel,
+              modus,
+              kompetenzen: eintrag.kompetenzen,
+              sprechabsichten: eintrag.sprechabsichten,
+            });
+            if (ergebnis) {
+              setEintraege(prev => prev.map((e, i) => i === index
+                ? { ...e, status: 'importiert', ergebnis }
+                : e));
+            }
+          }}
+        />
+      ))}
+
+      <section>
+        <h3 className="settingsHeading">Profil für Pocket</h3>
+        <p className="settingsText">
+          Das Profil bringt Lerngruppen, Fächer, Stundenplan, Kompetenzen und
+          Sprechabsichten auf das Telefon – damit Pocket dieselben Kennungen benutzt
+          wie diese App. Schülerdaten, Noten und Nachbereitungen sind nicht enthalten.
+        </p>
+        {capabilities.pocketFiles ? (
+          <button className="btn" onClick={onExportProfile}>Pocket-Profil exportieren …</button>
+        ) : (
+          <div className="inlineNotice">
+            Der Profil-Export braucht einen Dateizugriff, den diese Umgebung nicht anbietet.
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function ensureDbShape(raw){
   const db = (raw && typeof raw === 'object') ? raw : {};
   if (!('schemaVersion' in db)) db.schemaVersion = 1;
@@ -3672,6 +4083,8 @@ const classGroupSuggestions = useMemo(()=>{
       { id:'a-copy',    group:'Aktion', label:'In nächste Woche übernehmen', run: ()=>setShowWeekCopyDialog(true) },
       { id:'a-expback', group:'Aktion', label:'Backup exportieren',    run: ()=>exportBackup() },
       { id:'a-impback', group:'Aktion', label:'Backup importieren',    run: ()=>importBackup() },
+      { id:'a-pocketexp', group:'Aktion', label:'Pocket-Profil exportieren', run: ()=>exportPocketProfile() },
+      { id:'v-pocket',  group:'Ansicht', label:'Pocket-Import',        run: go({ name:'pocket', weekStart: ws }) },
 
       { id:'t-light',  group:'Darstellung', label:'Hell',   run: ()=>updateAppSettings({ theme:'light' }) },
       { id:'t-dark',   group:'Darstellung', label:'Dunkel', run: ()=>updateAppSettings({ theme:'dark' }) },
@@ -3859,6 +4272,20 @@ useEffect(()=>{
         return (d && d > weekEndISO) || (dl && dl > weekEndISO);
       }).length;
   }, [todos, view.weekStart, weekEndISO]);
+
+  /* Menüpunkt "Import / Export → Prép-ybara Pocket" der Desktop-App.
+     Im Browser gibt es keine Menüleiste; dort führt der Weg über die
+     Einstellungen.
+
+     Die Anmeldung steht VOR dem frühen Rückgabepfad unten: Hooks müssen
+     in jeder Render-Runde in derselben Reihenfolge laufen, und solange
+     die Datenbank noch lädt, endet App vorher. Was der Menüpunkt tut,
+     steht deshalb in einer Referenz, die weiter unten gesetzt wird. */
+  const pocketMenuRef = useRef(null);
+  useEffect(()=>{
+    if (typeof platform.onPocketMenu !== 'function') return undefined;
+    return platform.onPocketMenu((aktion)=> pocketMenuRef.current?.(aktion));
+  }, []);
 
   if (!db) {
     return <div className="app">
@@ -4235,6 +4662,67 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
         },
       } : null,
     });
+  };
+
+  /* ---- Prép-ybara Pocket ---------------------------------------------
+     Zwei Wege, beide dateibasiert. Erzeugt und geprüft wird in der
+     gemeinsamen Schicht (shared/exchange); hier steht nur, was die App
+     damit tut. */
+
+  const exportPocketProfile = async () => {
+    if (!capabilities.pocketFiles || typeof platform.exportPocketProfile !== 'function') {
+      showToast('Der Profil-Export ist in dieser Umgebung nicht verfügbar.', { tone: 'warning' });
+      return;
+    }
+    try {
+      const profil = buildPocketProfile(db, { todayISO, appVersion: APP_VERSION });
+      const inhalt = JSON.stringify(profil, null, 2);
+      const pfad = await platform.exportPocketProfile({ content: inhalt, fileName: pocketProfilDateiname() });
+      if (!pfad) return;                       // Abbruch ist kein Fehler
+      showToast(`Pocket-Profil gespeichert: ${profil.groups.length} Lerngruppen, ${profil.competencies.length} Kompetenzen.`);
+    } catch (err) {
+      showToast(`Das Profil konnte nicht gespeichert werden: ${String(err?.message || err)}`, { tone: 'warning' });
+    }
+  };
+
+  /* Führt genau einen Import aus. Über runUndoable, damit Strg+Z auch
+     ein versehentliches "Pocketplanung verwenden" zurücknimmt. */
+  const importPocketStunde = ({ analyse, ziel, modus, kompetenzen = [], sprechabsichten = [] }) => {
+    if (!ziel) {
+      showToast('Ohne Datum und Stunde kann nicht importiert werden.', { tone: 'warning' });
+      return null;
+    }
+    try {
+      const vorher = db;
+      const nextDb = deepClone(db);
+      const ergebnis = fuehrePocketImportAus(nextDb, {
+        stunde: analyse.stunde,
+        modus,
+        ziel,
+        klasse: analyse.klasse.label,
+        fach: analyse.fach.label,
+        kompetenzenUebernehmen: kompetenzen,
+        sprechabsichtenUebernehmen: sprechabsichten,
+      }, { uid, defaultLesson, normalizeLesson });
+      runUndoable('Pocket-Import', vorher, ()=>persist(nextDb));
+      showToast(
+        modus === POCKET_MODI.ANHAENGEN
+          ? 'Pocket-Phasen an die bestehende Stunde angehängt.'
+          : 'Stunde aus Pocket importiert.'
+      );
+      return ergebnis;
+    } catch (err) {
+      showToast(`Import nicht möglich: ${String(err?.message || err)}`, { tone: 'warning' });
+      return null;
+    }
+  };
+
+  /* Jetzt sind beide Wege bekannt. Die Zuweisung geschieht in der
+     Render-Runde, nicht in einem Effekt: ein zweiter Effekt an dieser
+     Stelle läge wieder hinter dem frühen Rückgabepfad. */
+  pocketMenuRef.current = (aktion)=>{
+    if (aktion === 'export-profile') exportPocketProfile();
+    else setView({ name: 'pocket', weekStart: view.weekStart });
   };
 
   const exportBackup = async () => {
@@ -5274,6 +5762,8 @@ const doExportDocx = async (html, suggestedName) => {
           storageState={storageState}
           onExportBackup={exportBackup}
           onImportBackup={importBackup}
+          onExportPocketProfile={exportPocketProfile}
+          onOpenPocketImport={()=>setView({ name: 'pocket', weekStart: view.weekStart })}
           weekReview={appSettings?.weekReview !== false}
           onChangeWeekReview={(v)=>updateAppSettings({ weekReview: !!v })}
           languageMode={languageMode}
@@ -5292,6 +5782,19 @@ const doExportDocx = async (html, suggestedName) => {
           onAddCompetencyArea={addCompetencyArea}
           onRenameCompetencyArea={renameCompetencyArea}
           onDeleteCompetencyArea={deleteCompetencyArea}
+        />
+      );
+    }
+    if (view.name === 'pocket') {
+      return (
+        <PocketImportView
+          db={db}
+          todayISO={todayISO}
+          onImport={importPocketStunde}
+          onExportProfile={exportPocketProfile}
+          onOpenLesson={(ziel)=>setView({
+            name: 'lesson', weekStart: ziel.weekStart, dayIndex: ziel.dayIndex, slotIndex: ziel.slotIndex,
+          })}
         />
       );
     }

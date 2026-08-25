@@ -27,6 +27,7 @@ import {
 import {
   pickAndStoreFiles, openStoredFile, pruneUnusedHandles, isFileRef,
 } from './web-handles.js';
+import { speichereText, waehleTextdatei } from './pocket-files.js';
 
 const LEGACY_KEY = 'lehrerplan_db';
 const META_KEY = 'meta';
@@ -206,6 +207,8 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
       // Nur der Browser kann den Speicherplatz zusichern.
       storagePersistence: true,
       installable: true,
+      // Austausch mit Prép-ybara Pocket: Download und Dateifeld genügen.
+      pocketFiles: true,
     },
 
     loadDB,
@@ -216,6 +219,11 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
     importBackup,
     exportTemplates,
     importTemplates,
+
+    /* Austausch mit Prép-ybara Pocket. Der Inhalt wird im Renderer
+       erzeugt und geprüft; hier geht es nur um Datei rein, Datei raus. */
+    exportPocketProfile: async ({ content, fileName }) => speichereText(content, fileName),
+    importPocketFile: async () => waehleTextdatei(),
     exportPdf: ({ html }) => printHtmlAsPdf({ html, appVersion }),
     exportDocx: (payload) => exportDocxInBrowser(payload),
     /* Dateianhänge: Der Handle wandert in eine eigene IndexedDB-Ablage,

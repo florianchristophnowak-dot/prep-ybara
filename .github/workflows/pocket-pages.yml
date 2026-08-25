@@ -61,6 +61,13 @@ jobs:
       - name: Pages einrichten
         id: pages
         uses: actions/configure-pages@v5
+        with:
+          # Schaltet GitHub Pages beim ersten Lauf selbst ein und stellt die
+          # Quelle auf "GitHub Actions". Ist Pages bereits eingerichtet,
+          # ändert die Angabe nichts. Schlägt sie fehl (fehlende Rechte in
+          # einer Organisation), genügt einmalig
+          # Settings → Pages → Source: GitHub Actions.
+          enablement: true
 
       - name: Pocket bauen
         # base_path ist z. B. "/prep-ybara" (ohne Schrägstrich am Ende)

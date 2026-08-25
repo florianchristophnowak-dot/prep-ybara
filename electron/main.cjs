@@ -17,7 +17,7 @@ const legacyStore = new Store({ name: 'lehrerplan' });
 // Einzige Quelle für die Schema-Kennzeichnung. Muss mit SCHEMA_VERSION in
 // renderer/src/app.jsx übereinstimmen: ensureDbShape() dort hebt jede geladene
 // Datenbank auf genau diesen Wert an.
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 9;
 
 function defaultDB() {
   return {

@@ -15,7 +15,10 @@ import { Bestaetigung, Hinweis, Knopf, Kopf } from '../ui.jsx';
 import { POCKET_VERSION } from '../version.js';
 import { EXCHANGE_SCHEMA_VERSION, EXT_PROFILE, profilUmfang } from '../../../shared/exchange/index.js';
 import { frageDauerhafteAblage } from '../db.js';
-import { aufInstallierbarkeit, frageInstallation, istInstallierbar, laeuftInstalliert } from '../pwa.js';
+import {
+  aufInstallierbarkeit, frageInstallation, istInstallierbar, laeuftInstalliert,
+  istApplePlattform, INSTALL_ANLEITUNG_APPLE,
+} from '../pwa.js';
 import { zahlwort } from '../model.js';
 
 export default function SettingsView({ profil, onProfilImportieren, onProfilEntfernen, entwurfsZahl }){
@@ -87,12 +90,16 @@ export default function SettingsView({ profil, onProfilImportieren, onProfilEntf
                 Pocket lässt sich zum Startbildschirm hinzufügen. Danach startet es wie eine
                 App und funktioniert ohne Netz.
               </p>
-              <Knopf breit art="primaer" onClick={frageInstallation}>Zum Startbildschirm hinzufügen</Knopf>
+              <Knopf breit art="primaer" onClick={frageInstallation}>Pocket installieren</Knopf>
             </div>
+          ) : istApplePlattform() ? (
+            /* Safari kennt keine Installationsaufforderung – dort hilft nur
+               der Weg über das Teilen-Menü, und der steht hier wörtlich. */
+            <Hinweis>{INSTALL_ANLEITUNG_APPLE}</Hinweis>
           ) : (
             <Hinweis>
-              Zum Startbildschirm hinzufügen: im Browsermenü „Zum Startbildschirm“ bzw.
-              „App installieren“ wählen. Danach läuft Pocket auch ohne Netz.
+              Zum Startbildschirm hinzufügen: im Browsermenü „Installieren“ bzw.
+              „Zum Startbildschirm hinzufügen“ wählen. Danach läuft Pocket auch ohne Netz.
             </Hinweis>
           )}
 

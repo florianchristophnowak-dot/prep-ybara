@@ -98,10 +98,26 @@ npm test             # Austauschformat, Import, Pocket-Modell
 ```
 
 Zum Ausprobieren auf dem Telefon: `npm run dev:pocket` starten und im
-Handy-Browser die angezeigte Netzwerkadresse öffnen (gleiches WLAN). Für die
-Installation zum Startbildschirm braucht der Browser HTTPS oder `localhost`;
-für einen dauerhaften Einsatz `npm run build:pocket` und den Ordner
-`dist/pocket` als statische Seite bereitstellen.
+Handy-Browser die angezeigte Netzwerkadresse öffnen (gleiches WLAN). Im
+Entwicklungsmodus gibt es keinen Service Worker – Installation und
+Offlinebetrieb lassen sich nur mit `npm run build:pocket` prüfen.
+
+## Pocket veröffentlichen (GitHub Pages)
+
+Der Arbeitsablauf `.github/workflows/pocket-pages.yml` baut Pocket bei jedem Push
+auf `main` und veröffentlicht **ausschliesslich** `dist/pocket`. Die Desktop-App
+und deren Windows-/macOS-Bau (`build.yml`) bleiben davon unberührt.
+
+Einmalig einzustellen: **Repository → Settings → Pages → Source: GitHub Actions**.
+
+Danach ist Pocket per HTTPS erreichbar unter
+`https://<benutzername>.github.io/<repository>/` und lässt sich von dort auf
+Android und iPhone installieren.
+
+Den Unterpfad von GitHub Pages kennt der Bau über die Umgebungsvariable
+`POCKET_BASE`, die der Arbeitsablauf aus der Pages-Konfiguration übernimmt –
+ohne sie bleibt alles relativ, `dev:pocket` und `preview:pocket` ändern sich
+nicht. Einzelheiten in [`pocket/README.md`](pocket/README.md).
 
 ## Austauschdateien
 

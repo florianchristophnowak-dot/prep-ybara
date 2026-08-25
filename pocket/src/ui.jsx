@@ -151,6 +151,33 @@ export function Blatt({ titel, onSchliessen, children, aktionen = null }){
   );
 }
 
+/* Eine schmale Leiste über der Fussnavigation – für Dinge, die man
+   wissen sollte, aber nicht sofort erledigen muss: eine neue Fassung,
+   der Hinweis auf die Installation.
+
+   Bewusst kein Dialog: Sie hält nichts an, verdeckt nichts dauerhaft
+   und lässt sich wegtippen. Ein modales Fenster beim Start wäre für
+   beide Anlässe deutlich zu viel. */
+export function Leiste({ text, aktionen = null, onSchliessen = null }){
+  return (
+    <div className="leiste" role="status">
+      <span className="leisteText">{text}</span>
+      <span className="leisteAktionen">
+        {aktionen}
+        {onSchliessen ? (
+          <button
+            type="button"
+            className="leisteZu"
+            onClick={onSchliessen}
+            aria-label="Hinweis schliessen"
+            title="Hinweis schliessen"
+          >✕</button>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
 export function Meldung({ text, onWeg }){
   useEffect(()=>{
     if (!text) return;

@@ -1,0 +1,104 @@
+# ============================================================
+# Prép-ybara Pocket auf GitHub Pages veröffentlichen
+#
+# Veröffentlicht wird AUSSCHLIESSLICH der Pocket-Build (dist/pocket).
+# Die Desktop-App wird hier weder gebaut noch hochgeladen – dafür ist
+# build.yml zuständig, und daran ändert sich nichts.
+#
+# Der Unterpfad kommt von GitHub selbst: configure-pages meldet, unter
+# welchem Pfad die Seite ausgeliefert wird ("/prep-ybara" bzw. "" bei
+# einer Benutzerseite). Genau dieser Wert geht als POCKET_BASE in den
+# Bau. Der Repository-Name steht deshalb an keiner Stelle im Quelltext –
+# ein umbenanntes oder geforktes Repository funktioniert ohne Änderung.
+#
+# Es werden keine Nutzerdaten veröffentlicht: Der Bau erzeugt nur den
+# Programmcode. Unterrichtsdaten liegen ausschliesslich im Browser des
+# jeweiligen Geräts und berühren dieses Verfahren nie.
+# ============================================================
+
+name: Pocket auf GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Nur lesen, was das Repository hergibt; schreiben ausschliesslich nach
+# Pages. id-token wird für die vertrauenswürdige Veröffentlichung gebraucht.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Eine Veröffentlichung nach der anderen. Laufende NICHT abbrechen –
+# ein halb veröffentlichter Stand wäre schlimmer als ein später fertiger.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Pocket bauen
+    runs-on: ubuntu-latest
+    steps:
+      - name: Quelltext holen
+        uses: actions/checkout@v4
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Abhängigkeiten installieren
+        # Für den Pocket-Bau wird Electron nicht gebraucht; der Download
+        # der rund 100 MB grossen Binärdatei entfällt deshalb. Alle
+        # anderen Installationsskripte laufen normal (esbuild braucht sie).
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci
+
+      - name: Pages einrichten
+        id: pages
+        uses: actions/configure-pages@v5
+        with:
+          # Schaltet GitHub Pages beim ersten Lauf selbst ein und stellt die
+          # Quelle auf "GitHub Actions". Ist Pages bereits eingerichtet,
+          # ändert die Angabe nichts. Schlägt sie fehl (fehlende Rechte in
+          # einer Organisation), genügt einmalig
+          # Settings → Pages → Source: GitHub Actions.
+          enablement: true
+
+      - name: Pocket bauen
+        # base_path ist z. B. "/prep-ybara" (ohne Schrägstrich am Ende)
+        # oder "" bei einer Benutzer-/Organisationsseite. Die Vite-
+        # Konfiguration normalisiert beides.
+        run: npm run build:pocket
+        env:
+          POCKET_BASE: ${{ steps.pages.outputs.base_path }}/
+
+      - name: Ergebnis prüfen
+        # Lieber hier scheitern als eine unvollständige App ausliefern.
+        run: |
+          test -f dist/pocket/index.html
+          test -f dist/pocket/manifest.webmanifest
+          test -f dist/pocket/sw.js
+          test -f dist/pocket/icons/icon-192.png
+          test -f dist/pocket/icons/icon-512.png
+
+      - name: Pocket-Build hochladen
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/pocket
+
+  deploy:
+    name: Veröffentlichen
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Auf GitHub Pages veröffentlichen
+        id: deployment
+        uses: actions/deploy-pages@v4

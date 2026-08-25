@@ -27,7 +27,11 @@ import {
 import { toISODate } from '../../shared/datum.js';
 import { POCKET_NAME, POCKET_VERSION } from './version.js';
 import { kannDateienTeilen, ladeHerunter, leseTextdatei, teileDatei } from './files.js';
-import { Blatt, Hinweis, Knopf, Meldung, Bestaetigung } from './ui.jsx';
+import { Blatt, Hinweis, Knopf, Meldung, Bestaetigung, Leiste } from './ui.jsx';
+import {
+  aufInstallierbarkeit, aufUpdate, frageInstallation, istInstallierbar, istUpdateBereit,
+  ladeNeueVersion, laeuftInstalliert, istApplePlattform, INSTALL_ANLEITUNG_APPLE,
+} from './pwa.js';
 import HomeView from './views/HomeView.jsx';
 import DraftsView from './views/DraftsView.jsx';
 import IdeasView from './views/IdeasView.jsx';
@@ -64,6 +68,20 @@ export default function App(){
   const [profilBlatt, setProfilBlatt] = useState(null);      // { umfang } | { fehler }
   const [mehrBlatt, setMehrBlatt] = useState(null);          // Entwurf
   const [loeschFrage, setLoeschFrage] = useState(null);
+
+  /* Neue Fassung bereit? Der Service Worker hat sie dann bereits
+     übernommen; sichtbar wird sie erst beim Neuladen – und das
+     entscheidet die Lehrkraft. */
+  const [updateBereit, setUpdateBereit] = useState(istUpdateBereit());
+  useEffect(()=> aufUpdate(setUpdateBereit), []);
+  const [updateVerborgen, setUpdateVerborgen] = useState(false);
+
+  /* Installierbarkeit. Läuft Pocket bereits als App, gibt es nichts
+     anzubieten – dann verschwindet der Hinweis von selbst. */
+  const [installierbar, setInstallierbar] = useState(istInstallierbar());
+  useEffect(()=> aufInstallierbarkeit(setInstallierbar), []);
+  const installiert = laeuftInstalliert();
+  const apple = istApplePlattform();
 
   const heuteISO = toISODate(new Date());
 
@@ -195,6 +213,16 @@ export default function App(){
 
   const reiterSichtbar = ['home', 'drafts', 'ideas', 'settings'].includes(ansicht.name);
 
+  /* Der Installationshinweis erscheint nur, wenn er etwas zu sagen hat:
+     nicht in der installierten App, nicht ohne Weg zur Installation –
+     und nie wieder, nachdem er einmal weggetippt wurde. Der Merker liegt
+     bei den übrigen Einstellungen und überlebt damit den Neustart. */
+  const zeigeInstallHinweis = !installiert
+    && !einstellungen?.installHinweisAus
+    && (installierbar || apple);
+
+  const verbergeInstallHinweis = ()=> einstellungenAendern({ installHinweisAus: new Date().toISOString() });
+
   return (
     <div className="app">
       {fehler ? (
@@ -286,6 +314,41 @@ export default function App(){
           onExport={()=>exportiere([offenerEntwurf])}
           onMehr={()=>setMehrBlatt(offenerEntwurf)}
           onDetail={()=>gehe({ name: 'editor', id: offenerEntwurf.id }, { ersetzen: true })}
+        />
+      ) : null}
+
+      {/* ---- Leisten über der Navigation ----
+          Höchstens eine auf einmal: Die neue Fassung geht vor, weil sie
+          das Neuladen betrifft; der Installationshinweis kann warten. */}
+
+      {reiterSichtbar && updateBereit && !updateVerborgen ? (
+        <Leiste
+          text="Eine neue Version von Prép-ybara Pocket ist verfügbar."
+          aktionen={(
+            <>
+              <Knopf klein art="primaer" onClick={ladeNeueVersion}>Jetzt aktualisieren</Knopf>
+              <Knopf klein onClick={()=>setUpdateVerborgen(true)}>Später</Knopf>
+            </>
+          )}
+        />
+      ) : null}
+
+      {reiterSichtbar && !(updateBereit && !updateVerborgen) && zeigeInstallHinweis ? (
+        <Leiste
+          text={installierbar
+            ? 'Pocket zum Startbildschirm hinzufügen – dann startet es wie eine App und läuft ohne Netz.'
+            : INSTALL_ANLEITUNG_APPLE}
+          aktionen={installierbar ? (
+            <Knopf
+              klein
+              art="primaer"
+              onClick={async ()=>{
+                const angenommen = await frageInstallation();
+                if (angenommen) verbergeInstallHinweis();
+              }}
+            >Pocket installieren</Knopf>
+          ) : null}
+          onSchliessen={verbergeInstallHinweis}
         />
       ) : null}
 

@@ -1272,9 +1272,16 @@ function archivAbzug(archiv){
 /* Die Datenbank, die eine Archivansicht zu sehen bekommt. */
 function archivDatenbank(archiv, liveDb){
   const abzug = archivAbzug(archiv);
-  /* Die Abzüge der anderen Jahre bleiben aussen vor – sie werden hier
-     nicht gebraucht, und ohne sie ist die Kopie klein. */
-  const { schoolYearArchives: _abzuege, ...live } = (liveDb && typeof liveDb === 'object') ? liveDb : {};
+  /* Aus den aktuellen Daten kommt NUR, was nicht zum Schuljahr gehört.
+     Deren Wochen, Sequenzen und Abzüge werden gleich überschrieben –
+     sie vorher mitzukopieren wäre bei einem vollen Schuljahr eine
+     Kopie von einigen Megabyte für nichts. */
+  const roh = (liveDb && typeof liveDb === 'object') ? liveDb : {};
+  const live = {};
+  const nichtUebernehmen = new Set([...ARCHIV_JAHRESDATEN, 'schoolYearArchives']);
+  for (const [k, v] of Object.entries(roh)) {
+    if (!nichtUebernehmen.has(k)) live[k] = v;
+  }
   const jahresdaten = {};
   for (const feld of ARCHIV_JAHRESDATEN) {
     if (abzug[feld] !== undefined && abzug[feld] !== null) jahresdaten[feld] = abzug[feld];
@@ -1779,13 +1786,6 @@ function EmptyState({ text, actionLabel, onAction, illustration = false }){
 /* Suchvergleich ohne Akzente: In einer App für den Französischunterricht
    heissen Sequenzen "Le passé composé". Wer "passe" tippt, muss sie finden –
    sonst ist die Palette für genau die Inhalte unbrauchbar, um die es geht. */
-/* Ein dezentes Kontextmenü (⋯).
-
-   Bewusst kein neues Baukastensystem: es benutzt dieselben Flächen,
-   Abstände und Farben wie die übrigen Bedienelemente und schliesst sich
-   bei Klick nach aussen und mit Escape. Einträge sind einfache Objekte
-   – `{ label, onSelect }`, `{ trenner: true }` oder ein Eintrag mit
-   `unter: [...]` für eine Untergruppe (z. B. "Exportieren"). */
 /* Eine Schaltfläche, die auch in einem gesperrten Bereich wirkt.
 
    Der Riegel der Archivansicht ist ein deaktiviertes <fieldset>. Es
@@ -1812,6 +1812,13 @@ function OeffnenKnopf({ onClick, disabled = false, className = 'btn', title, chi
   );
 }
 
+/* Ein dezentes Kontextmenü (⋯).
+
+   Bewusst kein neues Baukastensystem: es benutzt dieselben Flächen,
+   Abstände und Farben wie die übrigen Bedienelemente und schliesst sich
+   bei Klick nach aussen und mit Escape. Einträge sind einfache Objekte
+   – `{ label, onSelect }`, `{ trenner: true }` oder ein Eintrag mit
+   `unter: [...]` für eine Untergruppe (z. B. "Exportieren"). */
 function KebabMenu({ eintraege, titel = 'Weitere Aktionen', ausrichtung = 'rechts', knopfKlasse = 'iconBtn' }){
   const [offen, setOffen] = useState(false);
   const wrapRef = useRef(null);
@@ -6905,7 +6912,12 @@ const doExportDocx = async (html, suggestedName) => {
           onAddTodo={addTodo}
           onUpdateTodo={updateTodo}
           onDeleteTodo={deleteTodo}
-          onBack={()=>setView({ ...lastMainView.current })}
+          /* Im Archiv führt der Rückweg in die Woche des archivierten
+             Jahres – die zuletzt besuchte Hauptansicht gehört zum
+             laufenden Schuljahr. */
+          onBack={()=>setView(imArchiv
+            ? { name:'week', weekStart: view.weekStart }
+            : { ...lastMainView.current })}
         />
       );
     }

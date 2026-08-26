@@ -1991,10 +1991,19 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 /* Nur wirklich beschreibbare Felder abschirmen – sonst liesse sich
    der Text einer archivierten Stunde nicht einmal markieren. */
 .archivFieldset:disabled [contenteditable="true"] { pointer-events: none; }
+/* Gesperrt heisst nicht unleserlich: Browser blassen die Schrift in
+   deaktivierten Feldern ab. Ein Archiv wird aber vor allem gelesen –
+   die volle Textfarbe bleibt deshalb erhalten. */
 .archivFieldset:disabled .input,
 .archivFieldset:disabled input,
 .archivFieldset:disabled textarea,
-.archivFieldset:disabled select { background: var(--bg-subtle); cursor: default; }
+.archivFieldset:disabled select {
+  background: var(--bg-subtle);
+  cursor: default;
+  color: var(--text);
+  -webkit-text-fill-color: var(--text);
+  opacity: 1;
+}
 
 .archivListe { display: flex; flex-direction: column; gap: 12px; }
 .archivKarte {

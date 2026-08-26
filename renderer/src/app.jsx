@@ -1440,8 +1440,12 @@ function trenneStunde(raw){
   const span = blockSpanOf(l);
   if (span <= 1) return [l];
 
+  /* Die erste Stunde behält die Kennungen ihrer Phasen. Nur so bleibt
+     die phasenweise Nachbereitung gültig, die auf sie zeigt. Die
+     weiteren Stunden bekommen eigene Kennungen – sie starten ohnehin
+     ohne Nachbereitung. */
   const teile = verteilePhasenAufPlaetze(l.phases, span)
-    .map(phasen => phasen.map(ph => neuePhasenIds(ph)));
+    .map((phasen, i)=> (i === 0 ? phasen : phasen.map(ph => neuePhasenIds(ph))));
 
   return teile.map((phasen, i)=>{
     const stunde = normalizeLesson({
@@ -4790,6 +4794,18 @@ useEffect(()=>{
       showToast('Verbinden geht nur bei derselben Lerngruppe – gleiche Klasse und gleiches Fach.', { tone: 'warning' });
       return;
     }
+    /* Zusammen dürfen beide nicht länger werden als erlaubt. Sonst
+       würde die Spanne stillschweigend gekappt – und der letzte Platz
+       trüge plötzlich keine Stunde mehr. */
+    if (span + blockSpanOf(zweite) > MAX_BLOCK_SPAN) {
+      showToast(`Zusammen wären das mehr als ${MAX_BLOCK_SPAN} Stunden. Das lässt sich nicht verbinden.`, { tone: 'warning' });
+      return;
+    }
+
+    /* Eine Aufsicht zwischen den beiden Stunden bleibt gespeichert,
+       wird aber nicht mehr angezeigt: innerhalb einer Doppelstunde gibt
+       es keine Pause. Beim Trennen ist sie wieder da. */
+    const innereAufsicht = w.duties?.[`${dayIndex}-${folgeSlot}`];
 
     const verbunden = verbindeStunden(erste, zweite);
     const nextDb = deepClone(db);
@@ -4801,6 +4817,10 @@ useEffect(()=>{
       draftLessonCacheRef.current.delete(`${weekStart}|${dayIndex}|${folgeSlot}`);
     } catch {}
     runUndoable(`${blockName(blockSpanOf(verbunden))} verbunden`, before, ()=>persist(nextDb));
+    if (innereAufsicht?.title) {
+      showToast(`Die Aufsicht „${innereAufsicht.title}" zwischen den beiden Stunden wird nicht angezeigt, solange sie verbunden sind.`,
+        { tone: 'warning', ttl: 8000 });
+    }
   };
 
   const splitBlockAt = (weekStart, dayIndex, slotIndex) => {
@@ -4917,7 +4937,10 @@ useEffect(()=>{
       const platzReicht = (t.slotIndex + srcSpan) <= zielSlots;
       const frei = belegteSlots(t.slotIndex, srcSpan).slice(1).every(si => {
         const k = keyOf(t.dayIndex, si);
-        const belegtVonQuelle = (f.weekStart === t.weekStart)
+        /* Nur beim Verschieben gibt die Stunde ihre bisherigen Plätze
+           frei. Beim Kopieren bleibt sie liegen – dort ist kein Platz. */
+        const belegtVonQuelle = mode !== 'copy'
+          && (f.weekStart === t.weekStart)
           && belegteSlots(f.slotIndex, srcSpan).includes(si) && f.dayIndex === t.dayIndex;
         if (belegtVonQuelle) return true;
         return !toW.lessons?.[k] && !istAbgedeckt(toW, t.dayIndex, si);
@@ -6627,7 +6650,9 @@ const doExportDocx = async (html, suggestedName) => {
           if (span >= MAX_BLOCK_SPAN) return false;
           if ((lessonSlotIndex + span) >= (w.slotsPerDay || 6)) return false;
           const b = w.lessons?.[keyOf(view.dayIndex, lessonSlotIndex + span)];
-          return Boolean(b) && passenZusammen(l, b);
+          if (!b) return false;
+          if (span + blockSpanOf(b) > MAX_BLOCK_SPAN) return false;
+          return passenZusammen(l, b);
         })()}
         onRememberSpeechAct={rememberSpeechAct}
         onHideSpeechActSuggestion={(label)=>hideSuggestion('speechAct', label)}
@@ -6944,6 +6969,7 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
     if (span >= MAX_BLOCK_SPAN) return false;
     const b = week.lessons?.[keyOf(dayIndex, naechster)];
     if (!b) return false;
+    if (span + blockSpanOf(b) > MAX_BLOCK_SPAN) return false;
     return passenZusammen(l, b);
   };
 
@@ -7847,6 +7873,14 @@ function LessonView({
   const skipNextSaveRef = useRef(true);
   const saveTimerRef = useRef(null);
 
+  /* Auch das Verbinden und Trennen setzt den Entwurf neu auf.
+
+     Ort und Platz der Stunde bleiben dabei gleich; was sich ändert, ist
+     ihre Länge. Ohne diese Abhängigkeit schriebe das verzögerte
+     Speichern anschliessend den Stand von VOR dem Verbinden zurück –
+     die zweite Stunde wäre wieder verloren. */
+  const lessonBlockSpan = blockSpanOf(lesson);
+
   // Only re-initialize the editor when the user navigates to a *different* lesson.
   // Do NOT depend on the `lesson` object reference, otherwise every autosave would
   // re-hydrate local state and can steal focus while typing.
@@ -7857,7 +7891,7 @@ function LessonView({
     skipNextSaveRef.current = true;
     if (onDraftTopicChange) onDraftTopicChange(next.topic || '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekStart, dayIndex, slotIndex]);
+  }, [weekStart, dayIndex, slotIndex, lessonBlockSpan]);
 
   useEffect(()=>{
     if (onDraftTopicChange) onDraftTopicChange(local.topic || '');

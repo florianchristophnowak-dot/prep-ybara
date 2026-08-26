@@ -394,7 +394,22 @@ export function fuehrePocketImportAus(nextDb, plan, werkzeuge){
   const felder = pocketZuStundenfeldern(stunde, { uid, klasse, fach });
 
   const woche = nextDb.weeks?.[ziel.weekStart] || { slotsPerDay: STANDARD_SLOTS, lessons: {}, duties: {} };
-  const key = `${ziel.dayIndex}-${ziel.slotIndex}`;
+
+  /* Gehört der gewählte Platz zu einer Doppelstunde, ist die Stunde
+     nicht dort gespeichert, sondern an ihrem ersten Platz. Geschrieben
+     wird deshalb dorthin – sonst entstünde ein zweiter, verdeckter
+     Eintrag auf einem bereits belegten Platz. */
+  const platzIndex = (()=>{
+    for (let back = 1; back <= 3; back++){
+      const start = ziel.slotIndex - back;
+      if (start < 0) break;
+      const l = woche.lessons?.[`${ziel.dayIndex}-${start}`];
+      if (!l) continue;
+      return spanneVon(l) > back ? start : ziel.slotIndex;
+    }
+    return ziel.slotIndex;
+  })();
+  const key = `${ziel.dayIndex}-${platzIndex}`;
   const bestehend = woche.lessons?.[key] || null;
 
   let ergebnis;
@@ -418,6 +433,9 @@ export function fuehrePocketImportAus(nextDb, plan, werkzeuge){
       /* Eine ersetzte Stunde behält ihre Sequenzzuordnung: der Termin
          gehört weiterhin zur selben Unterrichtsreihe. */
       sequenceId: (modus === MODI.ERSETZEN && bestehend?.sequenceId) ? bestehend.sequenceId : '',
+      /* Und ihre Länge: eine ersetzte Doppelstunde bleibt eine
+         Doppelstunde, sonst würde der Folgeplatz stillschweigend frei. */
+      blockSpan: (modus === MODI.ERSETZEN && bestehend) ? spanneVon(bestehend) : 1,
     });
   }
 

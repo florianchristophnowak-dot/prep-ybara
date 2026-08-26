@@ -131,7 +131,10 @@ export function verteilePhasenAufPlaetze(phases, span, neueId = null){
     while (rest > 0){
       const teilIndex = Math.min(n - 1, Math.floor(offset / SLOT_MIN));
       const platzImTeil = (teilIndex + 1) * SLOT_MIN - offset;
-      const nimm = Math.min(rest, Math.max(1, platzImTeil));
+      /* Im letzten Teil geht alles Verbliebene in einem Stück hinein –
+         auch wenn die Phasen zusammen länger sind als der Rahmen. Sonst
+         zerfiele der Überhang in lauter Ein-Minuten-Phasen. */
+      const nimm = (teilIndex === n - 1) ? rest : Math.min(rest, Math.max(1, platzImTeil));
       const kopie = { ...phase, duration: nimm };
       if (typeof neueId === 'function') kopie.id = neueId();
       teile[teilIndex].push(kopie);

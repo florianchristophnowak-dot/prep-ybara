@@ -162,3 +162,13 @@ test('Neue Kennungen werden vergeben, wenn eine gefragt ist', ()=>{
   const ids = teile.flat().map(p => p.id);
   assert.deepEqual(ids, ['neu-1', 'neu-2']);
 });
+
+test('Zu lange Verlaufspläne fallen nicht in Ein-Minuten-Phasen auseinander', ()=>{
+  // 120 Minuten Phasen in einer Doppelstunde (90 Minuten): der Überhang
+  // bleibt eine Phase; das Zurechtrücken übernimmt normalizePhases.
+  const phasen = [{ id: 'a', duration: 60 }, { id: 'b', duration: 60 }];
+  const teile = verteilePhasenAufPlaetze(phasen, 2);
+  assert.equal(teile.length, 2);
+  assert.ok(teile.every(t => t.length <= 2), 'kein Teil zerfällt in viele Stücke');
+  assert.equal(teile.flat().reduce((a,p)=>a+p.duration, 0), 120);
+});

@@ -1831,7 +1831,7 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .kebabMenu {
   position: absolute;
   top: calc(100% + 6px);
-  min-width: 210px;
+  min-width: 236px;
   padding: 6px;
   background: var(--card);
   border: 1px solid var(--border);
@@ -1857,6 +1857,7 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
   text-align: left;
+  white-space: nowrap;
   cursor: pointer;
   transition: background var(--transition-fast);
 }
@@ -1948,3 +1949,6 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .yearPlanSticky .kebabWrap { position: absolute; top: 8px; right: 8px; }
 .yearPlanSticky:has(.kebabWrap.is-open) { z-index: 40; }
 .yearPlanRow:has(.kebabWrap.is-open) { position: relative; z-index: 40; }
+/* Die Umrandung schneidet sonst das aufgeklappte Menü ab. Sie wird nur
+   so lange durchlässig, wie ein Menü offen ist. */
+.yearPlanWrap:has(.kebabWrap.is-open) { overflow: visible; }

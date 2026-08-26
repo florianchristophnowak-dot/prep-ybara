@@ -113,19 +113,22 @@ function spanneVon(lesson){
   return (Number.isFinite(n) && n > 1) ? n : 1;
 }
 
-/* Ist der Platz durch eine Doppelstunde weiter oben belegt? Ohne diese
-   Prüfung böte der Import einen Platz an, auf dem bereits Unterricht
-   liegt – sichtbar wäre die Stunde dort nur nicht. */
-function istBelegt(db, weekStart, dayIndex, slotIndex){
-  if (stundeAn(db, weekStart, dayIndex, slotIndex)) return true;
+/* Welche Stunde liegt auf diesem Platz? Entweder die eigene – oder die
+   Doppelstunde, die ihn von weiter oben mit abdeckt.
+
+   Ohne diese Prüfung böte der Import einen Platz an, auf dem bereits
+   Unterricht liegt; sichtbar wäre die Stunde dort nur nicht. */
+function stundeAmPlatz(db, weekStart, dayIndex, slotIndex){
+  const eigene = stundeAn(db, weekStart, dayIndex, slotIndex);
+  if (eigene) return eigene;
   for (let back = 1; back <= 3; back++){
     const start = slotIndex - back;
     if (start < 0) break;
     const l = stundeAn(db, weekStart, dayIndex, start);
     if (!l) continue;
-    return spanneVon(l) > back;
+    return spanneVon(l) > back ? l : null;
   }
-  return false;
+  return null;
 }
 
 export function hatPlanungsinhalt(lesson){
@@ -148,7 +151,7 @@ export function naechsterFreierSlot(db, weekStart, dayIndex, { ab = 0 } = {}){
   const woche = db?.weeks?.[weekStart];
   const slots = Math.max(1, Number(woche?.slotsPerDay) || STANDARD_SLOTS);
   for (let i = Math.max(0, ab); i < slots; i++) {
-    if (!istBelegt(db, weekStart, dayIndex, i)) return i;
+    if (!stundeAmPlatz(db, weekStart, dayIndex, i)) return i;
   }
   return null;
 }
@@ -173,7 +176,7 @@ export function zielFuer(dateISO, lessonNumber){
    sich der Termin ändern kann, ohne dass sich an der Datei etwas ändert. */
 export function pruefeZiel(db, ziel){
   if (!ziel) return { bestehende: null, konflikt: false, belegt: false };
-  const bestehende = stundeAn(db, ziel.weekStart, ziel.dayIndex, ziel.slotIndex);
+  const bestehende = stundeAmPlatz(db, ziel.weekStart, ziel.dayIndex, ziel.slotIndex);
   return {
     bestehende,
     belegt: Boolean(bestehende),
@@ -223,7 +226,7 @@ export function analysierePocketStunde(roh, db, { todayISO = toISODate(new Date(
     }
   }
 
-  const bestehende = ziel ? stundeAn(db, ziel.weekStart, ziel.dayIndex, ziel.slotIndex) : null;
+  const bestehende = ziel ? stundeAmPlatz(db, ziel.weekStart, ziel.dayIndex, ziel.slotIndex) : null;
 
   /* Unbekannte Etiketten. "Unbekannt" heisst: weder Systemeintrag noch
      je im Desktop benutzt. Genau danach wird gefragt. */

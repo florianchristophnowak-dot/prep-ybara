@@ -4847,9 +4847,23 @@ useEffect(()=>{
 
   const pasteLessonFromClipboard = async (weekStart, dayIndex, slotIndex) => {
     if (!lessonClipboard?.lesson) return;
-    if (istAbgedeckt(db?.weeks?.[weekStart], dayIndex, slotIndex)) {
+    const woche = db?.weeks?.[weekStart];
+    if (istAbgedeckt(woche, dayIndex, slotIndex)) {
       showToast('Dieser Stundenplatz gehört zu einer Doppelstunde. Trenne sie zuerst.', { tone: 'warning' });
       return;
+    }
+    /* Eine Doppelstunde aus der Zwischenablage braucht so viele freie
+       Plätze, wie sie belegt – sonst verdeckte sie eine Planung. */
+    const einfuegeSpanne = blockSpanOf(lessonClipboard.lesson);
+    if (einfuegeSpanne > 1) {
+      const slotsAmTag = woche?.slotsPerDay || 6;
+      const passt = (slotIndex + einfuegeSpanne) <= slotsAmTag
+        && belegteSlots(slotIndex, einfuegeSpanne).slice(1)
+          .every(si => !woche?.lessons?.[keyOf(dayIndex, si)] && !istAbgedeckt(woche, dayIndex, si));
+      if (!passt) {
+        showToast(`Für eine ${blockName(einfuegeSpanne)} sind dort nicht genug freie Stundenplätze.`, { tone: 'warning' });
+        return;
+      }
     }
     const targetHas = !!(db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, slotIndex)]);
     if (targetHas) {

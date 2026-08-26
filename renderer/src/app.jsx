@@ -49,7 +49,7 @@ import {
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowDown, ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
-  CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, Download, Eye,
+  CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, Download, Eraser, Eye,
   FileDown, FileText, Grid3x3, Library, Link2, ListTree, Maximize2, MoreHorizontal, NotebookPen, Palmtree,
   Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
   Square, Star, Sun, Trash2, Unlink, X,
@@ -1301,6 +1301,30 @@ function normalizePhases(phases, gesamt = TOTAL_MIN){
    Deshalb geht hier alles Nachbereitende verloren, absichtlich. Die
    Planung selbst – Phasen, Inhalte, Kompetenzen, Fachdidaktik – bleibt
    vollständig erhalten. */
+/* --- Jahresplanung: Zeilen (Lerngruppen) -----------------------------
+
+   Eine Zeile der Jahresplanung ist eine Lerngruppe: Klasse und Fach.
+   Der Schlüssel wird an mehreren Stellen gebraucht und steht deshalb
+   genau einmal hier. */
+function jahresZeileKey(classGroup, subject){
+  const g = String(classGroup || '').trim();
+  const f = String(subject || '').trim();
+  if (!g && !f) return 'allgemein';
+  return `${g}||${f}`;
+}
+
+function jahresZeileTeile(key){
+  if (!key || key === 'allgemein') return { classGroup: '', subject: '' };
+  const [g, f] = String(key).split('||');
+  return { classGroup: (g || '').trim(), subject: (f || '').trim() };
+}
+
+function jahresZeileLabel(key){
+  if (key === 'allgemein') return 'Allgemein';
+  const { classGroup, subject } = jahresZeileTeile(key);
+  return [classGroup, subject].filter(Boolean).join(' · ') || 'Allgemein';
+}
+
 /* --- Sequenz-Vorlagen -------------------------------------------------
 
    Eine Vorlage besteht aus Einheiten. Eine Einheit ist das, was in der
@@ -1670,12 +1694,15 @@ function ConfirmDialog({ open, title, body, confirmLabel, tone = 'primary', onCo
 
 /* Eingabe an Ort und Stelle ist nicht überall möglich (etwa beim Anlegen
    aus einem Menü heraus) – dann dieses Feld statt window.prompt. */
-function PromptDialog({ open, title, label, placeholder, initialValue = '', confirmLabel = 'Übernehmen', onConfirm, onCancel }){
+/* `erlaubeLeer`: für Angaben, bei denen "nichts" eine gültige Antwort
+   ist – etwa das Fach einer Jahresplanungszeile. Ohne die Angabe
+   bleibt es beim bisherigen Verhalten: leer heisst abbrechen. */
+function PromptDialog({ open, title, label, placeholder, initialValue = '', confirmLabel = 'Übernehmen', erlaubeLeer = false, onConfirm, onCancel }){
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef(null);
   useEffect(()=>{ if (open){ setValue(initialValue); setTimeout(()=>{ inputRef.current?.focus(); inputRef.current?.select(); }, 0);} }, [open, initialValue]);
   if (!open) return null;
-  const submit = (e)=>{ e?.preventDefault?.(); const v = value.trim(); if (!v) return; onConfirm?.(v); };
+  const submit = (e)=>{ e?.preventDefault?.(); const v = value.trim(); if (!v && !erlaubeLeer) return; onConfirm?.(v); };
   return (
     <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onCancel?.(); }}>
       <form className="modalCard" onSubmit={submit} role="dialog" aria-modal="true" aria-label={title}
@@ -3744,6 +3771,12 @@ function ensureDbShape(raw){
   // Jahresgrobplanung (Orientierungs-Balken): wird in der Einzelstundenansicht nur angezeigt,
   // hat KEINEN Einfluss auf Unterrichtssequenzen und wird NICHT in Verlaufspläne/Exports übernommen.
   if (!Array.isArray(db.yearBars)) db.yearBars = [];
+  /* Zeilen der Jahresplanung, die auch OHNE Balken sichtbar bleiben
+     sollen ("Jahresplanung leeren"). Ohne diese Liste ergaben sich die
+     Zeilen allein aus den Balken – eine geleerte Zeile verschwand
+     damit sofort wieder. Fehlt die Liste, verhält sich alles wie
+     bisher: die Zeilen kommen aus den Balken. */
+  if (!Array.isArray(db.yearPlanLanes)) db.yearPlanLanes = [];
   if (!db.schoolCalendar || typeof db.schoolCalendar !== 'object') {
     db.schoolCalendar = {
       schoolYear: { startISO: '', endISO: '' },
@@ -3814,6 +3847,18 @@ function ensureDbShape(raw){
       updatedAt: o.updatedAt || o.createdAt || new Date().toISOString()
     };
   }).filter(Boolean);
+
+  db.yearPlanLanes = (Array.isArray(db.yearPlanLanes) ? db.yearPlanLanes : [])
+    .map(l => {
+      const o = (l && typeof l === 'object') ? l : null;
+      if (!o) return null;
+      return {
+        classGroup: String(o.classGroup || '').trim(),
+        subject: String(o.subject || '').trim(),
+      };
+    })
+    .filter(Boolean)
+    .filter((l, i, arr)=> arr.findIndex(x => x.classGroup === l.classGroup && x.subject === l.subject) === i);
 
   // Normalize weeks (ensure lessons/duties objects exist)
   for (const [ws, w] of Object.entries(db.weeks || {})){
@@ -5353,6 +5398,90 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     persist(nextDb);
   };
 
+  /* Eine Zeile der Jahresplanung leeren: die Balken gehen, die Zeile
+     bleibt. Damit sie ohne Balken sichtbar bleibt, wird sie in
+     `yearPlanLanes` vermerkt. */
+  const clearYearPlanLane = (laneKey) => {
+    const before = db;
+    const { classGroup, subject } = jahresZeileTeile(laneKey);
+    const nextDb = deepClone(db);
+    const alle = Array.isArray(nextDb.yearBars) ? nextDb.yearBars : [];
+    nextDb.yearBars = alle.filter(b => jahresZeileKey(b?.classGroup, b?.subject) !== laneKey);
+    if (!Array.isArray(nextDb.yearPlanLanes)) nextDb.yearPlanLanes = [];
+    const schonDa = nextDb.yearPlanLanes.some(l => jahresZeileKey(l.classGroup, l.subject) === laneKey);
+    if (!schonDa) nextDb.yearPlanLanes.push({ classGroup, subject });
+    runUndoable(`${jahresZeileLabel(laneKey)}: Jahresplanung geleert`, before, ()=>persist(nextDb));
+  };
+
+  /* Eine Zeile ganz aus der Jahresplanung nehmen.
+
+     Ausdrücklich NICHT dasselbe wie "Lerngruppe löschen": Stunden,
+     Sequenzen, Farben und Kompetenzen der Lerngruppe bleiben
+     unverändert. Es verschwindet nur diese Zeile samt ihrer
+     Orientierungsbalken – und das lässt sich rückgängig machen. */
+  const removeYearPlanLane = async (laneKey) => {
+    const anzahl = (Array.isArray(db?.yearBars) ? db.yearBars : [])
+      .filter(b => jahresZeileKey(b?.classGroup, b?.subject) === laneKey).length;
+    if (anzahl > 0) {
+      const ok = await askConfirm({
+        title: 'Aus Jahresplanung entfernen',
+        body: `Diese Lerngruppe enthält ${anzahl} ${anzahl === 1 ? 'geplanten Balken' : 'geplante Balken'}. Wirklich aus der Jahresplanung entfernen? Die Lerngruppe selbst bleibt mit allen Stunden und Sequenzen erhalten.`,
+        confirmLabel: 'Entfernen',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
+    const before = db;
+    const nextDb = deepClone(db);
+    nextDb.yearBars = (Array.isArray(nextDb.yearBars) ? nextDb.yearBars : [])
+      .filter(b => jahresZeileKey(b?.classGroup, b?.subject) !== laneKey);
+    nextDb.yearPlanLanes = (Array.isArray(nextDb.yearPlanLanes) ? nextDb.yearPlanLanes : [])
+      .filter(l => jahresZeileKey(l.classGroup, l.subject) !== laneKey);
+    runUndoable(`${jahresZeileLabel(laneKey)} wurde aus der Jahresplanung entfernt`, before, ()=>persist(nextDb));
+  };
+
+  /* Klasse und Fach einer Zeile ändern. Es werden die Balken dieser
+     Zeile umgeschrieben – an den Stunden der Lerngruppe ändert sich
+     nichts. */
+  const renameYearPlanLane = async (laneKey) => {
+    const teile = jahresZeileTeile(laneKey);
+    const klasse = await askPrompt({
+      title: 'Lerngruppe bearbeiten',
+      label: 'Klasse/Kurs (leer lassen für „Allgemein“)',
+      initialValue: teile.classGroup,
+      confirmLabel: 'Weiter',
+      erlaubeLeer: true,
+    });
+    if (klasse === null) return;
+    const fach = await askPrompt({
+      title: 'Lerngruppe bearbeiten',
+      label: 'Fach (optional)',
+      initialValue: teile.subject,
+      confirmLabel: 'Übernehmen',
+      erlaubeLeer: true,
+    });
+    if (fach === null) return;
+
+    const neuerKey = jahresZeileKey(klasse, fach);
+    if (neuerKey === laneKey) return;
+
+    const before = db;
+    const nextDb = deepClone(db);
+    const g = String(klasse || '').trim();
+    const f = String(fach || '').trim();
+    nextDb.yearBars = (Array.isArray(nextDb.yearBars) ? nextDb.yearBars : [])
+      .map(b => (jahresZeileKey(b?.classGroup, b?.subject) === laneKey
+        ? { ...b, classGroup: g, subject: f, updatedAt: new Date().toISOString() }
+        : b));
+    const lanes = (Array.isArray(nextDb.yearPlanLanes) ? nextDb.yearPlanLanes : [])
+      .filter(l => jahresZeileKey(l.classGroup, l.subject) !== laneKey);
+    const trägtBalken = nextDb.yearBars.some(b => jahresZeileKey(b?.classGroup, b?.subject) === neuerKey);
+    const schonDa = lanes.some(l => jahresZeileKey(l.classGroup, l.subject) === neuerKey);
+    if (!trägtBalken && !schonDa) lanes.push({ classGroup: g, subject: f });
+    nextDb.yearPlanLanes = lanes;
+    runUndoable(`Lerngruppe geändert: ${jahresZeileLabel(neuerKey)}`, before, ()=>persist(nextDb));
+  };
+
   const deleteYearBar = (id) => {
     const before = db;
     const nextDb = deepClone(db);
@@ -6220,6 +6349,9 @@ const doExportDocx = async (html, suggestedName) => {
           onCreateBar={(payload)=>createYearBar(payload)}
           onUpdateBar={(id, patch)=>updateYearBar(id, patch)}
           onDeleteBar={(id)=>deleteYearBar(id)}
+          onClearLane={(laneKey)=>clearYearPlanLane(laneKey)}
+          onRemoveLane={(laneKey)=>removeYearPlanLane(laneKey)}
+          onRenameLane={(laneKey)=>renameYearPlanLane(laneKey)}
           onSetView={setView}
         />
       );
@@ -6624,6 +6756,7 @@ const doExportDocx = async (html, suggestedName) => {
         placeholder={promptState?.placeholder || ''}
         initialValue={promptState?.initialValue || ''}
         confirmLabel={promptState?.confirmLabel || 'Übernehmen'}
+        erlaubeLeer={Boolean(promptState?.erlaubeLeer)}
         onCancel={()=>{ promptState?.onCancel?.(); setPromptState(null); }}
         onConfirm={(v)=>{ const c = promptState; setPromptState(null); c?.onConfirm?.(v); }}
       />
@@ -9221,6 +9354,9 @@ function YearPlanView({
   onCreateBar,
   onUpdateBar,
   onDeleteBar,
+  onClearLane,
+  onRemoveLane,
+  onRenameLane,
   onSetView
 }){
   const schoolYear = (schoolCalendar && schoolCalendar.schoolYear) ? schoolCalendar.schoolYear : { startISO:'', endISO:'' };
@@ -9246,27 +9382,22 @@ function YearPlanView({
 
   const [query, setQuery] = useState('');
 
-  const laneKey = (b) => {
-    const g = String(b?.classGroup || '').trim();
-    const s = String(b?.subject || '').trim();
-    if (!g && !s) return 'allgemein';
-    return `${g}||${s}`;
-  };
+  const laneKey = (b) => jahresZeileKey(b?.classGroup, b?.subject);
+  const laneLabel = (k) => jahresZeileLabel(k);
 
-  const laneLabel = (k) => {
-    if (k === 'allgemein') return 'Allgemein';
-    const [g, s] = String(k || '').split('||');
-    return `${(g || '').trim()} · ${(s || '').trim()}`.trim();
-  };
-
+  /* Sichtbar ist eine Zeile, wenn sie Balken trägt ODER ausdrücklich
+     behalten wurde (nach "Jahresplanung leeren"). */
   const lanes = useMemo(()=>{
     const set = new Set();
     for (const b of bars) set.add(laneKey(b));
+    for (const l of (Array.isArray(db?.yearPlanLanes) ? db.yearPlanLanes : [])) {
+      set.add(jahresZeileKey(l.classGroup, l.subject));
+    }
     const arr = Array.from(set);
     // sort: Allgemein first, then by label
     arr.sort((a,b)=> (a==='allgemein'?-1:(b==='allgemein'?1:laneLabel(a).localeCompare(laneLabel(b)))));
     return arr;
-  }, [bars]);
+  }, [bars, db?.yearPlanLanes]);
 
   const filteredLanes = useMemo(()=>{
     const q = String(query||'').trim().toLowerCase();
@@ -9523,8 +9654,33 @@ function YearPlanView({
           return (
             <div key={lk} className="yearPlanRow">
               <div className="yearPlanSticky">
-                <div style={{fontWeight:800}}>{laneLabel(lk)}</div>
-                <div className="muted small">{laneBars.length} Balken</div>
+                <div style={{fontWeight:800, paddingRight:26}}>{laneLabel(lk)}</div>
+                <div className="muted small">{laneBars.length === 1 ? '1 Balken' : `${laneBars.length} Balken`}</div>
+                {/* Aktionen der ZEILE – nicht der Lerngruppe. Die
+                    Lerngruppe selbst bleibt der App in jedem Fall
+                    erhalten; hier geht es nur um diese Jahresplanung. */}
+                <KebabMenu
+                  titel="Aktionen für diese Zeile"
+                  ausrichtung="links"
+                  eintraege={[
+                    { label: 'Lerngruppe bearbeiten', icon: <Pencil {...ICON_SM} />, onSelect: ()=>onRenameLane?.(lk) },
+                    {
+                      label: 'Jahresplanung leeren',
+                      icon: <Eraser {...ICON_SM} />,
+                      disabled: laneBars.length === 0,
+                      title: 'Alle Balken dieser Zeile entfernen – die Zeile bleibt stehen',
+                      onSelect: ()=>onClearLane?.(lk),
+                    },
+                    { trenner: true },
+                    {
+                      label: 'Aus Jahresplanung entfernen',
+                      icon: <Ban {...ICON_SM} />,
+                      tone: 'danger',
+                      title: 'Entfernt nur diese Zeile. Die Lerngruppe bleibt in Prép-ybara erhalten.',
+                      onSelect: ()=>onRemoveLane?.(lk),
+                    },
+                  ]}
+                />
               </div>
               <div className="yearPlanScroll">
                 <div className="yearPlanLane" style={{width: totalWidth}}>

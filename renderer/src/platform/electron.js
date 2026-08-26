@@ -89,6 +89,8 @@ export function createElectronPlatform(api){
     capabilities: {
       persistentStorage: true,
       backupFiles: true,
+      // Ältere Preload-Brücken kennen den Archiv-Export nicht.
+      archiveFiles: typeof api.exportArchive === 'function',
       templateFiles: true,
       pdfExport: true,
       docxExport: true,
@@ -106,6 +108,7 @@ export function createElectronPlatform(api){
 
     exportBackup: () => api.exportBackup(),
     importBackup: () => api.importBackup(),
+    exportArchive: (payload) => api.exportArchive(payload),
     exportTemplates: () => api.exportTemplates(),
     importTemplates: () => api.importTemplates(),
 

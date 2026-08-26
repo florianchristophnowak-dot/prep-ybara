@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld('api', {
   patchDB: (patch) => ipcRenderer.invoke('db:patch', patch),
   exportBackup: () => ipcRenderer.invoke('backup:export'),
   importBackup: () => ipcRenderer.invoke('backup:import'),
+  // Ein archiviertes Schuljahr als Backup-Datei ausgeben.
+  exportArchive: (payload) => ipcRenderer.invoke('archive:export', payload),
   exportTemplates: () => ipcRenderer.invoke('templates:export'),
   importTemplates: () => ipcRenderer.invoke('templates:import'),
 

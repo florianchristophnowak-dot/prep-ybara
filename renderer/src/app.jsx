@@ -55,7 +55,7 @@ import {
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowDown, ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
-  CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, Download, Eraser, Eye,
+  Archive, CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, Download, Eraser, Eye,
   FileDown, FileText, Grid3x3, Library, Link2, ListTree, Maximize2, MoreHorizontal, NotebookPen, Palmtree,
   Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
   Square, Star, Sun, Trash2, Unlink, X,
@@ -1242,6 +1242,106 @@ function skalierePhasen(phases, vonMin, aufMin){
    Deshalb geht hier alles Nachbereitende verloren, absichtlich. Die
    Planung selbst – Phasen, Inhalte, Kompetenzen, Fachdidaktik – bleibt
    vollständig erhalten. */
+/* --- Archivierte Schuljahre -----------------------------------------
+
+   Beim Start eines neuen Schuljahres wandert das alte in
+   `db.schoolYearArchives`: ein Abzug seiner jahresbezogenen Daten,
+   nicht mehr und nicht weniger.
+
+   Diese Datei liest daraus – sie schreibt nie hinein. Die
+   Archivansicht ist ein Blick zurück, kein zweiter Arbeitsstand:
+
+     - Aus dem Abzug entsteht eine vollständige, aber NUR GELESENE
+       Datenbank (`archivDatenbank`). Sie geht durch dieselbe
+       Formangleichung wie die echte, damit jede Ansicht sie ohne
+       Sonderfall darstellen kann.
+     - Was nicht zum Schuljahr gehört – Vorlagenbibliothek,
+       Einstellungen, Vorschlagslisten –, wird bewusst NICHT aus dem
+       Abzug genommen, sondern aus den aktuellen Daten. Sonst sähe die
+       Bibliothek im Archiv leer aus und die Darstellung spränge um.
+
+   Ältere Abzüge tragen weniger Felder (etwa keine Jahresplanung). Das
+   ist kein Fehlerfall: was fehlt, entsteht leer. */
+const ARCHIV_JAHRESDATEN = ['schoolCalendar', 'weeks', 'sequences', 'todos', 'groupColors', 'supervisionLabels', 'yearBars', 'yearPlanLanes'];
+
+function archivAbzug(archiv){
+  const d = (archiv?.data && typeof archiv.data === 'object') ? archiv.data : {};
+  return d;
+}
+
+/* Die Datenbank, die eine Archivansicht zu sehen bekommt. */
+function archivDatenbank(archiv, liveDb){
+  const abzug = archivAbzug(archiv);
+  const live = (liveDb && typeof liveDb === 'object') ? liveDb : {};
+  const jahresdaten = {};
+  for (const feld of ARCHIV_JAHRESDATEN) {
+    if (abzug[feld] !== undefined && abzug[feld] !== null) jahresdaten[feld] = abzug[feld];
+  }
+  return ensureDbShape({
+    /* Nicht jahresbezogen und deshalb aus den aktuellen Daten: die
+       Vorlagenbibliothek, die Darstellungseinstellungen, der
+       Kompetenzkatalog, die Vorschlagslisten und die Archivliste
+       selbst – sonst käme man aus dem Archiv nicht mehr heraus. */
+    ...deepClone(live),
+    /* Und jetzt das Schuljahr aus dem Abzug. Fehlt ein Feld, greift
+       die Grundform von ensureDbShape: leer statt kaputt. */
+    weeks: {},
+    sequences: {},
+    todos: [],
+    yearBars: [],
+    yearPlanLanes: [],
+    schoolCalendar: { schoolYear: { startISO: '', endISO: '' }, lessonTimesEnabled: false, lessonTimes: [], vacations: [], freeDays: [], events: [] },
+    ...deepClone(jahresdaten),
+    /* Die Archivliste gehört nicht in eine Archivansicht: sie wird
+       überall aus den echten Daten gelesen. Das spart hier ausserdem
+       eine tiefe Kopie sämtlicher Abzüge. */
+    schoolYearArchives: [],
+  });
+}
+
+/* Welche Bereiche dieses Archiv überhaupt KENNT.
+
+   Gefragt wird nach dem Feld, nicht nach seinem Inhalt: ein leeres
+   Feld heisst "da war nichts", ein fehlendes heisst "diese Fassung
+   kannte den Bereich noch nicht". Nur das Zweite ist eine Lücke, über
+   die man Bescheid wissen will. */
+function archivBereiche(archiv){
+  const abzug = archivAbzug(archiv);
+  const kennt = (feld)=> Object.prototype.hasOwnProperty.call(abzug, feld) && abzug[feld] != null;
+  return {
+    wochen: kennt('weeks'),
+    sequenzen: kennt('sequences'),
+    jahresplanung: kennt('yearBars'),
+    todos: kennt('todos'),
+    kalender: kennt('schoolCalendar'),
+  };
+}
+
+/* Kennzahlen für die Übersicht. Sie werden aus dem Abzug gerechnet,
+   nicht gespeichert – so stimmen sie auch für alte Archive. */
+function archivKennzahlen(archiv){
+  const abzug = archivAbzug(archiv);
+  const weeks = (abzug.weeks && typeof abzug.weeks === 'object') ? abzug.weeks : {};
+  const lerngruppen = new Set();
+  let stunden = 0;
+  let stundenplaetze = 0;
+  let mitThema = 0;
+  for (const w of Object.values(weeks)){
+    for (const l of Object.values(w?.lessons || {})){
+      if (!l) continue;
+      stunden += 1;
+      stundenplaetze += normalisiereBlockSpan(l.blockSpan);
+      if (String(l.topic || '').trim()) mitThema += 1;
+      const g = groupKey(l.classGroup, l.subject);
+      if (g) lerngruppen.add(g);
+    }
+  }
+  const sequenzen = Object.keys((abzug.sequences && typeof abzug.sequences === 'object') ? abzug.sequences : {}).length;
+  const balken = Array.isArray(abzug.yearBars) ? abzug.yearBars.length : 0;
+  const todos = Array.isArray(abzug.todos) ? abzug.todos.length : 0;
+  return { lerngruppen: lerngruppen.size, stunden, stundenplaetze, mitThema, sequenzen, balken, todos, wochen: Object.keys(weeks).length };
+}
+
 /* --- Jahresplanung: Zeilen (Lerngruppen) -----------------------------
 
    Eine Zeile der Jahresplanung ist eine Lerngruppe: Klasse und Fach.
@@ -3281,7 +3381,13 @@ const NAV_FUSS = [
   { id: 'help',     label: 'Hilfe',         Icon: CircleHelp },
 ];
 
-function Sidebar({ aktiv, onNavigate }){
+/* Im Archiv stehen nur die Bereiche zur Wahl, die ein Schuljahr
+   überhaupt hat. "Heute" gehört zum laufenden Jahr, die Bibliothek und
+   die Einstellungen gehören der App – beides wäre im Archiv nur
+   verwirrend. */
+const NAV_ARCHIV = ['week', 'macro', 'year', 'competencies', 'calendar'];
+
+function Sidebar({ aktiv, onNavigate, imArchiv = false }){
   const eintrag = ({ id, label, Icon })=>(
     <button
       key={id}
@@ -3297,8 +3403,12 @@ function Sidebar({ aktiv, onNavigate }){
   );
   return (
     <nav className="sidebar" aria-label="Ansichten">
-      <div className="navGroup">{NAV_EBENEN.map(eintrag)}</div>
-      <div className="navGroup navGroup--fuss">{NAV_FUSS.map(eintrag)}</div>
+      <div className="navGroup">
+        {(imArchiv ? NAV_EBENEN.filter(e => NAV_ARCHIV.includes(e.id)) : NAV_EBENEN).map(eintrag)}
+      </div>
+      <div className="navGroup navGroup--fuss">
+        {(imArchiv ? NAV_FUSS.filter(e => e.id === 'help') : NAV_FUSS).map(eintrag)}
+      </div>
     </nav>
   );
 }
@@ -4005,7 +4115,49 @@ function useDB(){
 }
 
 export default function App(){
-  const { db, persist, saveError } = useDB();
+  const { db: liveDb, persist: persistLive, saveError } = useDB();
+
+  /* --- Aktuelles Schuljahr oder Archiv ------------------------------
+
+     Es gibt genau eine Quelle, aus der die Ansichten lesen: `db`.
+     Normalerweise sind das die echten Daten; in der Archivansicht der
+     Abzug des gewählten Schuljahres.
+
+     Geschrieben wird IMMER nur in die echten Daten – und in der
+     Archivansicht gar nicht. Der Riegel dafür liegt nicht in den
+     Schaltflächen, sondern in `persist`: dort kommt jede Änderung
+     vorbei, von der Stundenplanung bis zum Rückgängig. Damit kann
+     keine Ansicht versehentlich in ein Archiv schreiben, auch wenn ihr
+     jemand später eine Schaltfläche hinzufügt. */
+  const [archivAnsicht, setArchivAnsicht] = useState(null); // { id, zurueckZu }
+
+  const archiv = useMemo(()=>{
+    const id = archivAnsicht?.id;
+    if (!id) return null;
+    const liste = Array.isArray(liveDb?.schoolYearArchives) ? liveDb.schoolYearArchives : [];
+    return liste.find(a => a?.id === id) || null;
+  }, [archivAnsicht?.id, liveDb?.schoolYearArchives]);
+
+  const archivDb = useMemo(
+    ()=> (archiv ? archivDatenbank(archiv, liveDb) : null),
+    [archiv, liveDb]
+  );
+
+  /* Ab hier ist `db` die Quelle für ALLE Ansichten. */
+  const db = archiv ? archivDb : liveDb;
+  const imArchiv = Boolean(archiv);
+
+  /* Der Riegel. Die Meldung kommt über eine Referenz, weil showToast
+     erst weiter unten entsteht – der Riegel selbst muss aber vor jeder
+     Schreibstelle stehen. */
+  const archivHinweisRef = useRef(()=>{});
+  const persist = useCallback((nextDb)=>{
+    if (archiv) {
+      archivHinweisRef.current?.();
+      return;
+    }
+    persistLive(nextDb);
+  }, [archiv, persistLive]);
   // Show a large logo once when the app starts (helps users recognize the app).
   const [splashVisible, setSplashVisible] = useState(true);
   const [easterEggVisible, setEasterEggVisible] = useState(false);
@@ -4156,13 +4308,22 @@ export default function App(){
         sequences: nextDb.sequences || {},
         todos: Array.isArray(nextDb.todos) ? nextDb.todos : [],
         groupColors: nextDb.groupColors || {},
-        supervisionLabels: nextDb.supervisionLabels || {}
+        supervisionLabels: nextDb.supervisionLabels || {},
+        /* Die Jahresgrobplanung gehört zum Schuljahr: ihre Balken
+           liegen auf dessen Wochen. Sie wandert deshalb mit ins Archiv
+           und startet im neuen Jahr leer – vorher blieb sie stehen und
+           rutschte an den Anfang des neuen Jahres. Ältere Archive
+           tragen sie nicht; die Archivansicht kommt damit zurecht. */
+        yearBars: Array.isArray(nextDb.yearBars) ? nextDb.yearBars : [],
+        yearPlanLanes: Array.isArray(nextDb.yearPlanLanes) ? nextDb.yearPlanLanes : []
       }
     });
 
     // Reset year-specific planning data
     nextDb.weeks = {};
     nextDb.sequences = {};
+    nextDb.yearBars = [];
+    nextDb.yearPlanLanes = [];
     nextDb.schoolCalendar = {
       schoolYear: { startISO: ns, endISO: ne },
       vacations: [],
@@ -4185,6 +4346,83 @@ export default function App(){
     } catch {}
 
     setSchoolYearDialog({ visible:false, reason:'', oldLabel:'', oldStartISO:'', oldEndISO:'', newStartISO:'', newEndISO:'', keepColors:true, keepTodos:false });
+  };
+
+  /* --- Archivansicht: hinein und wieder heraus ---------------------- */
+
+  const oeffneArchiv = (archivId) => {
+    const liste = Array.isArray(liveDb?.schoolYearArchives) ? liveDb.schoolYearArchives : [];
+    const gewaehlt = liste.find(a => a?.id === archivId);
+    if (!gewaehlt) { showToast('Dieses archivierte Schuljahr wurde nicht gefunden.', { tone: 'warning' }); return; }
+    // Wo es Wochen gibt, beginnt der Blick dort; sonst im Kalender.
+    const hatWochen = archivKennzahlen(gewaehlt).wochen > 0;
+    /* Gemerkt wird, wo man herkam – der Rückweg soll dorthin führen
+       und nicht irgendwohin. */
+    setArchivAnsicht({ id: archivId, zurueckZu: { ...view } });
+    const wochen = Object.keys(archivAbzug(gewaehlt).weeks || {});
+    wochen.sort();
+    const start = wochen[0] || (gewaehlt.startISO || toISODate(new Date()));
+    const ws = (()=>{
+      try { return toISODate(startOfWeekMonday(fromISODate(start))); } catch { return toISODate(startOfWeekMonday(new Date())); }
+    })();
+    setView(hatWochen ? { name:'week', weekStart: ws } : { name:'calendar', weekStart: ws });
+    showToast(`Archivansicht: ${gewaehlt.label || 'Schuljahr'}. Änderungen sind hier nicht möglich.`, { ttl: 7000 });
+  };
+
+  const verlasseArchiv = () => {
+    const zurueck = archivAnsicht?.zurueckZu;
+    setArchivAnsicht(null);
+    /* Keine Daten wandern zurück – es wird nur wieder auf die
+       aktuellen Daten geschaut. */
+    setView(zurueck && zurueck.name ? zurueck : { name:'week', weekStart: toISODate(startOfWeekMonday(new Date())) });
+  };
+
+  /* Ein Archiv als Backup-Datei ausgeben.
+
+     Bewusst dieselbe Form wie ein normales Backup: eine vollständige
+     Datenbank, die nur dieses eine Schuljahr enthält. Damit lässt sie
+     sich mit "Backup importieren" öffnen – es entsteht kein zweites,
+     unverträgliches Dateiformat. */
+  const exportiereArchiv = async (archivId) => {
+    const liste = Array.isArray(liveDb?.schoolYearArchives) ? liveDb.schoolYearArchives : [];
+    const gewaehlt = liste.find(a => a?.id === archivId);
+    if (!gewaehlt) return;
+    if (!capabilities.archiveFiles) {
+      showToast('Der Archiv-Export ist in dieser Fassung nicht verfügbar.', { tone: 'warning' });
+      return;
+    }
+    const inhalt = archivDatenbank(gewaehlt, liveDb);
+    // Die Archivliste selbst gehört nicht in den Abzug eines Jahres.
+    inhalt.schoolYearArchives = [];
+    const name = `Prepybara-${String(gewaehlt.label || 'Schuljahr').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '-')}.json`;
+    try {
+      const gespeichert = await platform.exportArchive({ data: inhalt, suggestedFileName: name });
+      if (typeof gespeichert === 'string') toastSavedPath('Archiv gespeichert.', gespeichert);
+      else if (gespeichert) showToast('Archiv gespeichert.', { tone: 'success' });
+    } catch (err) {
+      showToast(`Archiv konnte nicht gespeichert werden: ${String(err?.message || err)}`, { tone: 'danger' });
+    }
+  };
+
+  const loescheArchiv = async (archivId) => {
+    const liste = Array.isArray(liveDb?.schoolYearArchives) ? liveDb.schoolYearArchives : [];
+    const gewaehlt = liste.find(a => a?.id === archivId);
+    if (!gewaehlt) return;
+    const k = archivKennzahlen(gewaehlt);
+    const ok = await askConfirm({
+      title: 'Archiviertes Schuljahr löschen',
+      body: `Das archivierte ${gewaehlt.label || 'Schuljahr'} wird gelöscht – mit ${k.stunden} ${k.stunden === 1 ? 'Planung' : 'Planungen'} und ${k.sequenzen} ${k.sequenzen === 1 ? 'Sequenz' : 'Sequenzen'}. Danach ist dieses Schuljahr nur noch aus einer Backup-Datei zu bekommen.`,
+      confirmLabel: 'Endgültig löschen',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    // Man kann nicht löschen, was man gerade ansieht.
+    if (archivAnsicht?.id === archivId) verlasseArchiv();
+    const before = liveDb;
+    const nextDb = deepClone(liveDb);
+    nextDb.schoolYearArchives = (Array.isArray(nextDb.schoolYearArchives) ? nextDb.schoolYearArchives : [])
+      .filter(a => a?.id !== archivId);
+    runUndoable(`${gewaehlt.label || 'Schuljahr'} gelöscht`, before, ()=>persistLive(nextDb));
   };
 
   const closeSchoolYearDialog = () => setSchoolYearDialog(prev => ({ ...prev, visible: false }));
@@ -4407,6 +4645,12 @@ const classGroupSuggestions = useMemo(()=>{
   }, [dismissToast]);
   useEffect(()=>()=>{ toastTimers.current.forEach(clearTimeout); toastTimers.current.clear(); }, []);
 
+  /* Die Meldung des Riegels. Sie steht hier, weil showToast erst jetzt
+     existiert; der Riegel selbst liegt weiter oben in persist(). */
+  useEffect(()=>{
+    archivHinweisRef.current = ()=> showToast('Archivansicht: Dieses Schuljahr ist archiviert. Änderungen sind hier nicht möglich.', { tone: 'warning' });
+  }, [showToast]);
+
 
   /* ---- Rückgängig -----------------------------------------------------
      Bewusst an diskrete Aktionen gebunden, nicht an persist(): persist
@@ -4418,12 +4662,15 @@ const classGroupSuggestions = useMemo(()=>{
     undoStack.current = [...undoStack.current.slice(-(UNDO_LIMIT - 1)), { label, db: deepClone(snapshot) }];
   }, []);
   const undoLast = useCallback(()=>{
+    /* In der Archivansicht gibt es nichts rückgängig zu machen – und
+       der Stapel gehört zu den aktuellen Daten. */
+    if (imArchiv) { archivHinweisRef.current?.(); return; }
     const entry = undoStack.current[undoStack.current.length - 1];
     if (!entry) { showToast('Nichts zum Rückgängigmachen.'); return; }
     undoStack.current = undoStack.current.slice(0, -1);
     persist(entry.db);
     showToast(`${entry.label} rückgängig gemacht.`);
-  }, [showToast, persist]);
+  }, [showToast, persist, imArchiv]);
 
   /* Umkehrbare Aktion: ausführen, dann Rückgängig anbieten. */
   const runUndoable = useCallback((label, snapshot, mutate)=>{
@@ -4469,6 +4716,9 @@ const classGroupSuggestions = useMemo(()=>{
   useEffect(()=>{
     const vorher = letzteWoche.current;
     letzteWoche.current = view.weekStart;
+    /* Der Wochenabschluss gehört zum laufenden Schuljahr. In der
+       Archivansicht wäre er ein Rückblick auf einen Rückblick. */
+    if (imArchiv) return;
     if (!db || appSettings?.weekReview === false) return;
     // Beim Verlassen der Wochenansicht
     if (view.name === 'week') return;
@@ -4503,6 +4753,7 @@ const classGroupSuggestions = useMemo(()=>{
       { id:'v-comp',     group:'Ansicht', label:'Kompetenzen im Jahr', run: go({ name:'competencies', weekStart: ws }) },
       { id:'v-library',  group:'Ansicht', label:'Bibliothek',          run: go({ name:'library', weekStart: ws }) },
       { id:'v-calendar', group:'Ansicht', label:'Schulkalender',       run: go({ name:'calendar', weekStart: ws }) },
+      { id:'v-archives', group:'Ansicht', label:'Archivierte Schuljahre', run: go({ name:'archives', weekStart: ws }) },
       { id:'v-todos',    group:'Ansicht', label:'To-dos',              run: go({ name:'todos', weekStart: ws }) },
       { id:'v-settings', group:'Ansicht', label:'Einstellungen',       run: go({ name:'settings', weekStart: ws }) },
       { id:'v-help',     group:'Ansicht', label:'Hilfe',               run: go({ name:'help', weekStart: ws }) },
@@ -4526,6 +4777,22 @@ const classGroupSuggestions = useMemo(()=>{
       { id:'t-dark',   group:'Darstellung', label:'Dunkel', run: ()=>updateAppSettings({ theme:'dark' }) },
       { id:'t-system', group:'Darstellung', label:'System', run: ()=>updateAppSettings({ theme:'system' }) },
     ];
+
+    /* In der Archivansicht bleibt, was nur schaut. Alles Ändernde ist
+       dort ohnehin wirkungslos – es hier gar nicht erst anzubieten,
+       erspart die Meldung. */
+    const nurAnsehen = new Set([
+      'a-undo', 'a-seq', 'a-copy', 'a-expback', 'a-impback', 'a-pocketexp', 'v-pocket',
+      'v-settings', 'v-library', 'v-today',
+    ]);
+    const gefiltert = imArchiv ? cmds.filter(c => !nurAnsehen.has(c.id)) : cmds;
+    if (imArchiv) {
+      gefiltert.unshift({
+        id:'a-archiv-zurueck', group:'Aktion', label:'Zurück zum aktuellen Schuljahr', run: ()=>verlasseArchiv(),
+      });
+    }
+    cmds.length = 0;
+    cmds.push(...gefiltert);
 
     // Sequenzen: direkt in den Makro-Plan springen und dort filtern.
     for (const seq of Object.values(sequences || {})) {
@@ -4645,6 +4912,8 @@ const todosDueTodayCount = useMemo(()=>{
 
 useEffect(()=>{
   if (splashVisible) return;
+  // To-dos aus einem abgeschlossenen Schuljahr sind nicht "heute fällig".
+  if (imArchiv) return;
   if (todosDueTodayCount <= 0) return;
   if (todoReminderGuard.current === todayISO) return;
   todoReminderGuard.current = todayISO;
@@ -4664,6 +4933,8 @@ useEffect(()=>{
     const todayISO = toISODate(new Date());
     if (todayISO <= endISO) return;
 
+    // Kein Schuljahreswechsel aus einer Archivansicht heraus.
+    if (imArchiv) return;
     const meta = db.schoolYearRollover || {};
     if (((meta.dismissedEndISO || '').trim()) === endISO) return;
 
@@ -5323,6 +5594,10 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
      Render-Runde, nicht in einem Effekt: ein zweiter Effekt an dieser
      Stelle läge wieder hinter dem frühen Rückgabepfad. */
   pocketMenuRef.current = (aktion)=>{
+    /* Der Pocket-Austausch bezieht sich immer auf das laufende
+       Schuljahr. Aus dem Menü heraus ist er auch in der Archivansicht
+       erreichbar – deshalb hier derselbe Riegel wie sonst. */
+    if (imArchiv) { archivHinweisRef.current?.(); return; }
     if (aktion === 'export-profile') exportPocketProfile();
     else setView({ name: 'pocket', weekStart: view.weekStart });
   };
@@ -6377,6 +6652,7 @@ const doExportDocx = async (html, suggestedName) => {
     if (view.name === 'week') {
       return (
         <WeekView
+          readOnly={imArchiv}
           weekStart={view.weekStart}
           week={week}
           sequences={sequences}
@@ -6417,6 +6693,7 @@ const doExportDocx = async (html, suggestedName) => {
     if (view.name === 'macro') {
       return (
         <MacroView
+          readOnly={imArchiv}
           db={db}
           view={view}
           sequences={sequences}
@@ -6469,6 +6746,7 @@ const doExportDocx = async (html, suggestedName) => {
           onCreateBar={(payload)=>createYearBar(payload)}
           onUpdateBar={(id, patch)=>updateYearBar(id, patch)}
           onDeleteBar={(id)=>deleteYearBar(id)}
+          readOnly={imArchiv}
           onClearLane={(laneKey)=>clearYearPlanLane(laneKey)}
           onRemoveLane={(laneKey)=>removeYearPlanLane(laneKey)}
           onRenameLane={(laneKey)=>renameYearPlanLane(laneKey)}
@@ -6523,9 +6801,23 @@ const doExportDocx = async (html, suggestedName) => {
         />
       );
     }
+    if (view.name === 'archives') {
+      return (
+        <ArchiveOverviewView
+          /* Immer aus den ECHTEN Daten: die Archivliste gehört nicht zu
+             einem einzelnen Schuljahr. */
+          archive={liveDb?.schoolYearArchives || []}
+          onOpen={(id)=>oeffneArchiv(id)}
+          onExport={(id)=>exportiereArchiv(id)}
+          onDelete={(id)=>loescheArchiv(id)}
+          onBack={()=>setView({ name:'calendar', weekStart: view.weekStart })}
+        />
+      );
+    }
     if (view.name === 'todos') {
       return (
         <TodoView
+          readOnly={imArchiv}
           weekStart={view.weekStart}
           todos={todos}
           onAddTodo={addTodo}
@@ -6659,7 +6951,9 @@ const doExportDocx = async (html, suggestedName) => {
       return (
         <SchoolCalendarView
           calendar={schoolCalendar}
-          archivesCount={(db.schoolYearArchives || []).length}
+          readOnly={imArchiv}
+          archivesCount={(liveDb?.schoolYearArchives || []).length}
+          onOpenArchives={()=>setView({ name:'archives', weekStart: view.weekStart })}
           onStartNewSchoolYear={()=>openNewSchoolYearDialog({ reason:'manual' })}
           onUpdate={(updater)=>{
             const nextDb = deepClone(db);
@@ -6681,6 +6975,7 @@ const doExportDocx = async (html, suggestedName) => {
     // default: Einzelstunde
     return (
       <LessonView
+        readOnly={imArchiv}
         weekStart={view.weekStart}
         dayIndex={view.dayIndex}
         slotIndex={lessonSlotIndex}
@@ -6819,11 +7114,15 @@ const doExportDocx = async (html, suggestedName) => {
                 <input className="input" style={{width:170}} type="date" min={minDate} max={maxDate} value={selectedDate} onChange={(e)=>onSelectWeekDate(e.target.value)} />
                 <button className="btn" title="Nächste Woche" aria-label="Nächste Woche" onClick={()=>goWeekDelta(1)}><ChevronRight {...ICON} /></button>
               </div>
-              <button className="btn" onClick={()=>setShowWeekCopyDialog(true)}>In nächste Woche übernehmen</button>
-              {capabilities.backupFiles ? (
+              {!imArchiv ? (
                 <>
-                  <button className="btn" onClick={()=>exportBackup()}>Backup exportieren</button>
-                  <button className="btn" onClick={()=>importBackup()}>Backup importieren</button>
+                  <button className="btn" onClick={()=>setShowWeekCopyDialog(true)}>In nächste Woche übernehmen</button>
+                  {capabilities.backupFiles ? (
+                    <>
+                      <button className="btn" onClick={()=>exportBackup()}>Backup exportieren</button>
+                      <button className="btn" onClick={()=>importBackup()}>Backup importieren</button>
+                    </>
+                  ) : null}
                 </>
               ) : null}
             </>
@@ -6831,9 +7130,24 @@ const doExportDocx = async (html, suggestedName) => {
         </div>
       </div>
 
-      <div className="appBody">
+      {/* Dauerhaft sichtbar, solange ein Archiv offen ist. Es steht über
+          allem anderen, damit niemand vergisst, wo er gerade ist. */}
+      {imArchiv ? (
+        <div className="archivBand" role="status">
+          <div className="archivBandText">
+            <span className="archivBandTitel"><Archive {...ICON_SM} /> Archivansicht · {archiv?.label || 'Schuljahr'}</span>
+            <span className="archivBandHinweis">Dieses Schuljahr ist archiviert. Änderungen sind deaktiviert.</span>
+          </div>
+          <button className="btn" onClick={verlasseArchiv}>
+            <ArrowLeft {...ICON_SM} /> Zurück zum aktuellen Schuljahr
+          </button>
+        </div>
+      ) : null}
+
+      <div className={`appBody${imArchiv ? ' appBody--archiv' : ''}`}>
         {!isHelpOnlyWindow ? (
           <Sidebar
+            imArchiv={imArchiv}
             aktiv={view.name}
             onNavigate={(ziel)=>{
               const ws = view.weekStart;
@@ -6918,7 +7232,7 @@ const doExportDocx = async (html, suggestedName) => {
         newEndISO={schoolYearDialog.newEndISO}
         keepColors={schoolYearDialog.keepColors}
         keepTodos={schoolYearDialog.keepTodos}
-        archivesCount={(db.schoolYearArchives || []).length}
+        archivesCount={(liveDb?.schoolYearArchives || []).length}
         onChange={(patch)=>setSchoolYearDialog(prev=>({ ...prev, ...patch }))}
         onClose={closeSchoolYearDialog}
         onSnooze={()=>snoozeSchoolYearDialog(7)}
@@ -6986,6 +7300,7 @@ const doExportDocx = async (html, suggestedName) => {
 }
 
 function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO, groupColors, duties, supervisionSuggestions, onHideSupervisionSuggestion = ()=>{},
+  readOnly = false,
   lessonClipboard, onCopyLesson, onCutLesson, onPasteLesson, onLessonDnd, onReviewLesson,
   onJoinBlock, onSplitBlock,
   onOpenGroupColorPalette, onOpenLesson, onOpenMacro, onOpenTodos, onChangeSlots, onDeleteLesson, onUpsertDuty, onDeleteDuty, onExportPdf, onExportDocx }){
@@ -7041,6 +7356,8 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
   };
 
   const openDutyEditor = (dayIndex, pos) => {
+    // In der Archivansicht wird die Aufsicht nur angezeigt.
+    if (readOnly) return;
     setDutyEditor({ dayIndex, pos });
   };
 
@@ -7071,10 +7388,10 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
               style={{gridColumn: spalteNr(dayIndex), gridRow: aufsichtZeileNr(pos)}}
               className={`dutyCell ${duty ? 'dutyCell--has' : ''} ${info.isOff ? 'dayOffDutyCell' : ''}`}
               onClick={(e)=>{ e.stopPropagation(); openDutyEditor(dayIndex, pos); }}
-              title={duty ? `Aufsicht: ${duty.title}` : 'Aufsicht eintragen'}
-              aria-label={duty ? `Aufsicht bearbeiten: ${duty.title}` : 'Aufsicht eintragen'}
-              role="button"
-              tabIndex={0}
+              title={duty ? `Aufsicht: ${duty.title}` : (readOnly ? '' : 'Aufsicht eintragen')}
+              aria-label={duty ? `Aufsicht: ${duty.title}` : 'Aufsicht eintragen'}
+              role={readOnly ? undefined : 'button'}
+              tabIndex={readOnly ? -1 : 0}
               onKeyDown={(e)=>{
                 if (e.key === 'Enter' || e.key === ' '){
                   e.preventDefault();
@@ -7082,7 +7399,7 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
                 }
               }}
             >
-              <span className="dutyCellPlus">{duty ? '' : '+'}</span>
+              <span className="dutyCellPlus">{(duty || readOnly) ? '' : '+'}</span>
             </div>
           );
         })}
@@ -7131,7 +7448,9 @@ const exportWeekDocx = () => {
       <div className="row wrap" style={{justifyContent:'space-between'}}>
         <div>
           <div style={{fontWeight:800, fontSize:16}}>Wochenübersicht</div>
-          <div className="muted small">Klicke auf eine Stunde, um in die Einzelstundenplanung zu zoomen.</div>
+          <div className="muted small">{readOnly
+            ? 'Archiviertes Schuljahr – klicke auf eine Stunde, um die Planung anzusehen.'
+            : 'Klicke auf eine Stunde, um in die Einzelstundenplanung zu zoomen.'}</div>
           <span className="badge" style={{marginTop:6}}>{formatWeekLabel(weekStart)}</span>
         </div>
         <div className="row" style={{gap:8}}>
@@ -7143,7 +7462,10 @@ const exportWeekDocx = () => {
             <button className="btn iconBtn-pdf" onClick={exportWeekPdf} title="Als PDF speichern"><FileDown {...ICON_SM} /> PDF Woche</button>
           ) : null}
           <span className="muted small">Stunden pro Tag:</span>
-          <input className="input" style={{width:90}} type="number" min={1} max={12} value={slots} onChange={(e)=>onChangeSlots(Number(e.target.value||slots))} />
+          <input className="input" style={{width:90}} type="number" min={1} max={12} value={slots}
+                 disabled={readOnly}
+                 title={readOnly ? 'In der Archivansicht nicht änderbar' : ''}
+                 onChange={(e)=>onChangeSlots(Number(e.target.value||slots))} />
         </div>
       </div>
 
@@ -7204,11 +7526,15 @@ const exportWeekDocx = () => {
                   <div
                     key={k}
                     style={{...(cellStyle || {}), gridColumn: spalteNr(dayIndex), gridRow: `${stundenZeileNr(slotIndex)} / span ${zeilenSpan}`}}
-                    className={`lessonCell ${info.isOff ? 'dayOffCell' : ''} ${gKey ? 'hasGroupColor' : ''} ${istBlock ? 'lessonCell--block' : ''} ${dropKey === k ? 'dropTarget' : ''}`}
-                    tabIndex={0}
-                    onClick={()=>onOpenLesson(dayIndex, slotIndex)}
-                    title={dayLabel ? `${dayLabel} (trotzdem öffnen)` : (l ? `${istBlock ? `${blockName(span)} · ${stundenBereichLabel(slotIndex, span)} · ` : ''}Öffnen (ziehen zum Verschieben, Ctrl+Ziehen zum Kopieren)` : 'Öffnen')}
-                    draggable={!!l}
+                    className={`lessonCell ${info.isOff ? 'dayOffCell' : ''} ${gKey ? 'hasGroupColor' : ''} ${istBlock ? 'lessonCell--block' : ''} ${dropKey === k ? 'dropTarget' : ''} ${(readOnly && !l) ? 'lessonCell--leer' : ''}`}
+                    tabIndex={(readOnly && !l) ? -1 : 0}
+                    onClick={()=>{
+                      // Im Archiv gibt es an einem leeren Platz nichts anzusehen.
+                      if (readOnly && !l) return;
+                      onOpenLesson(dayIndex, slotIndex);
+                    }}
+                    title={dayLabel ? `${dayLabel} (trotzdem öffnen)` : (l ? `${istBlock ? `${blockName(span)} · ${stundenBereichLabel(slotIndex, span)} · ` : ''}${readOnly ? 'Ansehen' : 'Öffnen (ziehen zum Verschieben, Ctrl+Ziehen zum Kopieren)'}` : 'Öffnen')}
+                    draggable={!!l && !readOnly}
                     onDragStart={(e)=>{
                       if (!l) return;
                       try {
@@ -7219,6 +7545,7 @@ const exportWeekDocx = () => {
                       } catch {}
                     }}
                     onDragOver={(e)=>{
+                      if (readOnly) return;
                       try {
                         const types = Array.from(e.dataTransfer.types || []);
                         if (!types.includes('application/x-prepybara-lesson')) return;
@@ -7228,6 +7555,7 @@ const exportWeekDocx = () => {
                     }}
                     onDragLeave={()=>{ if (dropKey === k) setDropKey(null); }}
                     onDrop={(e)=>{
+                      if (readOnly) return;
                       try {
                         const raw = e.dataTransfer.getData('application/x-prepybara-lesson');
                         if (!raw) return;
@@ -7241,7 +7569,8 @@ const exportWeekDocx = () => {
                     }}
                   >
 
-                    {(l || lessonClipboard) ? (
+                    {/* Werkzeuge sind Änderungen – im Archiv gibt es keine. */}
+                    {(!readOnly && (l || lessonClipboard)) ? (
                       <div className="cellTools" onClick={(e)=>e.stopPropagation()}>
                         {l ? (
                           <>
@@ -7314,7 +7643,7 @@ const exportWeekDocx = () => {
                         aria-label="Farbe der Lerngruppe ändern"
                       />
                     ) : null}
-                    <div className="title">{title || 'Planen…'}</div>
+                    <div className="title">{l ? (title || 'Ohne Titel') : (readOnly ? '' : 'Planen…')}</div>
                     <div className="sub">{sub}</div>
                     {istBlock ? (
                       <span className="blockBadge" title={`${stundenBereichLabel(slotIndex, span)} · ${TOTAL_MIN * span} Minuten am Stück`}>
@@ -7322,7 +7651,9 @@ const exportWeekDocx = () => {
                       </span>
                     ) : null}
                     {seq ? <span className="badge" style={{borderColor: lineColor(seq.color), color: textColor(seq.color)}}>Sequenz: {seq.name}</span> : null}
-                    {l?.topic ? <span className="badge">Thema: {l.topic}</span> : <span className="badge">Noch kein Thema</span>}
+                    {l?.topic
+                      ? <span className="badge">Thema: {l.topic}</span>
+                      : (l || !readOnly) ? <span className="badge">Noch kein Thema</span> : null}
                     {(()=>{
                       /* Dezentes Kennzeichen, kein Warnsymbol: ein Haken für
                          nachbereitet, ein Punkt für noch Vorgemerktes. */
@@ -7375,7 +7706,120 @@ const exportWeekDocx = () => {
   );
 }
 
-function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archivesCount = 0 }){
+/* Die Übersicht über die archivierten Schuljahre.
+
+   Sie liest nur: jede Karte zeigt, was in dem Abzug steckt, und
+   bietet an, ihn anzusehen oder auszugeben. Geöffnet wird immer eine
+   Ansicht, nie ein Rückschreiben in die aktuellen Daten. */
+function ArchiveOverviewView({ archive, onOpen, onExport, onDelete, onBack }){
+  const liste = useMemo(()=>{
+    const arr = Array.isArray(archive) ? [...archive] : [];
+    // Neuestes zuerst: erst nach Archivierungszeitpunkt, dann nach Schuljahresende.
+    arr.sort((a,b)=> String(b?.archivedAt || '').localeCompare(String(a?.archivedAt || ''))
+      || String(b?.endISO || '').localeCompare(String(a?.endISO || '')));
+    return arr;
+  }, [archive]);
+
+  const zeitraum = (a)=>{
+    const s = String(a?.startISO || '').trim();
+    const e = String(a?.endISO || '').trim();
+    if (!s && !e) return 'Zeitraum nicht hinterlegt';
+    if (s && e) return `${formatDateDE(s)} – ${formatDateDE(e)}`;
+    return formatDateDE(s || e);
+  };
+
+  return (
+    <div className="card">
+      <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
+        <div>
+          <div style={{fontWeight:900, fontSize:16}}>Archivierte Schuljahre</div>
+          <div className="muted small">
+            Abgeschlossene Schuljahre. Sie lassen sich ansehen und ausgeben – geändert wird darin nichts.
+          </div>
+        </div>
+        <button className="btn" onClick={onBack}>Zum Schulkalender</button>
+      </div>
+
+      <div style={{height:14}} />
+
+      {liste.length === 0 ? (
+        <EmptyState
+          text="Noch kein Schuljahr archiviert. Beim Start eines neuen Schuljahres wird das bisherige hier abgelegt."
+        />
+      ) : (
+        <div className="archivListe">
+          {liste.map(a => {
+            const k = archivKennzahlen(a);
+            const bereiche = archivBereiche(a);
+            const fehlend = [
+              bereiche.wochen ? null : 'Wochenplanung',
+              bereiche.sequenzen ? null : 'Sequenzen',
+              bereiche.jahresplanung ? null : 'Jahresplanung',
+            ].filter(Boolean);
+            return (
+              <div key={a.id} className="archivKarte">
+                <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start', gap:12}}>
+                  <div style={{minWidth:0}}>
+                    <div className="row" style={{gap:8, alignItems:'center'}}>
+                      <Archive {...ICON_SM} />
+                      <span style={{fontWeight:900, fontSize:15}}>{a.label || 'Schuljahr'}</span>
+                    </div>
+                    <div className="muted small" style={{marginTop:2}}>{zeitraum(a)}</div>
+                    <div className="muted small">
+                      Archiviert am {formatDateDE(String(a.archivedAt || '').slice(0,10))}
+                    </div>
+                  </div>
+                  <div className="row wrap" style={{gap:8}}>
+                    <button className="btn primary" onClick={()=>onOpen(a.id)}>Ansehen</button>
+                    {capabilities.archiveFiles ? (
+                      <button className="btn" onClick={()=>onExport(a.id)} title="Als Backup-Datei speichern">
+                        <Download {...ICON_SM} /> Exportieren
+                      </button>
+                    ) : null}
+                    <KebabMenu
+                      titel={`Weitere Aktionen für ${a.label || 'dieses Schuljahr'}`}
+                      eintraege={[
+                        capabilities.archiveFiles ? {
+                          label: 'Als Backup-Datei speichern',
+                          icon: <Download {...ICON_SM} />,
+                          onSelect: ()=>onExport(a.id),
+                        } : null,
+                        { trenner: true },
+                        {
+                          label: 'Archiv endgültig löschen',
+                          icon: <Trash2 {...ICON_SM} />,
+                          tone: 'danger',
+                          onSelect: ()=>onDelete(a.id),
+                        },
+                      ].filter(Boolean)}
+                    />
+                  </div>
+                </div>
+
+                <div className="row wrap" style={{gap:6, marginTop:10}}>
+                  <span className="pill">{k.lerngruppen} {k.lerngruppen === 1 ? 'Lerngruppe' : 'Lerngruppen'}</span>
+                  <span className="pill">{k.stunden} {k.stunden === 1 ? 'Planung' : 'Planungen'}</span>
+                  <span className="pill">{k.sequenzen} {k.sequenzen === 1 ? 'Sequenz' : 'Sequenzen'}</span>
+                  {k.balken ? <span className="pill">{k.balken} {k.balken === 1 ? 'Balken' : 'Balken'} im Jahresplan</span> : null}
+                  {k.todos ? <span className="pill">{k.todos} To-dos</span> : null}
+                  <span className="pill">{k.wochen} {k.wochen === 1 ? 'Woche' : 'Wochen'}</span>
+                </div>
+
+                {fehlend.length ? (
+                  <div className="muted small" style={{marginTop:8}}>
+                    Nicht in diesem Abzug enthalten: {fehlend.join(', ')}. Das Archiv stammt aus einer früheren Fassung.
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archivesCount = 0, onOpenArchives, readOnly = false }){
   const cal = calendar || { schoolYear:{startISO:'', endISO:''}, lessonTimesEnabled:false, lessonTimes:[], vacations:[], freeDays:[], events:[] };
   const schoolYear = cal.schoolYear || { startISO:'', endISO:'' };
 
@@ -7516,7 +7960,9 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
       <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
         <div>
           <div style={{fontWeight:900, fontSize:16}}>Schulkalender</div>
-          <div className="muted small">Schuljahr, Ferien, schulfreie Tage und Termine – inklusive ICS-Import.</div>
+          <div className="muted small">{readOnly
+            ? 'Archiviertes Schuljahr – Ferien, schulfreie Tage und Termine werden nur angezeigt.'
+            : 'Schuljahr, Ferien, schulfreie Tage und Termine – inklusive ICS-Import.'}</div>
         </div>
         <div className="row wrap" style={{gap:8}}>
           <input
@@ -7526,11 +7972,27 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
             style={{display:'none'}}
             onChange={(e)=>onIcsSelected(e.target.files?.[0])}
           />
-          <button className="btn" onClick={onPickIcs}>ICS importieren…</button>
-          <button className="btn" onClick={()=>onStartNewSchoolYear?.()}>Neues Schuljahr…</button>
-          <span className="pill" title="Archivierte Schuljahre">Archiv: {archivesCount}</span>
+          {!readOnly ? (
+            <>
+              <button className="btn" onClick={onPickIcs}>ICS importieren…</button>
+              <button className="btn" onClick={()=>onStartNewSchoolYear?.()}>Neues Schuljahr…</button>
+            </>
+          ) : null}
+          {/* Aus der Zählung wird eine Tür: das Archiv ist von hier aus
+              zu öffnen, nicht nur zu zählen. */}
+          <button
+            className="btn"
+            onClick={()=>onOpenArchives?.()}
+            disabled={!archivesCount}
+            title={archivesCount
+              ? 'Archivierte Schuljahre ansehen'
+              : 'Noch kein Schuljahr archiviert'}
+          ><Archive {...ICON_SM} /> Archivierte Schuljahre ({archivesCount})</button>
         </div>
       </div>
+
+      {/* Der Kalender des Archivs wird gelesen, nicht gepflegt. */}
+      <fieldset className="archivFieldset" disabled={readOnly}>
 
       <div style={{height:12}} />
 
@@ -7713,6 +8175,7 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
           onChange={setImportRows}
         />
       )}
+      </fieldset>
     </div>
   );
 }
@@ -7824,6 +8287,7 @@ function LessonView({
   onJoinBlock,
   onSplitBlock,
   kannVerbinden = false,
+  readOnly = false,
   classGroupSuggestions,
   subjectSuggestions,
   onRememberClassGroup,
@@ -8422,7 +8886,10 @@ const exportDocx = () => {
       <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
         <div>
           <div style={{fontWeight:900, fontSize:16}}>{istBlock ? blockName(blockSpan) : 'Einzelstunde'}</div>
-          <div className="muted small">{lessonTitle}{istBlock ? ` · ${gesamtMin} Minuten am Stück` : ''}</div>
+          <div className="muted small">
+            {lessonTitle}{istBlock ? ` · ${gesamtMin} Minuten am Stück` : ''}
+            {readOnly ? ' · archiviert, nur zum Ansehen' : ''}
+          </div>
           {(dayInfo.vac || dayInfo.fd || (dayInfo.evs && dayInfo.evs.length)) ? (
             <div className="row wrap" style={{gap:6, marginTop:6}}>
               {dayInfo.vac ? <span className="badge badge--vacation" title={`Ferien: ${dayInfo.vac.name || ''}`}><Palmtree {...ICON_SM} /> Ferien: {dayInfo.vac.name || ''}</span> : null}
@@ -8437,7 +8904,7 @@ const exportDocx = () => {
         <div className="row" style={{gap:8}}>
           {/* Der gerade offene Entwurf geht mit: was eben getippt wurde,
               ist noch nicht gespeichert. */}
-          {istBlock ? (
+          {readOnly ? null : istBlock ? (
             <button className="btn" onClick={()=>onSplitBlock?.(local)}
                     title={`${blockName(blockSpan)} wieder in Einzelstunden trennen`}>
               <Unlink {...ICON_SM} /> Doppelstunde trennen
@@ -8448,14 +8915,18 @@ const exportDocx = () => {
               <Link2 {...ICON_SM} /> Als Doppelstunde verbinden
             </button>
           ) : null}
-          <button className="btn" onClick={()=>onOpenReview?.()}
-                  title="Nach der Stunde festhalten, was daraus geworden ist">
-            <ClipboardCheck {...ICON_SM} /> Nachbereiten
-          </button>
-          {capabilities.executionWindow ? (
-            <button className="btn success" onClick={startExecution}><Play {...ICON_SM} /> Durchführung</button>
+          {!readOnly ? (
+            <>
+              <button className="btn" onClick={()=>onOpenReview?.()}
+                      title="Nach der Stunde festhalten, was daraus geworden ist">
+                <ClipboardCheck {...ICON_SM} /> Nachbereiten
+              </button>
+              {capabilities.executionWindow ? (
+                <button className="btn success" onClick={startExecution}><Play {...ICON_SM} /> Durchführung</button>
+              ) : null}
+              <button className="btn danger" onClick={onDeleteLesson}>Stunde löschen</button>
+            </>
           ) : null}
-          <button className="btn danger" onClick={onDeleteLesson}>Stunde löschen</button>
           {capabilities.docxExport ? (
             <button className="btn iconBtn-word" onClick={exportDocx} title="Als Word-Datei speichern"><FileText {...ICON_SM} /> Word speichern</button>
           ) : null}
@@ -8467,6 +8938,13 @@ const exportDocx = () => {
 
       <div style={{height:12}} />
 
+      {/* Der Riegel der Archivansicht.
+
+          Ein deaktiviertes <fieldset> nimmt allen Eingabefeldern und
+          Schaltflächen darin nativ die Wirkung – zuverlässiger, als
+          jede einzelne Stelle daran zu erinnern. Die Ausgabe (PDF,
+          Word) liegt bewusst ausserhalb: sie ändert nichts. */}
+      <fieldset className="archivFieldset" disabled={readOnly}>
       <div className="row wrap">
         <div className="grow">
           <label className="small muted">Fach</label>
@@ -8512,6 +8990,8 @@ const exportDocx = () => {
 
       </div>
 
+      </fieldset>
+
       <div style={{height:10}} />
 
       <DidaktikCheckDialog
@@ -8542,6 +9022,7 @@ const exportDocx = () => {
         onIgnorieren={(p)=>onResolveCarryOver?.(p, 'dismissed')}
       />
 
+      <fieldset className="archivFieldset" disabled={readOnly}>
       <div className="row wrap">
         <div className="grow">
           <label className="small muted">Stundenthema</label>
@@ -9026,7 +9507,10 @@ const exportDocx = () => {
       </div>
 
       <div style={{height:6}} />
-      <div className="muted small">Tipp: Ziehe einen Phasenblock im Zeitstrahl, um die Reihenfolge zu ändern. Ziehe die Trennlinie zwischen zwei Phasen, um Minuten zu verschieben (Summe bleibt {gesamtMin}).</div>
+      </fieldset>
+      {!readOnly ? (
+        <div className="muted small">Tipp: Ziehe einen Phasenblock im Zeitstrahl, um die Reihenfolge zu ändern. Ziehe die Trennlinie zwischen zwei Phasen, um Minuten zu verschieben (Summe bleibt {gesamtMin}).</div>
+      ) : null}
     </div>
   );
 }
@@ -9051,7 +9535,8 @@ function MacroView({
   onUpdateLessonAt,
   onDeleteLessonAt,
   onExportPdf,
-  onExportDocx
+  onExportDocx,
+  readOnly = false
 }){
   const startISO = view.startISO || view.weekStart;
   const rangeDays = view.rangeDays || 28;
@@ -9253,7 +9738,9 @@ const exportSequenceDocx = (sequenceId) => {
           <div className="muted small">Lerngruppen als horizontale Strahlen. Klick auf eine Stunde öffnet die Detailplanung.</div>
         </div>
         <div className="row wrap" style={{gap:8}}>
-          <button className="btn" onClick={()=>onRequestCreateSequence?.()}>Sequenzen verwalten</button>
+          {!readOnly ? (
+            <button className="btn" onClick={()=>onRequestCreateSequence?.()}>Sequenzen verwalten</button>
+          ) : null}
         </div>
       </div>
 
@@ -9428,7 +9915,8 @@ function YearPlanView({
   onClearLane,
   onRemoveLane,
   onRenameLane,
-  onSetView
+  onSetView,
+  readOnly = false
 }){
   const schoolYear = (schoolCalendar && schoolCalendar.schoolYear) ? schoolCalendar.schoolYear : { startISO:'', endISO:'' };
   const syStart = (schoolYear.startISO || '').trim();
@@ -9571,6 +10059,7 @@ function YearPlanView({
   };
 
   const startEdit = (bar) => {
+    if (readOnly) return;
     setModal({ open:true, mode:'edit', bar: deepClone(bar) });
   };
 
@@ -9579,6 +10068,8 @@ function YearPlanView({
   const onMouseDownBar = (e, bar, mode) => {
     e.preventDefault();
     e.stopPropagation();
+    // Im Archiv wird nichts gezogen und nichts verschoben.
+    if (readOnly) return;
     if (!weekStarts.length) return;
     const startIdx = weekIndexOf(bar.startISO);
     const endIdx = weekIndexOf(bar.endISO);
@@ -9664,10 +10155,14 @@ function YearPlanView({
       <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
         <div>
           <div style={{fontWeight:900, fontSize:16}}>Jahresgrobplanung</div>
-          <div className="muted small">Farbbalken über das Schuljahr – nur Orientierung. Keine Auswirkungen auf Unterrichtssequenzen, nicht im Export.</div>
+          <div className="muted small">{readOnly
+            ? 'Archiviertes Schuljahr – die Balken werden nur angezeigt.'
+            : 'Farbbalken über das Schuljahr – nur Orientierung. Keine Auswirkungen auf Unterrichtssequenzen, nicht im Export.'}</div>
         </div>
         <div className="row wrap" style={{gap:8}}>
-          <button className="btn primary" onClick={startCreate}>+ Balken hinzufügen</button>
+          {!readOnly ? (
+            <button className="btn primary" onClick={startCreate}>+ Balken hinzufügen</button>
+          ) : null}
         </div>
       </div>
 
@@ -9730,6 +10225,7 @@ function YearPlanView({
                 {/* Aktionen der ZEILE – nicht der Lerngruppe. Die
                     Lerngruppe selbst bleibt der App in jedem Fall
                     erhalten; hier geht es nur um diese Jahresplanung. */}
+                {!readOnly ? (
                 <KebabMenu
                   titel="Aktionen für diese Zeile"
                   ausrichtung="links"
@@ -9752,6 +10248,7 @@ function YearPlanView({
                     },
                   ]}
                 />
+                ) : null}
               </div>
               <div className="yearPlanScroll">
                 <div className="yearPlanLane" style={{width: totalWidth}}>
@@ -12616,7 +13113,7 @@ function WeekCopyDialog({ visible, onClose, onConfirm, weekTodosCount = 0, futur
   );
 }
 
-function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onBack }){
+function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onBack, readOnly = false }){
   const [text, setText] = useState('');
   const [dateISO, setDateISO] = useState('');
   const [deadlineISO, setDeadlineISO] = useState('');
@@ -12655,12 +13152,17 @@ function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onB
       <div className="row" style={{justifyContent:'space-between'}}>
         <div>
           <div style={{fontWeight:900, fontSize:18}}>To-do Checkliste</div>
-          <div className="muted small">Optionales Datum/Deadline → Hinweis im Stundenplan & beim App-Start (ohne Inhalt).</div>
+          <div className="muted small">{readOnly
+            ? 'Archiviertes Schuljahr – die To-dos werden nur angezeigt.'
+            : 'Optionales Datum/Deadline → Hinweis im Stundenplan & beim App-Start (ohne Inhalt).'}</div>
         </div>
         <button className="btn" onClick={onBack}>Zurück</button>
       </div>
 
       <div style={{height:12}} />
+
+      {/* Alles darin ist im Archiv wirkungslos – nativ, nicht nur optisch. */}
+      <fieldset className="archivFieldset" disabled={readOnly}>
 
       <div className="row wrap">
         <div className="grow">
@@ -12733,6 +13235,7 @@ function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onB
           </div>
         ))}
       </div>
+      </fieldset>
     </div>
   );
 }

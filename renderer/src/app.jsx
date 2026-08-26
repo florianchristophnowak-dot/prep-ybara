@@ -46,6 +46,12 @@ import {
   istLeereAufgabe, istLeereMittel, istLeererScaffold, hatAufgabenDetails, hatFachdidaktik,
   scaffoldsDerStunde, sequenzProgression,
 } from './didaktik.js';
+import {
+  SLOT_MIN, MAX_BLOCK_SPAN, MIN_PHASE_MIN,
+  normalisiereBlockSpan, blockSpanOf, lessonTotalMin, lessonKey, belegteSlots,
+  blockOwnerAt, istAbgedeckt, stundenBereichLabel, blockName, passenZusammen,
+  verteilePhasenAufPlaetze,
+} from './doppelstunde.js';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowDown, ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
@@ -56,100 +62,16 @@ import {
 } from 'lucide-react';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
+/* Der Schlüssel eines Stundenplatzes. Er kommt aus dem Doppelstunden-
+   Modul, damit dort und hier dieselbe Form gilt. */
+const keyOf = lessonKey;
 const PX_PER_MIN = 10;
-const TOTAL_MIN = 45;
-const MIN_PHASE_MIN = 1;
+const TOTAL_MIN = SLOT_MIN;
 
-/* --- Doppelstunden ----------------------------------------------------
-
-   Eine Doppelstunde ist KEIN eigener Stundentyp. Sie ist eine ganz
-   normale Stunde, die mehr als einen Stundenplatz belegt: `blockSpan`
-   sagt, wie viele unmittelbar aufeinanderfolgende Plätze sie einnimmt.
-
-   Damit bleibt alles, was es schon gibt, unverändert gültig:
-   - eine Stunde ohne `blockSpan` ist eine Einzelstunde (span 1),
-   - im Wochenraster steht sie weiterhin an ihrem ersten Platz,
-   - jede Auswertung, jeder Export und jede Sequenz sieht GENAU EINE
-     Stunde – nicht zwei halbe.
-
-   Die belegten Folgeplätze tragen keinen eigenen Eintrag mehr. Welche
-   Plätze das sind, ergibt sich aus Startplatz und Spanne und bleibt
-   dadurch nachvollziehbar (siehe `belegteSlots`). */
-const MAX_BLOCK_SPAN = 4;
-
-function normalisiereBlockSpan(v){
-  const n = Math.round(Number(v));
-  if (!Number.isFinite(n) || n < 1) return 1;
-  return Math.min(MAX_BLOCK_SPAN, n);
-}
-
-function blockSpanOf(lesson){
-  return normalisiereBlockSpan(lesson?.blockSpan);
-}
-
-/* Der Zeitrahmen einer Stunde: durchgehend, nicht nach 45 Minuten
-   geteilt. Eine Doppelstunde hat 90 Minuten am Stück. */
-function lessonTotalMin(lesson){
-  return TOTAL_MIN * blockSpanOf(lesson);
-}
-
-/* Die Stundenplätze, die eine Stunde belegt – der eigene und die
-   Folgeplätze einer Doppel-/Mehrfachstunde. */
-function belegteSlots(slotIndex, span){
-  const s = Number(slotIndex) || 0;
-  const n = normalisiereBlockSpan(span);
-  return Array.from({ length: n }, (_, i)=> s + i);
-}
-
-/* Zu welcher Stunde gehört ein Platz? Entweder er trägt selbst eine
-   Stunde, oder eine Doppelstunde weiter oben deckt ihn ab. */
-function blockOwnerAt(week, dayIndex, slotIndex){
-  const lessons = week?.lessons || {};
-  for (let back = 0; back < MAX_BLOCK_SPAN; back++){
-    const start = slotIndex - back;
-    if (start < 0) break;
-    const l = lessons[keyOf(dayIndex, start)];
-    if (!l) continue;
-    if (back === 0) return { slotIndex: start, lesson: l, covered: false };
-    if (blockSpanOf(l) > back) return { slotIndex: start, lesson: l, covered: true };
-    return null;
-  }
-  return null;
-}
-
-/* Ist dieser Platz von einer Doppelstunde abgedeckt (und damit nicht
-   selbst bespielbar)? */
-function istAbgedeckt(week, dayIndex, slotIndex){
-  const o = blockOwnerAt(week, dayIndex, slotIndex);
-  return Boolean(o && o.covered);
-}
-
-/* "3. Stunde" oder "3.–4. Stunde" – dieselbe Beschriftung überall. */
-function stundenBereichLabel(slotIndex, span){
-  const n = normalisiereBlockSpan(span);
-  const a = (Number(slotIndex) || 0) + 1;
-  if (n <= 1) return `${a}. Stunde`;
-  return `${a}.–${a + n - 1}. Stunde`;
-}
-
-/* Der Name der Blockgrösse. Mehr als eine Doppelstunde ist selten,
-   soll aber nicht namenlos bleiben. */
-function blockName(span){
-  const n = normalisiereBlockSpan(span);
-  if (n <= 1) return 'Einzelstunde';
-  if (n === 2) return 'Doppelstunde';
-  if (n === 3) return 'Dreifachstunde';
-  return `${n}-fach-Stunde`;
-}
-
-/* Zwei Stunden dürfen verbunden werden, wenn sie zur selben Lerngruppe
-   gehören: gleiche Klasse UND gleiches Fach. Alles andere wäre eine
-   stille Zusammenlegung fremder Planungen. */
-function passenZusammen(a, b){
-  if (!a || !b) return false;
-  const norm = (v)=> String(v || '').trim().toLowerCase();
-  return norm(a.classGroup) === norm(b.classGroup) && norm(a.subject) === norm(b.subject);
-}
+/* Doppelstunden: eine Stunde kann mehrere Stundenplätze belegen.
+   Das Modell dazu steht in ./doppelstunde.js – hier wird es nur
+   benutzt. MIN_PHASE_MIN und TOTAL_MIN behalten ihre Namen, damit
+   der vorhandene Code unverändert lesbar bleibt. */
 
 // Optional clock-times support
 // Users can configure lesson period start times in the school calendar settings.
@@ -1128,7 +1050,6 @@ function weekNumberISO(date){
   const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
   return `KW ${weekNo} / ${d.getUTCFullYear()}`;
 }
-function keyOf(dayIndex, slotIndex){ return `${dayIndex}-${slotIndex}`; }
 
 /* Eine leere Phase – mit ALLEN unterstützten Feldern.
 
@@ -1519,19 +1440,8 @@ function trenneStunde(raw){
   const span = blockSpanOf(l);
   if (span <= 1) return [l];
 
-  const teile = Array.from({ length: span }, ()=>[]);
-  let offset = 0;
-  for (const phase of (l.phases || [])){
-    let rest = Math.max(MIN_PHASE_MIN, Math.round(Number(phase.duration) || 0));
-    while (rest > 0){
-      const teilIndex = Math.min(span - 1, Math.floor(offset / TOTAL_MIN));
-      const platzImTeil = (teilIndex + 1) * TOTAL_MIN - offset;
-      const nimm = Math.min(rest, Math.max(1, platzImTeil));
-      teile[teilIndex].push({ ...neuePhasenIds(phase), duration: nimm });
-      offset += nimm;
-      rest -= nimm;
-    }
-  }
+  const teile = verteilePhasenAufPlaetze(l.phases, span)
+    .map(phasen => phasen.map(ph => neuePhasenIds(ph)));
 
   return teile.map((phasen, i)=>{
     const stunde = normalizeLesson({
@@ -6481,6 +6391,7 @@ const doExportDocx = async (html, suggestedName) => {
           subjectSuggestions={subjectSuggestions}
           onHideClassGroupSuggestion={(label)=>hideSuggestion('classGroup', label)}
           onHideSubjectSuggestion={(label)=>hideSuggestion('subject', label)}
+          onUpdateTemplate={(id, patch)=>updateTemplate(id, patch)}
           onCreateTemplateFromSequence={(sequenceId)=>{
             const seq = sequences?.[sequenceId];
             askPrompt({
@@ -6504,7 +6415,7 @@ const doExportDocx = async (html, suggestedName) => {
           onInsert={(payload)=>{
             const res = insertTemplateIntoPlan(payload);
             if (res.inserted > 0) {
-              showToast(`Eingefügt: ${res.inserted} Stunde(n)` + (res.missing ? ` · nicht platziert: ${res.missing}` : ''), { tone: 'success' });
+              showToast(`Sequenz übernommen: ${res.inserted} ${res.inserted === 1 ? 'Einheit' : 'Einheiten'}` + (res.missing ? ` · nicht platziert: ${res.missing}` : ''), { tone: 'success' });
               // Jump to macro plan around start
               setView({ name:'macro', weekStart: toISODate(startOfWeekMonday(fromISODate(payload.startISO))), startISO: payload.startISO, rangeDays: 28 });
             } else {
@@ -6662,14 +6573,21 @@ const doExportDocx = async (html, suggestedName) => {
       );
     }
 
+    /* Ein von einer Doppelstunde abgedeckter Stundenplatz trägt keine
+       eigene Planung. Wird er trotzdem angesteuert – etwa aus einer
+       Zuordnung im Pocket-Import –, öffnet sich die Stunde, zu der er
+       gehört, statt einer zweiten Planung auf demselben Platz. */
+    const stundenBesitzer = blockOwnerAt(db?.weeks?.[view.weekStart], view.dayIndex, view.slotIndex);
+    const lessonSlotIndex = (stundenBesitzer && stundenBesitzer.covered) ? stundenBesitzer.slotIndex : view.slotIndex;
+
     // default: Einzelstunde
     return (
       <LessonView
         weekStart={view.weekStart}
         dayIndex={view.dayIndex}
-        slotIndex={view.slotIndex}
-        lesson={getLessonAt(view.weekStart, view.dayIndex, view.slotIndex)}
-        exists={hasLessonAt(view.weekStart, view.dayIndex, view.slotIndex)}
+        slotIndex={lessonSlotIndex}
+        lesson={getLessonAt(view.weekStart, view.dayIndex, lessonSlotIndex)}
+        exists={hasLessonAt(view.weekStart, view.dayIndex, lessonSlotIndex)}
         sequences={sequences}
         appSettings={appSettings}
         onUpdateAppSettings={updateAppSettings}
@@ -6683,18 +6601,18 @@ const doExportDocx = async (html, suggestedName) => {
         offenePunkte={offenePunkteDerStunde}
         onResolveCarryOver={resolveCarryOver}
         onOpenReview={()=>setView({
-          name:'review', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+          name:'review', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: lessonSlotIndex,
         })}
-        onJoinBlock={()=>joinLessonsIntoBlock(view.weekStart, view.dayIndex, view.slotIndex)}
-        onSplitBlock={()=>splitBlockAt(view.weekStart, view.dayIndex, view.slotIndex)}
+        onJoinBlock={()=>joinLessonsIntoBlock(view.weekStart, view.dayIndex, lessonSlotIndex)}
+        onSplitBlock={()=>splitBlockAt(view.weekStart, view.dayIndex, lessonSlotIndex)}
         kannVerbinden={(()=>{
           const w = db?.weeks?.[view.weekStart];
-          const l = w?.lessons?.[keyOf(view.dayIndex, view.slotIndex)];
+          const l = w?.lessons?.[keyOf(view.dayIndex, lessonSlotIndex)];
           if (!l) return false;
           const span = blockSpanOf(l);
           if (span >= MAX_BLOCK_SPAN) return false;
-          if ((view.slotIndex + span) >= (w.slotsPerDay || 6)) return false;
-          const b = w.lessons?.[keyOf(view.dayIndex, view.slotIndex + span)];
+          if ((lessonSlotIndex + span) >= (w.slotsPerDay || 6)) return false;
+          const b = w.lessons?.[keyOf(view.dayIndex, lessonSlotIndex + span)];
           return Boolean(b) && passenZusammen(l, b);
         })()}
         onRememberSpeechAct={rememberSpeechAct}
@@ -6721,9 +6639,9 @@ const doExportDocx = async (html, suggestedName) => {
         onCreateSequence={createSequence}
           onRequestCreateSequence={openCreateSequenceModal}
         onRememberCompetency={rememberCompetency}
-        onUpdateLesson={(nextLesson)=>updateLessonAt(view.weekStart, view.dayIndex, view.slotIndex, nextLesson)}
+        onUpdateLesson={(nextLesson)=>updateLessonAt(view.weekStart, view.dayIndex, lessonSlotIndex, nextLesson)}
         getSeqProgress={(sequenceId)=> sequenceProgress(db, sequenceId, {
-          weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+          weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: lessonSlotIndex,
         })}
         onRememberSocialForm={rememberSocialForm}
         onRememberPhaseName={rememberPhaseName}
@@ -6746,7 +6664,7 @@ const doExportDocx = async (html, suggestedName) => {
           setView({ name:'year', weekStart: view.weekStart, focusISO: String(focusISO || view.weekStart) });
         }}
         onDeleteLesson={() => {
-          deleteLessonAt(view.weekStart, view.dayIndex, view.slotIndex);
+          deleteLessonAt(view.weekStart, view.dayIndex, lessonSlotIndex);
           setView({ ...lastMainView.current });
         }}
       />
@@ -9895,6 +9813,280 @@ function YearBarModal({ mode, bar, minDate, maxDate, classGroupSuggestions, subj
   );
 }
 
+/* --- Bibliothek: Sequenz-Vorlagen ------------------------------------
+
+   Die Bibliothek ist kein Regal, sondern eine Auswahlhilfe. Deshalb
+   sagt jede Karte, was sich hinter der Vorlage verbirgt: für wen sie
+   gedacht ist, worauf sie hinausläuft, wie lange sie dauert. Alles
+   davon ist optional – fehlt eine Angabe, entfällt die Zeile, und die
+   Karte bleibt trotzdem vollständig benutzbar. */
+
+/* Die Einheiten einer Vorlage als Liste: Nummer, Thema, Kompetenzen,
+   Dauer. Dieselbe Rechnung für Karte und Vorschau. */
+function vorlagenEinheiten(tpl){
+  const lessons = Array.isArray(tpl?.lessons) ? tpl.lessons : [];
+  return lessons.map((l, i)=>{
+    const span = normalisiereBlockSpan(l?.blockSpan);
+    const kompetenzen = [];
+    const primaer = String(l?.primaryCompetency || '').trim();
+    if (primaer) kompetenzen.push(primaer);
+    for (const c of (Array.isArray(l?.competencies) ? l.competencies : [])){
+      const t = String(c || '').trim();
+      if (t && !kompetenzen.includes(t)) kompetenzen.push(t);
+    }
+    return {
+      nummer: i + 1,
+      titel: String(l?.topic || '').trim() || `Einheit ${i + 1}`,
+      kompetenzen,
+      span,
+      minuten: span * TOTAL_MIN,
+    };
+  });
+}
+
+function VorlagenKarte({ tpl, onVorschau, onVerwenden, onBearbeiten, onLoeschen }){
+  const stufe = stufenText(tpl);
+  const ziel = zielhandlungText(tpl);
+  const kompetenzen = Array.isArray(tpl.competencies) ? tpl.competencies : [];
+  const beschreibung = String(tpl.description || '').trim();
+  const produkt = String(tpl.targetProduct || '').trim();
+  const bezug = String(tpl.courseRef || '').trim();
+
+  return (
+    <div className="templateCard">
+      <div className="tplKopf">
+        <div style={{minWidth:0}}>
+          <div className="tplTitel">{tpl.name || 'Ohne Name'}</div>
+          <div className="tplMeta">
+            {[stufe, String(tpl.subject || '').trim()].filter(Boolean).join(' · ') || 'Ohne Angabe zur Lerngruppe'}
+          </div>
+        </div>
+        <KebabMenu
+          titel={`Aktionen für „${tpl.name || 'Vorlage'}“`}
+          eintraege={[
+            { label: 'Vorschau', icon: <Eye {...ICON_SM} />, onSelect: onVorschau },
+            { label: 'Sequenz verwenden', icon: <Plus {...ICON_SM} />, onSelect: onVerwenden },
+            { label: 'Angaben bearbeiten', icon: <Pencil {...ICON_SM} />, onSelect: onBearbeiten },
+            { trenner: true },
+            { label: 'Löschen', icon: <Trash2 {...ICON_SM} />, tone: 'danger', onSelect: onLoeschen },
+          ]}
+        />
+      </div>
+
+      {beschreibung ? <div className="tplMeta" style={{marginTop:8}}>{beschreibung}</div> : null}
+      {ziel ? <div className="tplZiel">„{ziel}“</div> : null}
+
+      {kompetenzen.length ? (
+        <div className="tplZeile">
+          {kompetenzen.slice(0, 4).map(k => <span key={k} className="pill">{k}</span>)}
+          {kompetenzen.length > 4 ? <span className="pill">+{kompetenzen.length - 4}</span> : null}
+        </div>
+      ) : null}
+
+      <div className="tplUmfang">{umfangText(tpl)}</div>
+      {produkt ? <div className="tplProdukt">Zielprodukt: {produkt}</div> : null}
+      {bezug ? <div className="tplProdukt">Bezug: {bezug}</div> : null}
+
+      <div className="tplAktionen">
+        <button className="btn" onClick={onVorschau}><Eye {...ICON_SM} /> Vorschau</button>
+        <button className="btn primary" onClick={onVerwenden}>Sequenz verwenden</button>
+      </div>
+
+      <div className="muted small" style={{marginTop:10}}>
+        {herkunftName(tpl.origin)} · Erstellt: {formatDateDE((tpl.createdAt||'').slice(0,10))}
+      </div>
+    </div>
+  );
+}
+
+/* Die Detailvorschau. Sie zeigt nur – sie verändert die Vorlage nicht
+   und setzt nichts ein. Wer sie einsetzen will, tut das ausdrücklich
+   über "Sequenz verwenden". */
+function VorlagenVorschau({ tpl, onClose, onVerwenden, onBearbeiten }){
+  const einheiten = useMemo(()=>vorlagenEinheiten(tpl), [tpl]);
+  const aufgabe = normalisiereAufgabe(tpl?.finalTask);
+  const mittel = normalisiereMittel(tpl?.languageResources);
+  const stufe = stufenText(tpl);
+  const materialien = (Array.isArray(tpl?.lessons) ? tpl.lessons : [])
+    .reduce((a, l)=> a + ((Array.isArray(l?.files) ? l.files.length : 0) + (Array.isArray(l?.links) ? l.links.length : 0)), 0);
+
+  const zeile = (label, wert)=> (String(wert || '').trim()
+    ? <div style={{marginTop:8}}><span className="muted small">{label}: </span>{wert}</div>
+    : null);
+
+  return (
+    <div className="modalBackdrop" role="dialog" aria-modal="true">
+      <div className="modal" style={{maxWidth:820}}>
+        <div className="row" style={{justifyContent:'space-between', alignItems:'flex-start', gap:10}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontWeight:900, fontSize:16}}>{tpl?.name || 'Vorlage'}</div>
+            <div className="muted small">
+              {[stufe, String(tpl?.subject || '').trim(), herkunftName(tpl?.origin)].filter(Boolean).join(' · ')}
+            </div>
+          </div>
+          <button className="btn" onClick={onClose}>Schließen</button>
+        </div>
+
+        <div style={{height:12}} />
+
+        {String(tpl?.description || '').trim() ? <p style={{margin:0}}>{tpl.description}</p> : null}
+
+        <div className="tplUmfang" style={{marginTop:10}}>
+          {umfangText(tpl)} · ca. {vorlagenUmfang(tpl).minuten} Minuten
+        </div>
+
+        {(Array.isArray(tpl?.competencies) && tpl.competencies.length) ? (
+          <div className="tplZeile">
+            {tpl.competencies.map(k => (
+              <span key={k} className={`pill${k === tpl.primaryCompetency ? ' pill--primary' : ''}`}>{k}</span>
+            ))}
+          </div>
+        ) : null}
+
+        {!istLeereAufgabe(aufgabe) ? (
+          <section className="zielaufgabe" style={{marginTop:12}}>
+            <div className="zielaufgabeKopf">Kommunikative Zielhandlung</div>
+            {aufgabe.text ? <p className="zielaufgabeText">{aufgabe.text}</p> : null}
+            <div className="zielaufgabeDetails">
+              {aufgabe.situation ? <div><span className="muted small">Situation: </span>{aufgabe.situation}</div> : null}
+              {aufgabe.audience ? <div><span className="muted small">Adressat: </span>{aufgabe.audience}</div> : null}
+              {aufgabe.intention ? <div><span className="muted small">Absicht: </span>{aufgabe.intention}</div> : null}
+              {aufgabe.outcome ? <div><span className="muted small">Ergebnis: </span>{aufgabe.outcome}</div> : null}
+            </div>
+          </section>
+        ) : null}
+
+        {zeile('Zielprodukt', tpl?.targetProduct)}
+        {zeile('Voraussetzungen', tpl?.prerequisites)}
+        {zeile('Wortschatz', mittel.vocabulary)}
+        {zeile('Grammatik', mittel.grammar)}
+        {zeile('Aussprache', mittel.pronunciation)}
+        {zeile('Weitere Mittel', mittel.other)}
+        {zeile('Bezug', tpl?.courseRef)}
+        {materialien ? zeile('Enthaltene Materialien', `${materialien} ${materialien === 1 ? 'Verweis' : 'Verweise'} (Dateien/Links)`) : null}
+
+        <div style={{height:14}} />
+        <div style={{fontWeight:800}}>Sequenzeinheiten</div>
+        <div className="muted small">Die Reihenfolge, in der die Einheiten eingesetzt werden.</div>
+        <div style={{marginTop:8}}>
+          {einheiten.length === 0 ? (
+            <div className="muted small">Diese Vorlage enthält noch keine Einheiten.</div>
+          ) : einheiten.map(e => (
+            <div key={e.nummer} className="tplEinheit">
+              <div className="tplEinheitNr">{e.nummer}.</div>
+              <div style={{minWidth:0}}>
+                <div className="tplEinheitTitel">{e.titel}</div>
+                {e.kompetenzen.length ? <div className="tplEinheitSub">{e.kompetenzen.join(' · ')}</div> : null}
+              </div>
+              <div className="tplEinheitDauer">
+                {e.minuten} Min.{e.span > 1 ? ` · ${blockName(e.span)}` : ''}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{height:14}} />
+        <div className="row wrap" style={{justifyContent:'flex-end', gap:8}}>
+          <button className="btn" onClick={onBearbeiten}><Pencil {...ICON_SM} /> Angaben bearbeiten</button>
+          <button className="btn primary" onClick={onVerwenden}>Sequenz verwenden</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Die beschreibenden Angaben einer Vorlage bearbeiten. Die Einheiten
+   selbst bleiben unberührt – sie kommen aus der Sequenz, aus der die
+   Vorlage entstanden ist. */
+function VorlagenAngaben({ tpl, onClose, onSave }){
+  const [local, setLocal] = useState(()=>({
+    name: String(tpl?.name || ''),
+    subject: String(tpl?.subject || ''),
+    description: String(tpl?.description || ''),
+    gradeLevel: String(tpl?.gradeLevel || ''),
+    learningYear: String(tpl?.learningYear || ''),
+    targetProduct: String(tpl?.targetProduct || ''),
+    prerequisites: String(tpl?.prerequisites || ''),
+    courseRef: String(tpl?.courseRef || ''),
+    finalTask: normalisiereAufgabe(tpl?.finalTask),
+  }));
+  const setzen = (feld, wert)=> setLocal(prev => ({ ...prev, [feld]: wert }));
+
+  return (
+    <div className="modalBackdrop" role="dialog" aria-modal="true">
+      <div className="modal" style={{maxWidth:720}}>
+        <div className="row" style={{justifyContent:'space-between'}}>
+          <div>
+            <div style={{fontWeight:900}}>Angaben zur Vorlage</div>
+            <div className="muted small">Hilft beim Auswählen. Die Einheiten der Vorlage ändern sich dadurch nicht.</div>
+          </div>
+          <button className="btn" onClick={onClose}>Schließen</button>
+        </div>
+
+        <div style={{height:12}} />
+
+        <div className="row wrap" style={{gap:10}}>
+          <div style={{minWidth:260, flex:1}}>
+            <label className="small muted">Titel</label>
+            <input className="input" value={local.name} onChange={(e)=>setzen('name', e.target.value)} placeholder="z. B. Paris autrement" />
+          </div>
+          <div style={{minWidth:180, flex:1}}>
+            <label className="small muted">Fach</label>
+            <input className="input" value={local.subject} onChange={(e)=>setzen('subject', e.target.value)} placeholder="z. B. Französisch" />
+          </div>
+          <div style={{width:130}}>
+            <label className="small muted">Klassenstufe</label>
+            <input className="input" value={local.gradeLevel} onChange={(e)=>setzen('gradeLevel', e.target.value)} placeholder="z. B. 8" />
+          </div>
+          <div style={{width:130}}>
+            <label className="small muted">Lernjahr</label>
+            <input className="input" value={local.learningYear} onChange={(e)=>setzen('learningYear', e.target.value)} placeholder="z. B. 2" />
+          </div>
+        </div>
+
+        <div style={{height:10}} />
+        <label className="small muted">Kurze Beschreibung</label>
+        <textarea className="input" rows={2} value={local.description}
+                  onChange={(e)=>setzen('description', e.target.value)}
+                  placeholder="Worum geht es in dieser Sequenz?" />
+
+        <div style={{height:10}} />
+        <CommunicativeTaskEditor
+          wert={local.finalTask}
+          onChange={(next)=>setzen('finalTask', next)}
+          titel="Kommunikative Zielhandlung"
+          hinweis="Worauf die Sequenz hinausläuft. Steht oben auf der Karte."
+          platzhalter="z. B. Paris erkunden und Sehenswürdigkeiten für eine Klassenfahrt empfehlen."
+        />
+
+        <div style={{height:10}} />
+        <div className="row wrap" style={{gap:10}}>
+          <div style={{minWidth:220, flex:1}}>
+            <label className="small muted">Zielprodukt</label>
+            <input className="input" value={local.targetProduct} onChange={(e)=>setzen('targetProduct', e.target.value)} placeholder="z. B. Mini-Reiseführer" />
+          </div>
+          <div style={{minWidth:220, flex:1}}>
+            <label className="small muted">Lehrwerks-/Themenbezug</label>
+            <input className="input" value={local.courseRef} onChange={(e)=>setzen('courseRef', e.target.value)} placeholder="z. B. Découvertes 3, Unité 2" />
+          </div>
+        </div>
+
+        <div style={{height:10}} />
+        <label className="small muted">Voraussetzungen</label>
+        <textarea className="input" rows={2} value={local.prerequisites}
+                  onChange={(e)=>setzen('prerequisites', e.target.value)}
+                  placeholder="Was sollten die Lernenden mitbringen?" />
+
+        <div style={{height:14}} />
+        <div className="row" style={{justifyContent:'flex-end', gap:8}}>
+          <button className="btn" onClick={onClose}>Abbrechen</button>
+          <button className="btn primary" onClick={()=>onSave(local)}>Übernehmen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SequenceLibraryView({
   db,
   templates,
@@ -9903,6 +10095,7 @@ function SequenceLibraryView({
   minDate,
   maxDate,
   onCreateTemplateFromSequence,
+  onUpdateTemplate,
   onDeleteTemplate,
   onExportTemplates,
   onImportTemplates,
@@ -9949,7 +10142,6 @@ function SequenceLibraryView({
   const groupSuggestions = classGroupSuggestionsProp || groupSuggestionsLocal;
   const subjectSuggestions = subjectSuggestionsProp || subjectSuggestionsLocal;
 
-
   const [selectedSeqId, setSelectedSeqId] = useState(seqList?.[0]?.id || '');
   useEffect(()=>{
     if (!selectedSeqId && seqList.length) setSelectedSeqId(seqList[0].id);
@@ -9957,13 +10149,91 @@ function SequenceLibraryView({
 
   const [activeTemplate, setActiveTemplate] = useState(null);
   const [showInsert, setShowInsert] = useState(false);
+  const [vorschauId, setVorschauId] = useState('');
+  const [angabenId, setAngabenId] = useState('');
+
+  /* --- Suchen und Filtern ------------------------------------------
+     Die Auswahlmöglichkeiten kommen aus den vorhandenen Vorlagen. Was
+     es nicht gibt, steht auch nicht zur Wahl. */
+  const [suche, setSuche] = useState('');
+  const [filterStufe, setFilterStufe] = useState('');
+  const [filterKompetenz, setFilterKompetenz] = useState('');
+  const [filterThema, setFilterThema] = useState('');
+  const [filterUmfang, setFilterUmfang] = useState('');
+  const [filterHerkunft, setFilterHerkunft] = useState('');
+
+  const werte = useMemo(()=>{
+    const stufen = new Set();
+    const kompetenzen = new Set();
+    const themen = new Set();
+    const herkuenfte = new Set();
+    for (const t of list){
+      const st = String(t.gradeLevel || '').trim();
+      if (st) stufen.add(st);
+      for (const k of (Array.isArray(t.competencies) ? t.competencies : [])) kompetenzen.add(k);
+      const f = String(t.subject || '').trim();
+      if (f) themen.add(f);
+      herkuenfte.add(String(t.origin || 'own'));
+    }
+    const sortiert = (set)=> Array.from(set).sort((a,b)=>a.localeCompare(b, 'de', { numeric: true }));
+    return {
+      stufen: sortiert(stufen),
+      kompetenzen: sortiert(kompetenzen),
+      themen: sortiert(themen),
+      herkuenfte: sortiert(herkuenfte),
+    };
+  }, [list]);
+
+  const UMFANG_STUFEN = [
+    { id: 'kurz', label: 'bis 5 Unterrichtsstunden', passt: (n)=> n <= 5 },
+    { id: 'mittel', label: '6–10 Unterrichtsstunden', passt: (n)=> n >= 6 && n <= 10 },
+    { id: 'lang', label: 'mehr als 10 Unterrichtsstunden', passt: (n)=> n > 10 },
+  ];
+
+  const gefiltert = useMemo(()=>{
+    const q = foldForSearch(String(suche || '').trim());
+    return list.filter(t => {
+      if (filterStufe && String(t.gradeLevel || '').trim() !== filterStufe) return false;
+      if (filterKompetenz && !(Array.isArray(t.competencies) ? t.competencies : []).includes(filterKompetenz)) return false;
+      if (filterThema && String(t.subject || '').trim() !== filterThema) return false;
+      if (filterHerkunft && String(t.origin || 'own') !== filterHerkunft) return false;
+      if (filterUmfang) {
+        const stufe = UMFANG_STUFEN.find(u => u.id === filterUmfang);
+        if (stufe && !stufe.passt(vorlagenUmfang(t).stunden)) return false;
+      }
+      if (!q) return true;
+      const heuhaufen = foldForSearch([
+        t.name, t.description, t.subject, t.targetProduct, t.courseRef,
+        zielhandlungText(t),
+        (Array.isArray(t.competencies) ? t.competencies.join(' ') : ''),
+        (Array.isArray(t.lessons) ? t.lessons.map(l => l?.topic || '').join(' ') : ''),
+      ].filter(Boolean).join(' '));
+      return heuhaufen.includes(q);
+    });
+  }, [list, suche, filterStufe, filterKompetenz, filterThema, filterUmfang, filterHerkunft]);
+
+  const filterAktiv = Boolean(suche || filterStufe || filterKompetenz || filterThema || filterUmfang || filterHerkunft);
+  const filterZuruecksetzen = ()=>{
+    setSuche(''); setFilterStufe(''); setFilterKompetenz('');
+    setFilterThema(''); setFilterUmfang(''); setFilterHerkunft('');
+  };
+
+  const vorschau = vorschauId ? (templates?.[vorschauId] || null) : null;
+  const angaben = angabenId ? (templates?.[angabenId] || null) : null;
+
+  const verwenden = (t)=>{
+    setVorschauId('');
+    setAngabenId('');
+    setActiveTemplate(t);
+    setShowInsert(true);
+  };
 
   return (
     <div className="card">
       <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
         <div>
           <div style={{fontWeight:900, fontSize:16}}>Bibliothek – Sequenz‑Vorlagen</div>
-          <div className="muted small">Speichere Unterrichtssequenzen als wiederverwendbare Vorlagen und füge sie in neue Klassen/Schuljahre ein.</div>
+          <div className="muted small">Vorlagen ansehen, vergleichen und als eigene, bearbeitbare Sequenz verwenden. Die Vorlage selbst bleibt dabei unverändert.</div>
         </div>
         <div className="row wrap" style={{gap:8}}>
           <button className="btn" onClick={onImportTemplates}>Importieren…</button>
@@ -9990,32 +10260,109 @@ function SequenceLibraryView({
 
       <div style={{height:14}} />
 
+      {list.length ? (
+        <>
+          <div className="tplFilter">
+            <div style={{minWidth:220, flex:1}}>
+              <label className="small muted">Suchen</label>
+              <input className="input" value={suche} onChange={(e)=>setSuche(e.target.value)} placeholder="Titel, Thema, Zielprodukt…" />
+            </div>
+            {werte.stufen.length ? (
+              <div>
+                <label className="small muted">Klassenstufe</label>
+                <select className="input" value={filterStufe} onChange={(e)=>setFilterStufe(e.target.value)}>
+                  <option value="">alle</option>
+                  {werte.stufen.map(v => <option key={v} value={v}>{/^\d+$/.test(v) ? `Klasse ${v}` : v}</option>)}
+                </select>
+              </div>
+            ) : null}
+            {werte.kompetenzen.length ? (
+              <div>
+                <label className="small muted">Kompetenz</label>
+                <select className="input" value={filterKompetenz} onChange={(e)=>setFilterKompetenz(e.target.value)}>
+                  <option value="">alle</option>
+                  {werte.kompetenzen.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+            ) : null}
+            {werte.themen.length ? (
+              <div>
+                <label className="small muted">Fach / Thema</label>
+                <select className="input" value={filterThema} onChange={(e)=>setFilterThema(e.target.value)}>
+                  <option value="">alle</option>
+                  {werte.themen.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+            ) : null}
+            <div>
+              <label className="small muted">Umfang</label>
+              <select className="input" value={filterUmfang} onChange={(e)=>setFilterUmfang(e.target.value)}>
+                <option value="">alle</option>
+                {UMFANG_STUFEN.map(u => <option key={u.id} value={u.id}>{u.label}</option>)}
+              </select>
+            </div>
+            {werte.herkuenfte.length > 1 ? (
+              <div>
+                <label className="small muted">Herkunft</label>
+                <select className="input" value={filterHerkunft} onChange={(e)=>setFilterHerkunft(e.target.value)}>
+                  <option value="">alle</option>
+                  {werte.herkuenfte.map(v => <option key={v} value={v}>{herkunftName(v)}</option>)}
+                </select>
+              </div>
+            ) : null}
+            {filterAktiv ? (
+              <button className="btn" onClick={filterZuruecksetzen}>Filter zurücksetzen</button>
+            ) : null}
+          </div>
+          <div style={{height:6}} />
+          <div className="muted small">
+            {gefiltert.length === list.length
+              ? `${list.length} ${list.length === 1 ? 'Vorlage' : 'Vorlagen'}`
+              : `${gefiltert.length} von ${list.length} Vorlagen`}
+          </div>
+          <div style={{height:8}} />
+        </>
+      ) : null}
+
       <div className="templateGrid">
         {list.length === 0 ? (
           <EmptyState
             text="Vorlagen sind Sequenzen, die du wiederverwenden kannst – einmal geplant, in jedem Jahrgang wieder einsetzbar. Lege im Makro-Plan eine Sequenz an und speichere sie als Vorlage."
           />
-        ) : list.map(t => (
-          <div key={t.id} className="templateCard">
-            <div className="row" style={{justifyContent:'space-between', alignItems:'flex-start', gap:10}}>
-              <div>
-                <div style={{fontWeight:900}}>{t.name || 'Ohne Name'}</div>
-                <div className="row wrap" style={{gap:6, marginTop:6}}>
-                  <span className="pill">Fach: {(t.subject||'—')}</span>
-                  <span className="pill">Stunden: {(Array.isArray(t.lessons) ? t.lessons.length : 0)}</span>
-                </div>
-              </div>
-              <div className="row" style={{gap:8}}>
-                <button className="btn" onClick={()=>{ setActiveTemplate(t); setShowInsert(true); }}>Einfügen…</button>
-                <button className="btn danger" onClick={()=>onDeleteTemplate(t.id)}>Löschen</button>
-              </div>
-            </div>
-            <div className="muted small" style={{marginTop:10}}>
-              Erstellt: {formatDateDE((t.createdAt||'').slice(0,10))}
-            </div>
-          </div>
+        ) : gefiltert.length === 0 ? (
+          <EmptyState
+            text="Keine Vorlage passt zu dieser Auswahl."
+            actionLabel="Filter zurücksetzen"
+            onAction={filterZuruecksetzen}
+          />
+        ) : gefiltert.map(t => (
+          <VorlagenKarte
+            key={t.id}
+            tpl={t}
+            onVorschau={()=>setVorschauId(t.id)}
+            onVerwenden={()=>verwenden(t)}
+            onBearbeiten={()=>setAngabenId(t.id)}
+            onLoeschen={()=>onDeleteTemplate(t.id)}
+          />
         ))}
       </div>
+
+      {vorschau ? (
+        <VorlagenVorschau
+          tpl={vorschau}
+          onClose={()=>setVorschauId('')}
+          onVerwenden={()=>verwenden(vorschau)}
+          onBearbeiten={()=>{ setAngabenId(vorschau.id); setVorschauId(''); }}
+        />
+      ) : null}
+
+      {angaben ? (
+        <VorlagenAngaben
+          tpl={angaben}
+          onClose={()=>setAngabenId('')}
+          onSave={(patch)=>{ onUpdateTemplate?.(angaben.id, patch); setAngabenId(''); }}
+        />
+      ) : null}
 
       {showInsert && activeTemplate && (
         <InsertTemplateModal
@@ -10034,6 +10381,11 @@ function SequenceLibraryView({
   );
 }
 
+/* Eine Vorlage verwenden.
+
+   "Verwenden" statt "Importieren": es entsteht immer eine eigene,
+   bearbeitbare Sequenz – die Vorlage selbst wird dabei nie verändert.
+   Das steht hier ausdrücklich, damit niemand raten muss. */
 function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, minDate, maxDate, onHideGroupSuggestion, onHideSubjectSuggestion, onClose, onInsert }){
   const [targetGroup, setTargetGroup] = useState(groupSuggestions?.[0] || '');
   const [subject, setSubject] = useState((template?.subject || '').trim());
@@ -10052,8 +10404,10 @@ function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, m
       <div className="modal">
         <div className="row" style={{justifyContent:'space-between'}}>
           <div>
-            <div style={{fontWeight:900}}>Vorlage einfügen</div>
-            <div className="muted small">"{template?.name || ''}"</div>
+            <div style={{fontWeight:900}}>Sequenz verwenden</div>
+            <div className="muted small">
+              „{template?.name || ''}“ · {umfangText(template)}
+            </div>
           </div>
           <button className="btn" onClick={onClose}>Schließen</button>
         </div>
@@ -10095,7 +10449,7 @@ function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, m
 
         <div className="row wrap" style={{gap:10, alignItems:'flex-end'}}>
           <div style={{minWidth:280, flex:1}}>
-            <label className="small muted">Name der neuen Sequenz (wird im Makro‑Plan angelegt)</label>
+            <label className="small muted">Name der neuen Sequenz (eigene, bearbeitbare Kopie im Makro‑Plan)</label>
             <input className="input" value={sequenceName} onChange={(e)=>setSequenceName(e.target.value)} placeholder="z. B. Argumentieren – Kurzsequenz" />
           </div>
           <label className="row" style={{gap:8, userSelect:'none'}}>
@@ -10106,7 +10460,9 @@ function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, m
 
         <div style={{height:10}} />
         <div className="muted small">
-          Hinweis: Die App platziert die Vorlagenstunden automatisch in passende Stundenplätze (gleiche Lerngruppe + Fach) ab dem Startdatum.
+          Es entsteht eine eigene Sequenz für diese Lerngruppe. Die Vorlage bleibt unverändert und lässt sich beliebig oft weiterverwenden.
+          Die App platziert die Einheiten automatisch in passende Stundenplätze (gleiche Lerngruppe + Fach) ab dem Startdatum;
+          eine Doppelstunde bekommt zwei aufeinanderfolgende Plätze, sofern dort welche frei sind.
           Damit Räume übernommen werden können, sollte der Stundenplan in den Zielwochen bereits angelegt sein (Klasse/Fach/Raum). Danach kannst du Stunden flexibel löschen oder neue hinzufügen.
         </div>
 
@@ -10117,7 +10473,7 @@ function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, m
           <button
             className="btn primary"
             onClick={()=>onInsert({ templateId: template.id, targetGroup, subject, startISO, overwrite, sequenceName })}
-          >Einfügen</button>
+          >Sequenz verwenden</button>
         </div>
       </div>
     </div>

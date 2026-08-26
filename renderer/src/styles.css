@@ -1938,6 +1938,8 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .tplEinheitSub { font-size: var(--fs-sm); color: var(--muted); }
 .tplEinheitDauer { font-size: var(--fs-sm); color: var(--text-secondary); white-space: nowrap; }
 .tplFilter { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+/* Die Schwerpunktkompetenz einer Vorlage – dieselbe Pille, nur betont. */
+.pill--primary { border-color: var(--primary); color: var(--primary); font-weight: var(--fw-bold); }
 .tplFilter > div { min-width: 150px; }
 
 /* Jahresplanung: die Zeilenüberschrift trägt jetzt ein Kontextmenü.

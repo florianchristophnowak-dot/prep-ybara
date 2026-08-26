@@ -1292,6 +1292,8 @@ function archivDatenbank(archiv, liveDb){
     todos: [],
     yearBars: [],
     yearPlanLanes: [],
+    groupColors: {},
+    supervisionLabels: {},
     schoolCalendar: { schoolYear: { startISO: '', endISO: '' }, lessonTimesEnabled: false, lessonTimes: [], vacations: [], freeDays: [], events: [] },
     ...deepClone(jahresdaten),
     /* Die Archivliste gehört nicht in eine Archivansicht: sie wird
@@ -4712,12 +4714,17 @@ const classGroupSuggestions = useMemo(()=>{
       const el = e.target;
       const tag = (el?.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || el?.isContentEditable) return;
+      /* In der Archivansicht nähme die Tastenkombination eine Änderung
+         am LAUFENDEN Schuljahr zurück – zu sehen wäre davon nichts.
+         Das "Rückgängig" in der Meldung bleibt davon unberührt: dort
+         weiss man, worauf es sich bezieht. */
+      if (imArchiv) { archivHinweisRef.current?.(); return; }
       e.preventDefault();
       undoLast();
     };
     window.addEventListener('keydown', onKey);
     return ()=> window.removeEventListener('keydown', onKey);
-  }, [undoLast]);
+  }, [undoLast, imArchiv]);
 
   /* ---- Wochenabschluss ------------------------------------------------
      Erscheint beim Verlassen der Woche und freitags – höchstens einmal je
@@ -4798,14 +4805,16 @@ const classGroupSuggestions = useMemo(()=>{
       'a-undo', 'a-seq', 'a-copy', 'a-expback', 'a-impback', 'a-pocketexp', 'v-pocket',
       'v-settings', 'v-library', 'v-today',
     ]);
-    const gefiltert = imArchiv ? cmds.filter(c => !nurAnsehen.has(c.id)) : cmds;
     if (imArchiv) {
-      gefiltert.unshift({
-        id:'a-archiv-zurueck', group:'Aktion', label:'Zurück zum aktuellen Schuljahr', run: ()=>verlasseArchiv(),
-      });
+      /* Nicht an Ort und Stelle leeren: `cmds` ist dieselbe Liste, die
+         unten weiter gefüllt wird. */
+      const gefiltert = cmds.filter(c => !nurAnsehen.has(c.id));
+      cmds.length = 0;
+      cmds.push(
+        { id:'a-archiv-zurueck', group:'Aktion', label:'Zurück zum aktuellen Schuljahr', run: ()=>verlasseArchiv() },
+        ...gefiltert,
+      );
     }
-    cmds.length = 0;
-    cmds.push(...gefiltert);
 
     // Sequenzen: direkt in den Makro-Plan springen und dort filtern.
     for (const seq of Object.values(sequences || {})) {
@@ -7813,7 +7822,7 @@ function ArchiveOverviewView({ archive, onOpen, onExport, onDelete, onBack }){
                           icon: <Download {...ICON_SM} />,
                           onSelect: ()=>onExport(a.id),
                         } : null,
-                        { trenner: true },
+                        capabilities.archiveFiles ? { trenner: true } : null,
                         {
                           label: 'Archiv endgültig löschen',
                           icon: <Trash2 {...ICON_SM} />,
@@ -9050,6 +9059,8 @@ const exportDocx = () => {
         onSpringeZuPhase={(i)=>springeZuPhase(i)}
       />
 
+      {/* Offene Punkte zu übernehmen hiesse, die Stunde zu ändern. */}
+      {!readOnly ? (
       <CarryOverPanel
         punkte={offenePunkte}
         onUebernehmenAlsPhase={(liste)=>uebernehmeAlsPhasen(liste)}
@@ -9057,6 +9068,7 @@ const exportDocx = () => {
         onErledigt={(p)=>onResolveCarryOver?.(p, 'completed')}
         onIgnorieren={(p)=>onResolveCarryOver?.(p, 'dismissed')}
       />
+      ) : null}
 
       <fieldset className="archivFieldset" disabled={readOnly}>
       <div className="row wrap">

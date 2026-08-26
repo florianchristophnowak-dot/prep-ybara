@@ -1647,7 +1647,7 @@ function PromptDialog({ open, title, label, placeholder, initialValue = '', conf
                placeholder={placeholder || ''} onChange={(e)=>setValue(e.target.value)} />
         <div className="dialogActions">
           <button type="button" className="btn" onClick={onCancel}>Abbrechen</button>
-          <button type="submit" className="btn primary" disabled={!value.trim()}>{confirmLabel}</button>
+          <button type="submit" className="btn primary" disabled={!value.trim() && !erlaubeLeer}>{confirmLabel}</button>
         </div>
       </form>
     </div>
@@ -4794,7 +4794,7 @@ useEffect(()=>{
      dem Klick getippt wurde – das verzögerte Speichern hat es dann noch
      nicht geschrieben. Aus dem Wochenraster heraus gibt es keinen
      Entwurf; dort zählt der gespeicherte Stand. */
-  const joinLessonsIntoBlock = (weekStart, dayIndex, slotIndex, entwurf = null) => {
+  const joinLessonsIntoBlock = async (weekStart, dayIndex, slotIndex, entwurf = null) => {
     const before = db;
     const w = db?.weeks?.[weekStart];
     if (!w) return;
@@ -4827,6 +4827,23 @@ useEffect(()=>{
     if (span + blockSpanOf(zweite) > MAX_BLOCK_SPAN) {
       showToast(`Zusammen wären das mehr als ${MAX_BLOCK_SPAN} Stunden. Das lässt sich nicht verbinden.`, { tone: 'warning' });
       return;
+    }
+
+    /* Gehören die beiden zu verschiedenen Sequenzen, kann die
+       verbundene Stunde nur in einer davon liegen. Das ist eine
+       Entscheidung, keine Formsache – also wird gefragt. */
+    const seqA = String(erste.sequenceId || '').trim();
+    const seqB = String(zweite.sequenceId || '').trim();
+    if (seqA && seqB && seqA !== seqB) {
+      const nameA = db?.sequences?.[seqA]?.name || 'Sequenz';
+      const nameB = db?.sequences?.[seqB]?.name || 'Sequenz';
+      const ok = await askConfirm({
+        title: 'Zwei verschiedene Sequenzen',
+        body: `Die erste Stunde gehört zu „${nameA}", die zweite zu „${nameB}". Die verbundene Doppelstunde kann nur in einer Sequenz liegen – sie bleibt in „${nameA}". In „${nameB}" fällt dieser Termin damit weg.`,
+        confirmLabel: 'Trotzdem verbinden',
+        tone: 'danger',
+      });
+      if (!ok) return;
     }
 
     /* Eine Aufsicht zwischen den beiden Stunden bleibt gespeichert,
@@ -5189,6 +5206,12 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     l.subject = src.subject || '';
     l.classGroup = src.classGroup || '';
     l.room = src.room || '';
+    /* Die Länge gehört zum Stundenplan, nicht zum Inhalt: eine
+       Doppelstunde ist in der nächsten Woche wieder eine. Ohne diese
+       Zeile verschwände die zweite Stunde – ihr Platz trägt ja keinen
+       eigenen Eintrag. */
+    l.blockSpan = blockSpanOf(src);
+    l.phases = normalizePhases(l.phases, TOTAL_MIN * l.blockSpan);
     /* Inhalte werden bewusst nicht übernommen – das Planungsprofil aber
        schon: es beschreibt, WIE geplant wird, nicht WAS geplant wurde. */
     l.planningProfile = normalisiereProfilId(src.planningProfile || db?.appSettings?.defaultPlanningProfile);

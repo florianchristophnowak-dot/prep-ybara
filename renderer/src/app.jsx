@@ -4498,8 +4498,12 @@ export default function App(){
   // Remembers the last "main" view (week/macro/calendar). Used for going back from lesson/library.
   const lastMainView = useRef({ name: 'week', weekStart: toISODate(startOfWeekMonday(new Date())) });
   useEffect(()=>{
+    /* Nur Ansichten der aktuellen Daten merken: sonst führte "Zurück"
+       nach dem Verlassen des Archivs in eine archivierte Woche, die es
+       im laufenden Schuljahr gar nicht gibt. */
+    if (imArchiv) return;
     if (view.name === 'week' || view.name === 'macro' || view.name === 'calendar') lastMainView.current = view;
-  }, [view]);
+  }, [view, imArchiv]);
 
   useEffect(()=>{
     if (view.name === 'week') {
@@ -4768,11 +4772,13 @@ const classGroupSuggestions = useMemo(()=>{
   const reviewGezeigt = useRef(new Set());
   const letzteWoche = useRef(view.weekStart);
   useEffect(()=>{
+    /* Der Wochenabschluss gehört zum laufenden Schuljahr. In der
+       Archivansicht wäre er ein Rückblick auf einen Rückblick – und
+       der Merker darf dort gar nicht erst mitlaufen, sonst würde eine
+       archivierte Woche später gegen die aktuellen Daten geprüft. */
+    if (imArchiv) return;
     const vorher = letzteWoche.current;
     letzteWoche.current = view.weekStart;
-    /* Der Wochenabschluss gehört zum laufenden Schuljahr. In der
-       Archivansicht wäre er ein Rückblick auf einen Rückblick. */
-    if (imArchiv) return;
     if (!db || appSettings?.weekReview === false) return;
     // Beim Verlassen der Wochenansicht
     if (view.name === 'week') return;
@@ -4837,7 +4843,7 @@ const classGroupSuggestions = useMemo(()=>{
        erspart die Meldung. */
     const nurAnsehen = new Set([
       'a-undo', 'a-seq', 'a-copy', 'a-expback', 'a-impback', 'a-pocketexp', 'v-pocket',
-      'v-settings', 'v-library', 'v-today',
+      'v-settings', 'v-library', 'v-today', 'w-today',
     ]);
     if (imArchiv) {
       /* Nicht an Ort und Stelle leeren: `cmds` ist dieselbe Liste, die
@@ -7589,7 +7595,7 @@ const exportWeekDocx = () => {
                 const istBlock = span > 1;
                 const zeilenSpan = span * 2 - 1;
                 const kannVerbinden = verbindbarAb(dayIndex, slotIndex);
-                const title = l?.subject ? l.subject : (l?.topic ? l.topic : 'Planen…');
+                const title = l?.subject ? l.subject : (l?.topic ? l.topic : (readOnly ? 'Ohne Titel' : 'Planen…'));
                 const sub = l?.classGroup || '';
                 const seq = l?.sequenceId ? (sequences?.[l.sequenceId] || null) : null;
                 const gKey = l ? groupKey(l.classGroup, l.subject) : '';
@@ -7609,7 +7615,11 @@ const exportWeekDocx = () => {
                       if (readOnly && !l) return;
                       onOpenLesson(dayIndex, slotIndex);
                     }}
-                    title={dayLabel ? `${dayLabel} (trotzdem öffnen)` : (l ? `${istBlock ? `${blockName(span)} · ${stundenBereichLabel(slotIndex, span)} · ` : ''}${readOnly ? 'Ansehen' : 'Öffnen (ziehen zum Verschieben, Ctrl+Ziehen zum Kopieren)'}` : 'Öffnen')}
+                    title={dayLabel
+                      ? `${dayLabel}${(readOnly && !l) ? '' : ' (trotzdem öffnen)'}`
+                      : (l
+                        ? `${istBlock ? `${blockName(span)} · ${stundenBereichLabel(slotIndex, span)} · ` : ''}${readOnly ? 'Ansehen' : 'Öffnen (ziehen zum Verschieben, Ctrl+Ziehen zum Kopieren)'}`
+                        : (readOnly ? 'Keine Stunde eingetragen' : 'Öffnen'))}
                     draggable={!!l && !readOnly}
                     onDragStart={(e)=>{
                       if (!l) return;
@@ -7719,7 +7729,7 @@ const exportWeekDocx = () => {
                         aria-label="Farbe der Lerngruppe ändern"
                       />
                     ) : null}
-                    <div className="title">{l ? (title || 'Ohne Titel') : (readOnly ? '' : 'Planen…')}</div>
+                    <div className="title">{l ? title : (readOnly ? '' : 'Planen…')}</div>
                     <div className="sub">{sub}</div>
                     {istBlock ? (
                       <span className="blockBadge" title={`${stundenBereichLabel(slotIndex, span)} · ${TOTAL_MIN * span} Minuten am Stück`}>
@@ -13299,12 +13309,18 @@ function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onB
         </div>
       </div>
 
+      </fieldset>
+
       <div style={{height:10}} />
 
+      {/* Ein reiner Anzeigefilter – er ändert nichts und gilt deshalb
+          auch in der Archivansicht. */}
       <label className="row" style={{gap:10}}>
         <input type="checkbox" checked={showOnlyWeek} onChange={(e)=>setShowOnlyWeek(e.target.checked)} />
         <span>Nur To-dos dieser Woche</span>
       </label>
+
+      <fieldset className="archivFieldset" disabled={readOnly}>
 
       <div style={{height:10}} />
 

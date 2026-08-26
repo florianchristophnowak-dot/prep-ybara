@@ -4857,6 +4857,7 @@ const classGroupSuggestions = useMemo(()=>{
         return `${formatDateDE(view.startISO)} – ${formatDateDE(toISODate(addDays(fromISODate(view.startISO), (view.rangeDays || 28) - 1)))}`;
       case 'year':     return 'Jahresgrobplanung';
       case 'library':  return 'Bibliothek';
+      case 'archives': return 'Archivierte Schuljahre';
       case 'today':    return 'Heute';
       case 'competencies': return 'Kompetenzen';
       case 'progression':  return 'Progression';
@@ -7801,7 +7802,7 @@ function ArchiveOverviewView({ archive, onOpen, onExport, onDelete, onBack }){
                   <span className="pill">{k.stunden} {k.stunden === 1 ? 'Planung' : 'Planungen'}</span>
                   <span className="pill">{k.sequenzen} {k.sequenzen === 1 ? 'Sequenz' : 'Sequenzen'}</span>
                   {k.balken ? <span className="pill">{k.balken} {k.balken === 1 ? 'Balken' : 'Balken'} im Jahresplan</span> : null}
-                  {k.todos ? <span className="pill">{k.todos} To-dos</span> : null}
+                  {k.todos ? <span className="pill">{k.todos} {k.todos === 1 ? 'To-do' : 'To-dos'}</span> : null}
                   <span className="pill">{k.wochen} {k.wochen === 1 ? 'Woche' : 'Wochen'}</span>
                 </div>
 

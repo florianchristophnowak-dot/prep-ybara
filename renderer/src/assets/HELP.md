@@ -105,6 +105,29 @@ Filter:
 
 ---
 
+## 4c) Archivierte Schuljahre
+
+Beim Start eines neuen Schuljahres (**Schulkalender → Neues Schuljahr…**) wandert das bisherige
+Jahr ins Archiv: Wochenplanung, Sequenzen, Jahresgrobplanung, To‑dos, Ferien und Termine.
+
+- **Schulkalender → Archivierte Schuljahre (n)** öffnet die Übersicht. Jede Zeile zeigt Zeitraum,
+  Archivierungsdatum und Umfang (Lerngruppen, Planungen, Sequenzen, Balken, To‑dos).
+- **Ansehen** öffnet das Schuljahr in der **Archivansicht**. Oben steht dauerhaft, welches Jahr
+  gerade offen ist – und daneben **„Zurück zum aktuellen Schuljahr"**.
+- In der Archivansicht sind **alle Änderungen abgeschaltet**: kein Anlegen, kein Verschieben,
+  kein Löschen, kein Ziehen. Ansehen und **Ausgeben (PDF/Word)** funktionieren normal.
+- Die Navigation ist die gewohnte: Woche, Makro, Jahr, Kompetenzen, Kalender – nur mit den
+  Daten des archivierten Jahres. Aktuelle und archivierte Daten werden nie vermischt.
+- **Exportieren** speichert das Schuljahr als Backup‑Datei (dieselbe Form wie **Backup exportieren**;
+  sie lässt sich mit **Backup importieren** wieder öffnen).
+- **⋯ → Archiv endgültig löschen** entfernt den Abzug. Es wird vorher gefragt; direkt danach lässt
+  sich das noch mit **Strg+Z** zurücknehmen.
+
+Ältere Archive enthalten weniger Bereiche (etwa keine Jahresgrobplanung). Die Übersicht sagt das
+an der jeweiligen Zeile; alles Übrige funktioniert unverändert.
+
+---
+
 ## 5) Sequenz‑Vorlagen (Bibliothek)
 
 Du kannst Unterrichtssequenzen als Vorlagen speichern und später wiederverwenden:

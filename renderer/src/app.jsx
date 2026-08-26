@@ -2987,7 +2987,26 @@ function LessonReviewView({
    Wert. Ob eine Sequenz didaktisch trägt, entscheidet die Lehrkraft;
    die App legt ihr die eigenen Angaben nebeneinander.
    ============================================================ */
-function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, onOpenLessons }){
+/* Eine geöffnete Sequenz. Hier – und nur hier – steht der Export einer
+   konkreten Sequenz: ein dezentes "Exportieren ▾" oben rechts, in
+   derselben Zeile wie die übrigen Aktionen. */
+function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, onOpenLessons,
+                                   onExportDocx, onExportPdf }){
+  const [exportOffen, setExportOffen] = useState(false);
+  const exportRef = useRef(null);
+  useEffect(()=>{
+    if (!exportOffen) return;
+    const beiKlick = (e)=>{ if (exportRef.current && !exportRef.current.contains(e.target)) setExportOffen(false); };
+    const beiTaste = (e)=>{ if (e.key === 'Escape') setExportOffen(false); };
+    window.addEventListener('mousedown', beiKlick);
+    window.addEventListener('keydown', beiTaste);
+    return ()=>{
+      window.removeEventListener('mousedown', beiKlick);
+      window.removeEventListener('keydown', beiTaste);
+    };
+  }, [exportOffen]);
+  const exportMoeglich = (capabilities.docxExport && typeof onExportDocx === 'function')
+    || (capabilities.pdfExport && typeof onExportPdf === 'function');
   const finalTask = normalisiereAufgabe(sequenz?.finalTask);
   const details = [
     ['Situation', finalTask.situation],
@@ -3006,7 +3025,36 @@ function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, 
             Angaben der einzelnen Stunden.
           </p>
         </div>
-        <button className="btn" onClick={onOpenLessons}>Stunden im Makroplan</button>
+        <div className="row wrap" style={{gap:8}}>
+          <button className="btn" onClick={onOpenLessons}>Stunden im Makroplan</button>
+          {exportMoeglich ? (
+            <div className="kebabWrap" ref={exportRef}>
+              <button
+                className="btn"
+                aria-haspopup="menu"
+                aria-expanded={exportOffen}
+                onClick={()=>setExportOffen(v => !v)}
+                title="Diese Sequenz ausgeben"
+              ><Download {...ICON_SM} /> Exportieren <ChevronDown {...ICON_SM} /></button>
+              {exportOffen ? (
+                <div className="kebabMenu kebabMenu--rechts" role="menu">
+                  {(capabilities.docxExport && typeof onExportDocx === 'function') ? (
+                    <button className="kebabEintrag" onClick={()=>{ setExportOffen(false); onExportDocx(); }}>
+                      <span className="kebabIcon"><FileText {...ICON_SM} /></span>
+                      <span>Als Word-Datei</span>
+                    </button>
+                  ) : null}
+                  {(capabilities.pdfExport && typeof onExportPdf === 'function') ? (
+                    <button className="kebabEintrag" onClick={()=>{ setExportOffen(false); onExportPdf(); }}>
+                      <span className="kebabIcon"><FileDown {...ICON_SM} /></span>
+                      <span>Als PDF</span>
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {!istLeereAufgabe(finalTask) ? (
@@ -5327,6 +5375,29 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     persist(nextDb);
   };
 
+  /* Eine Sequenz duplizieren.
+
+     Kopiert wird die Sequenz selbst – Name, Farbe, Schwerpunkt,
+     Zielaufgabe. Die Stunden bleiben bei der ursprünglichen Sequenz:
+     eine Kopie ist ein neuer Rahmen, keine zweite Belegung derselben
+     Stundenplätze. */
+  const duplicateSequence = (id) => {
+    const quelle = db?.sequences?.[id];
+    if (!quelle) return null;
+    const nextDb = deepClone(db);
+    const neueId = uid();
+    nextDb.sequences[neueId] = {
+      ...deepClone(quelle),
+      id: neueId,
+      name: `${String(quelle.name || 'Sequenz').trim()} (Kopie)`,
+      createdAt: new Date().toISOString(),
+      files: [],
+    };
+    persist(nextDb);
+    showToast('Sequenz dupliziert.', { tone: 'success' });
+    return neueId;
+  };
+
   const deleteSequence = (id) => {
     const before = db;
     const nextDb = deepClone(db);
@@ -6251,6 +6322,47 @@ const doExportDocx = async (html, suggestedName) => {
   else if (saved) showToast('Word-Datei gespeichert.', { tone: 'success' });
 };
 
+  /* Eine Sequenz ausgeben.
+
+     Vorher stand diese Rechnung zweimal fast gleich in der
+     Sequenzverwaltung – einmal für PDF, einmal für Word. Jetzt gibt es
+     sie einmal; das Ziel ist ein Parameter. */
+  const exportSequenceAs = (sequenceId, ziel = 'pdf') => {
+    const seq = sequences?.[sequenceId];
+    if (!seq) return;
+    const raus = (ziel === 'docx') ? doExportDocx : doExportPdf;
+    if (typeof raus !== 'function') {
+      showToast(`${ziel === 'docx' ? 'Word' : 'PDF'}-Export ist nur in der Desktop-App verfügbar.`, { tone: 'warning' });
+      return;
+    }
+    try {
+      const occ = [];
+      for (const [ws, w] of Object.entries(db?.weeks || {})) {
+        for (const [k, raw] of Object.entries(w?.lessons || {})) {
+          if (!raw) continue;
+          if ((raw.sequenceId || '') !== sequenceId) continue;
+          const parts = String(k).split('-');
+          const dayIndex = Number(parts[0]);
+          const slotIndex = Number(parts[1]);
+          if (!Number.isFinite(dayIndex) || !Number.isFinite(slotIndex)) continue;
+          const dateISO = toISODate(addDays(fromISODate(ws), dayIndex));
+          const lesson = normalizeLesson(raw);
+          occ.push({ weekStart: ws, dayIndex, slotIndex, dateISO, lesson, group: lesson.classGroup || '' });
+        }
+      }
+      occ.sort((a,b)=> a.dateISO.localeCompare(b.dateISO) || (a.slotIndex - b.slotIndex) || (a.group||'').localeCompare(b.group||''));
+
+      const html = buildSequencePdfHtml({
+        sequence: seq,
+        occurrences: occ,
+        schoolCalendar,
+        groupColors: db?.groupColors || {}
+      });
+      const safe = String(seq.name || 'Sequenz').replace(/[\\/:*?"<>|]/g, '_').trim() || 'Sequenz';
+      raus(html, ziel === 'docx' ? `Sequenz_${safe}.doc` : `Sequenz_${safe}.pdf`);
+    } catch {}
+  };
+
   // Render main content in a readable way (avoids a very long nested ternary inside JSX,
   // which is easy to break and hard to maintain).
   const mainContent = (() => {
@@ -6468,6 +6580,8 @@ const doExportDocx = async (html, suggestedName) => {
             name:'macro', weekStart: view.weekStart,
             startISO: zeilen[0]?.weekStart || view.weekStart, rangeDays: 84,
           })}
+          onExportDocx={()=>exportSequenceAs(view.sequenceId, 'docx')}
+          onExportPdf={()=>exportSequenceAs(view.sequenceId, 'pdf')}
         />
       );
     }
@@ -6818,6 +6932,7 @@ const doExportDocx = async (html, suggestedName) => {
           onCreate={(name)=>createSequence(name)}
           onUpdate={(id, patch)=>updateSequence(id, patch)}
           onDelete={(id)=>deleteSequence(id)}
+          onDuplicate={(id)=>duplicateSequence(id)}
           competencySuggestions={sichtbareKompetenzVorschlaege}
           languageMode={languageMode}
           competencyModel={competencyModel}
@@ -6843,81 +6958,8 @@ const doExportDocx = async (html, suggestedName) => {
               if (tid) showToast('Vorlage gespeichert – du findest sie in der Bibliothek.');
             });
           }}
-          onExportPdfSequence={(id)=>{
-            // re-use the same export logic as in Makro-Plan
-            try {
-              const seq = sequences?.[id];
-              if (!seq) return;
-              if (typeof doExportPdf !== 'function') {
-                showToast('PDF-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
-                return;
-              }
-
-              const occ = [];
-              const weeks = db?.weeks || {};
-              for (const [ws, w] of Object.entries(weeks)) {
-                const lessons = w?.lessons || {};
-                for (const [k, raw] of Object.entries(lessons)) {
-                  if (!raw) continue;
-                  if ((raw.sequenceId || '') !== id) continue;
-                  const parts = String(k).split('-');
-                  const dayIndex = Number(parts[0]);
-                  const slotIndex = Number(parts[1]);
-                  if (!Number.isFinite(dayIndex) || !Number.isFinite(slotIndex)) continue;
-                  const dateISO = toISODate(addDays(fromISODate(ws), dayIndex));
-                  const lesson = normalizeLesson(raw);
-                  occ.push({ weekStart: ws, dayIndex, slotIndex, dateISO, lesson, group: lesson.classGroup || '' });
-                }
-              }
-              occ.sort((a,b)=> a.dateISO.localeCompare(b.dateISO) || (a.slotIndex - b.slotIndex) || (a.group||'').localeCompare(b.group||''));
-
-              const html = buildSequencePdfHtml({
-                sequence: seq,
-                occurrences: occ,
-                schoolCalendar,
-                groupColors: db?.groupColors || {}
-              });
-              const safe = String(seq.name || 'Sequenz').replace(/[\\/:*?"<>|]/g, '_').trim() || 'Sequenz';
-              doExportPdf(html, `Sequenz_${safe}.pdf`);
-            } catch {}
-          }}
-          onExportDocxSequence={(id)=>{
-            try {
-              const seq = sequences?.[id];
-              if (!seq) return;
-              if (typeof doExportDocx !== 'function') {
-                showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
-                return;
-              }
-
-              const occ = [];
-              const weeks = db?.weeks || {};
-              for (const [ws, w] of Object.entries(weeks)) {
-                const lessons = w?.lessons || {};
-                for (const [k, raw] of Object.entries(lessons)) {
-                  if (!raw) continue;
-                  if ((raw.sequenceId || '') !== id) continue;
-                  const parts = String(k).split('-');
-                  const dayIndex = Number(parts[0]);
-                  const slotIndex = Number(parts[1]);
-                  if (!Number.isFinite(dayIndex) || !Number.isFinite(slotIndex)) continue;
-                  const dateISO = toISODate(addDays(fromISODate(ws), dayIndex));
-                  const lesson = normalizeLesson(raw);
-                  occ.push({ weekStart: ws, dayIndex, slotIndex, dateISO, lesson, group: lesson.classGroup || '' });
-                }
-              }
-              occ.sort((a,b)=> a.dateISO.localeCompare(b.dateISO) || (a.slotIndex - b.slotIndex) || (a.group||'').localeCompare(b.group||''));
-
-              const html = buildSequencePdfHtml({
-                sequence: seq,
-                occurrences: occ,
-                schoolCalendar,
-                groupColors: db?.groupColors || {}
-              });
-              const safe = String(seq.name || 'Sequenz').replace(/[\\/:*?"<>|]/g, '_').trim() || 'Sequenz';
-              doExportDocx(html, `Sequenz_${safe}.doc`);
-            } catch {}
-          }}
+          onExportPdfSequence={(id)=>exportSequenceAs(id, 'pdf')}
+          onExportDocxSequence={(id)=>exportSequenceAs(id, 'docx')}
         />
       )}
     </div>
@@ -10084,6 +10126,7 @@ function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, m
 
 function SequenceManager({
   sequences,
+  onDuplicate,
   appSettings,
   onUpdateAppSettings,
   schoolCalendar,
@@ -10363,30 +10406,78 @@ function SequenceManager({
                 onChange={(e)=>onUpdate(s.id, { name: e.target.value })}
                 placeholder="Sequenzname"
               />
-              <button className="btn" onClick={()=>{
-                if (typeof onSaveAsTemplate === 'function') onSaveAsTemplate(s.id);
-              }} title="Sequenz als Vorlage für spätere Schuljahre speichern">Als Vorlage speichern</button>
-              <button className="btn iconBtn-pdf" onClick={()=>{
-                if (typeof onExportPdfSequence === 'function') onExportPdfSequence(s.id);
-              }} title="Sequenz als PDF speichern"><FileDown {...ICON_SM} /> PDF</button>
-              <button className="btn iconBtn-word" onClick={()=>{
-                if (typeof onExportDocxSequence === 'function') onExportDocxSequence(s.id);
-              }} title="Sequenz als Word speichern"><FileText {...ICON_SM} /> Word</button>
-              <button className="btn" onClick={()=>openSeqFiles(s.id)} title="Dateien für diese Sequenz hinterlegen (nur Verweise, nicht exportiert)">Dateien</button>
+              {/* Verwalten steht vorn, Exportieren liegt im Menü:
+                  hier wird organisiert, nicht ausgegeben. */}
               <button className={`btn${kompetenzSeqId === s.id ? ' primary' : ''}`}
                       onClick={()=>setKompetenzSeqId(kompetenzSeqId === s.id ? '' : s.id)}
                       title="Schwerpunkt und Zielaufgabe der Sequenz – die Stunden dürfen davon abweichen">
                 {languageMode ? 'Didaktik' : 'Kompetenzen'}{(s.competencies || []).length ? ` (${s.competencies.length})` : ''}
               </button>
-              {languageMode ? (
-                <button className="btn" onClick={()=>onOpenProgression?.(s.id)}
-                        title="Wie sich das sprachliche Handeln über die Sequenz entwickelt">
-                  <ListTree {...ICON_SM} /> Progression
-                </button>
-              ) : null}
-              <button className="btn danger" onClick={()=>{
-                onDelete(s.id);
-              }}>Löschen</button>
+              <KebabMenu
+                titel={`Aktionen für „${s.name || 'Sequenz'}“`}
+                eintraege={[
+                  {
+                    label: 'Öffnen',
+                    icon: <ListTree {...ICON_SM} />,
+                    title: 'Progression der Sequenz ansehen',
+                    onSelect: ()=>onOpenProgression?.(s.id),
+                  },
+                  {
+                    label: 'Duplizieren',
+                    icon: <Copy {...ICON_SM} />,
+                    title: 'Eine Kopie dieser Sequenz anlegen (ohne Stunden)',
+                    onSelect: ()=>onDuplicate?.(s.id),
+                  },
+                  {
+                    label: 'Umbenennen',
+                    icon: <Pencil {...ICON_SM} />,
+                    onSelect: async ()=>{
+                      const name = await ui.askInput({
+                        title: 'Sequenz umbenennen',
+                        label: 'Name der Sequenz',
+                        initialValue: s.name || '',
+                        confirmLabel: 'Umbenennen',
+                      });
+                      if (name) onUpdate(s.id, { name });
+                    },
+                  },
+                  {
+                    label: 'Als Vorlage speichern',
+                    icon: <Library {...ICON_SM} />,
+                    title: 'Sequenz als Vorlage für spätere Schuljahre speichern',
+                    onSelect: ()=>onSaveAsTemplate?.(s.id),
+                  },
+                  {
+                    label: 'Dateien…',
+                    icon: <FileText {...ICON_SM} />,
+                    title: 'Dateien für diese Sequenz hinterlegen (nur Verweise, nicht exportiert)',
+                    onSelect: ()=>openSeqFiles(s.id),
+                  },
+                  { trenner: true },
+                  {
+                    label: 'Exportieren',
+                    unter: [
+                      capabilities.docxExport ? {
+                        label: 'Als Word-Datei',
+                        icon: <FileText {...ICON_SM} />,
+                        onSelect: ()=>onExportDocxSequence?.(s.id),
+                      } : null,
+                      capabilities.pdfExport ? {
+                        label: 'Als PDF',
+                        icon: <FileDown {...ICON_SM} />,
+                        onSelect: ()=>onExportPdfSequence?.(s.id),
+                      } : null,
+                    ],
+                  },
+                  { trenner: true },
+                  {
+                    label: 'Löschen',
+                    icon: <Trash2 {...ICON_SM} />,
+                    tone: 'danger',
+                    onSelect: ()=>onDelete(s.id),
+                  },
+                ]}
+              />
             </div>
             {kompetenzSeqId === s.id ? (
               <div className="seqKompetenzen">

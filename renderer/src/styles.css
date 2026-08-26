@@ -587,7 +587,9 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 @keyframes modalIn { from { opacity: 0; transform: translateY(20px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
 .seqList { display: flex; flex-direction: column; gap: 10px; }
-.seqRow { display: grid; grid-template-columns: 52px 1fr 190px 110px; gap: 12px; align-items: center; }
+/* Farbe · Name · Kompetenzen · ⋯
+   Exportieren liegt im Menü und braucht keine eigene Spalte mehr. */
+.seqRow { display: grid; grid-template-columns: 52px 1fr auto auto; gap: 12px; align-items: center; }
 .seqRow input[type="color"] { width: 52px; height: 40px; border: 1px solid var(--border); background: transparent; padding: 2px; border-radius: var(--radius); cursor: pointer; }
 
 .templateGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }

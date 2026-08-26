@@ -103,6 +103,31 @@ function stundeAn(db, weekStart, dayIndex, slotIndex){
   return db?.weeks?.[weekStart]?.lessons?.[`${dayIndex}-${slotIndex}`] || null;
 }
 
+/* Wie viele Stundenplätze eine Stunde belegt (Doppelstunde = 2).
+
+   Bewusst eine eigene, winzige Lesefunktion statt eines Imports aus der
+   Oberfläche: dieses Modul kennt die Datenform, nicht die App. Fehlt
+   die Angabe – jede bisher gespeicherte Stunde –, ist es 1. */
+function spanneVon(lesson){
+  const n = Math.round(Number(lesson?.blockSpan));
+  return (Number.isFinite(n) && n > 1) ? n : 1;
+}
+
+/* Ist der Platz durch eine Doppelstunde weiter oben belegt? Ohne diese
+   Prüfung böte der Import einen Platz an, auf dem bereits Unterricht
+   liegt – sichtbar wäre die Stunde dort nur nicht. */
+function istBelegt(db, weekStart, dayIndex, slotIndex){
+  if (stundeAn(db, weekStart, dayIndex, slotIndex)) return true;
+  for (let back = 1; back <= 3; back++){
+    const start = slotIndex - back;
+    if (start < 0) break;
+    const l = stundeAn(db, weekStart, dayIndex, start);
+    if (!l) continue;
+    return spanneVon(l) > back;
+  }
+  return false;
+}
+
 export function hatPlanungsinhalt(lesson){
   if (!lesson || typeof lesson !== 'object') return false;
   if (String(lesson.topic || '').trim()) return true;
@@ -123,7 +148,7 @@ export function naechsterFreierSlot(db, weekStart, dayIndex, { ab = 0 } = {}){
   const woche = db?.weeks?.[weekStart];
   const slots = Math.max(1, Number(woche?.slotsPerDay) || STANDARD_SLOTS);
   for (let i = Math.max(0, ab); i < slots; i++) {
-    if (!stundeAn(db, weekStart, dayIndex, i)) return i;
+    if (!istBelegt(db, weekStart, dayIndex, i)) return i;
   }
   return null;
 }

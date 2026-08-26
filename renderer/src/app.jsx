@@ -49,15 +49,107 @@ import {
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowDown, ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
-  CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, FileDown, FileText, Grid3x3, Library,
-  ListTree, Maximize2, NotebookPen, Palmtree, Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
-  Square, Star, Sun, Trash2, X,
+  CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, Download, Eye,
+  FileDown, FileText, Grid3x3, Library, Link2, ListTree, Maximize2, MoreHorizontal, NotebookPen, Palmtree,
+  Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
+  Square, Star, Sun, Trash2, Unlink, X,
 } from 'lucide-react';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
 const PX_PER_MIN = 10;
 const TOTAL_MIN = 45;
 const MIN_PHASE_MIN = 1;
+
+/* --- Doppelstunden ----------------------------------------------------
+
+   Eine Doppelstunde ist KEIN eigener Stundentyp. Sie ist eine ganz
+   normale Stunde, die mehr als einen Stundenplatz belegt: `blockSpan`
+   sagt, wie viele unmittelbar aufeinanderfolgende Plätze sie einnimmt.
+
+   Damit bleibt alles, was es schon gibt, unverändert gültig:
+   - eine Stunde ohne `blockSpan` ist eine Einzelstunde (span 1),
+   - im Wochenraster steht sie weiterhin an ihrem ersten Platz,
+   - jede Auswertung, jeder Export und jede Sequenz sieht GENAU EINE
+     Stunde – nicht zwei halbe.
+
+   Die belegten Folgeplätze tragen keinen eigenen Eintrag mehr. Welche
+   Plätze das sind, ergibt sich aus Startplatz und Spanne und bleibt
+   dadurch nachvollziehbar (siehe `belegteSlots`). */
+const MAX_BLOCK_SPAN = 4;
+
+function normalisiereBlockSpan(v){
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n) || n < 1) return 1;
+  return Math.min(MAX_BLOCK_SPAN, n);
+}
+
+function blockSpanOf(lesson){
+  return normalisiereBlockSpan(lesson?.blockSpan);
+}
+
+/* Der Zeitrahmen einer Stunde: durchgehend, nicht nach 45 Minuten
+   geteilt. Eine Doppelstunde hat 90 Minuten am Stück. */
+function lessonTotalMin(lesson){
+  return TOTAL_MIN * blockSpanOf(lesson);
+}
+
+/* Die Stundenplätze, die eine Stunde belegt – der eigene und die
+   Folgeplätze einer Doppel-/Mehrfachstunde. */
+function belegteSlots(slotIndex, span){
+  const s = Number(slotIndex) || 0;
+  const n = normalisiereBlockSpan(span);
+  return Array.from({ length: n }, (_, i)=> s + i);
+}
+
+/* Zu welcher Stunde gehört ein Platz? Entweder er trägt selbst eine
+   Stunde, oder eine Doppelstunde weiter oben deckt ihn ab. */
+function blockOwnerAt(week, dayIndex, slotIndex){
+  const lessons = week?.lessons || {};
+  for (let back = 0; back < MAX_BLOCK_SPAN; back++){
+    const start = slotIndex - back;
+    if (start < 0) break;
+    const l = lessons[keyOf(dayIndex, start)];
+    if (!l) continue;
+    if (back === 0) return { slotIndex: start, lesson: l, covered: false };
+    if (blockSpanOf(l) > back) return { slotIndex: start, lesson: l, covered: true };
+    return null;
+  }
+  return null;
+}
+
+/* Ist dieser Platz von einer Doppelstunde abgedeckt (und damit nicht
+   selbst bespielbar)? */
+function istAbgedeckt(week, dayIndex, slotIndex){
+  const o = blockOwnerAt(week, dayIndex, slotIndex);
+  return Boolean(o && o.covered);
+}
+
+/* "3. Stunde" oder "3.–4. Stunde" – dieselbe Beschriftung überall. */
+function stundenBereichLabel(slotIndex, span){
+  const n = normalisiereBlockSpan(span);
+  const a = (Number(slotIndex) || 0) + 1;
+  if (n <= 1) return `${a}. Stunde`;
+  return `${a}.–${a + n - 1}. Stunde`;
+}
+
+/* Der Name der Blockgrösse. Mehr als eine Doppelstunde ist selten,
+   soll aber nicht namenlos bleiben. */
+function blockName(span){
+  const n = normalisiereBlockSpan(span);
+  if (n <= 1) return 'Einzelstunde';
+  if (n === 2) return 'Doppelstunde';
+  if (n === 3) return 'Dreifachstunde';
+  return `${n}-fach-Stunde`;
+}
+
+/* Zwei Stunden dürfen verbunden werden, wenn sie zur selben Lerngruppe
+   gehören: gleiche Klasse UND gleiches Fach. Alles andere wäre eine
+   stille Zusammenlegung fremder Planungen. */
+function passenZusammen(a, b){
+  if (!a || !b) return false;
+  const norm = (v)=> String(v || '').trim().toLowerCase();
+  return norm(a.classGroup) === norm(b.classGroup) && norm(a.subject) === norm(b.subject);
+}
 
 // Optional clock-times support
 // Users can configure lesson period start times in the school calendar settings.
@@ -1115,6 +1207,11 @@ function defaultLesson(){
     customPlanningFields: [],
     preferredExportLayout: '',
 
+    /* Wie viele Stundenplätze diese Stunde belegt. 1 = Einzelstunde,
+       2 = Doppelstunde. Fehlt die Angabe (jede bisher gespeicherte
+       Stunde), gilt 1 – es ändert sich dadurch nichts. */
+    blockSpan: 1,
+
     /* Nachbereitung. Sie gehört zur Stunde, die sie betrifft – so trägt
        die vorhandene Wochenpersistenz sie ohne eine zweite Ablage mit.
        Eine Stunde ohne diese Angaben ist eine gültige Stunde. */
@@ -1124,8 +1221,14 @@ function defaultLesson(){
   };
 }
 
-function normalizePhases(phases){
-  // Ensure sum = TOTAL_MIN, min durations
+/* Die Gesamtdauer ist ab jetzt ein Parameter statt einer Konstanten.
+
+   Grund: eine Doppelstunde hat einen durchgehenden Zeitrahmen von 90
+   Minuten. Ohne Angabe bleibt es bei den 45 Minuten der Einzelstunde –
+   jeder bestehende Aufruf verhält sich dadurch exakt wie zuvor. */
+function normalizePhases(phases, gesamt = TOTAL_MIN){
+  const TOTAL = Math.max(MIN_PHASE_MIN, Math.round(Number(gesamt) || TOTAL_MIN));
+  // Ensure sum = TOTAL, min durations
   const p = (phases || []).map(ph => {
     const src = (ph && typeof ph === 'object') ? ph : {};
     return {
@@ -1159,9 +1262,9 @@ function normalizePhases(phases){
   if (!p.length) return p;
 
   let sum = p.reduce((a,b)=>a+b.duration,0);
-  if (sum === TOTAL_MIN) return p;
+  if (sum === TOTAL) return p;
   // adjust last phase to fit
-  const diff = TOTAL_MIN - sum;
+  const diff = TOTAL - sum;
   p[p.length-1].duration = Math.max(MIN_PHASE_MIN, p[p.length-1].duration + diff);
   // if we pushed below min, redistribute backwards
   while (p[p.length-1].duration < MIN_PHASE_MIN) {
@@ -1175,8 +1278,8 @@ function normalizePhases(phases){
   }
   // final clamp
   sum = p.reduce((a,b)=>a+b.duration,0);
-  if (sum !== TOTAL_MIN) {
-    const delta = TOTAL_MIN - sum;
+  if (sum !== TOTAL) {
+    const delta = TOTAL - sum;
     p[0].duration = Math.max(MIN_PHASE_MIN, p[0].duration + delta);
   }
   return p;
@@ -1198,9 +1301,229 @@ function normalizePhases(phases){
    Deshalb geht hier alles Nachbereitende verloren, absichtlich. Die
    Planung selbst – Phasen, Inhalte, Kompetenzen, Fachdidaktik – bleibt
    vollständig erhalten. */
+/* --- Sequenz-Vorlagen -------------------------------------------------
+
+   Eine Vorlage besteht aus Einheiten. Eine Einheit ist das, was in der
+   Sequenz eine Stunde war – und kann seit den Doppelstunden mehr als
+   einen Stundenplatz umfassen. Deshalb gilt durchgehend:
+
+     Einheiten  = Anzahl der Sequenzeinheiten
+     Stunden    = benötigte Stundenplätze (Summe der Spannen)
+
+   Alle beschreibenden Angaben sind optional. Eine Vorlage aus einer
+   früheren Fassung trägt keine davon und bleibt vollständig gültig –
+   sie zeigt dann eben weniger. */
+const VORLAGEN_HERKUNFT = {
+  sequence: 'Aus Sequenz gespeichert',
+  own: 'Eigene Vorlage',
+  builtin: 'Mitgelieferte Vorlage',
+  imported: 'Importiert',
+};
+
+function herkunftName(id){
+  return VORLAGEN_HERKUNFT[String(id || '').trim()] || VORLAGEN_HERKUNFT.own;
+}
+
+function normalisiereVorlage(raw, id = ''){
+  const t = (raw && typeof raw === 'object') ? raw : {};
+  const text = (v)=> String(v ?? '').trim();
+  const lessons = (Array.isArray(t.lessons) ? t.lessons : []).map(l => {
+    const o = (l && typeof l === 'object') ? l : {};
+    return { ...o, blockSpan: normalisiereBlockSpan(o.blockSpan) };
+  });
+  return {
+    ...t,
+    id: t.id || id || uid(),
+    name: text(t.name) || String(id || 'Vorlage'),
+    subject: text(t.subject),
+    color: text(t.color),
+    createdAt: t.createdAt || new Date().toISOString(),
+    lessons,
+    /* Beschreibende Angaben. Sie helfen bei der Auswahl und ändern an
+       den Stunden der Vorlage nichts. */
+    description: text(t.description),
+    gradeLevel: text(t.gradeLevel),
+    learningYear: text(t.learningYear),
+    competencies: (Array.isArray(t.competencies) ? t.competencies : []).map(text).filter(Boolean),
+    primaryCompetency: text(t.primaryCompetency),
+    finalTask: normalisiereAufgabe(t.finalTask),
+    targetProduct: text(t.targetProduct),
+    languageResources: normalisiereMittel(t.languageResources),
+    courseRef: text(t.courseRef),
+    prerequisites: text(t.prerequisites),
+    origin: VORLAGEN_HERKUNFT[text(t.origin)] ? text(t.origin) : 'own',
+  };
+}
+
+/* Umfang einer Vorlage: Einheiten, Stundenplätze, Doppelstunden. */
+function vorlagenUmfang(tpl){
+  const lessons = Array.isArray(tpl?.lessons) ? tpl.lessons : [];
+  let stunden = 0;
+  let doppel = 0;
+  for (const l of lessons){
+    const span = normalisiereBlockSpan(l?.blockSpan);
+    stunden += span;
+    if (span > 1) doppel += 1;
+  }
+  return { einheiten: lessons.length, stunden, doppelstunden: doppel, minuten: stunden * TOTAL_MIN };
+}
+
+function umfangText(tpl){
+  const u = vorlagenUmfang(tpl);
+  const teile = [
+    `${u.einheiten} ${u.einheiten === 1 ? 'Einheit' : 'Einheiten'}`,
+    `${u.stunden} ${u.stunden === 1 ? 'Unterrichtsstunde' : 'Unterrichtsstunden'}`,
+  ];
+  if (u.doppelstunden) teile.push(`${u.doppelstunden} ${u.doppelstunden === 1 ? 'Doppelstunde' : 'Doppelstunden'}`);
+  return teile.join(' · ');
+}
+
+/* Klassenstufe und Lernjahr als eine Zeile – beides ist optional. */
+function stufenText(tpl){
+  const teile = [];
+  const k = String(tpl?.gradeLevel || '').trim();
+  const j = String(tpl?.learningYear || '').trim();
+  if (k) teile.push(/^\d+$/.test(k) ? `Klasse ${k}` : k);
+  if (j) teile.push(/^\d+$/.test(j) ? `${j}. Lernjahr` : j);
+  return teile.join(' · ');
+}
+
+/* Die Zielhandlung als ein Satz – aus der Zielaufgabe der Sequenz. */
+function zielhandlungText(tpl){
+  const a = normalisiereAufgabe(tpl?.finalTask);
+  return String(a.text || '').trim();
+}
+
 function nurPlanung(lesson){
   const l = normalizeLesson(lesson);
   return { ...l, review: leeresReview() };
+}
+
+/* --- Verbinden und Trennen -------------------------------------------
+
+   Beides sind reine Umformungen auf Stundenobjekten. Sie kennen weder
+   Woche noch Oberfläche – dadurch sind sie prüfbar und lassen sich an
+   jeder Stelle wiederverwenden. */
+
+/* Zwei Stunden zu einer Doppelstunde. Der Entwurf wird gemeinsam:
+   die Phasen laufen durch, Texte werden angefügt statt verworfen.
+   Nichts geht dabei verloren – das ist die Bedingung dafür, dass sich
+   das Verbinden ohne Nachfrage anbieten lässt. */
+function verbindeStunden(ersteRaw, zweiteRaw){
+  const a = normalizeLesson(ersteRaw);
+  const b = normalizeLesson(zweiteRaw);
+  const span = normalisiereBlockSpan(blockSpanOf(a) + blockSpanOf(b));
+
+  const text = (x, y, trenner = '\n')=>{
+    const s1 = String(x || '').trim();
+    const s2 = String(y || '').trim();
+    if (!s1) return s2;
+    if (!s2 || s1 === s2) return s1;
+    return `${s1}${trenner}${s2}`;
+  };
+  const liste = (x, y)=>{
+    const arr = [...(Array.isArray(x) ? x : []), ...(Array.isArray(y) ? y : [])];
+    return arr;
+  };
+  const eindeutig = (arr)=>{
+    const out = [];
+    for (const v of arr){
+      const t = String(v || '').trim();
+      if (t && !out.includes(t)) out.push(t);
+    }
+    return out;
+  };
+
+  const competencies = eindeutig(liste(a.competencies, b.competencies));
+  const mittelA = normalisiereMittel(a.languageResources);
+  const mittelB = normalisiereMittel(b.languageResources);
+
+  const merged = {
+    ...a,
+    blockSpan: span,
+    room: (a.room || '').trim() || (b.room || '').trim(),
+    topic: text(a.topic, b.topic, ' · '),
+    objectives: text(a.objectives, b.objectives),
+    homework: text(a.homework, b.homework),
+    notes: text(a.notes, b.notes),
+    links: liste(a.links, b.links),
+    files: liste(a.files, b.files),
+    sequenceId: (a.sequenceId || '').trim() || (b.sequenceId || '').trim(),
+    competencies,
+    primaryCompetency: (a.primaryCompetency || '').trim() || (b.primaryCompetency || '').trim(),
+    successCriteria: normalisiereErfolgskriterien(liste(a.successCriteria, b.successCriteria)),
+    speechActs: normalisiereSprechabsichten(liste(a.speechActs, b.speechActs)),
+    languageResources: normalisiereMittel({
+      vocabulary: text(mittelA.vocabulary, mittelB.vocabulary),
+      grammar: text(mittelA.grammar, mittelB.grammar),
+      pronunciation: text(mittelA.pronunciation, mittelB.pronunciation),
+      other: text(mittelA.other, mittelB.other),
+    }),
+    progressionNote: text(a.progressionNote, b.progressionNote, ' · '),
+    /* Die Phasen behalten ihre Kennungen. Nur so bleiben die
+       phasenweisen Nachbereitungen beider Stunden gültig. */
+    phases: normalizePhases([...(a.phases || []), ...(b.phases || [])], TOTAL_MIN * span),
+    review: {
+      ...normalisiereReview(a.review, uid),
+      generalNotes: text(normalisiereReview(a.review).generalNotes, normalisiereReview(b.review).generalNotes),
+      phaseReviews: {
+        ...normalisiereReview(a.review).phaseReviews,
+        ...normalisiereReview(b.review).phaseReviews,
+      },
+      carryOverItems: [
+        ...normalisiereReview(a.review).carryOverItems,
+        ...normalisiereReview(b.review).carryOverItems,
+      ],
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  return normalizeLesson(merged);
+}
+
+/* Eine Doppelstunde wieder in Einzelstunden.
+
+   Der gemeinsame Verlaufsplan wird an der Stundengrenze geteilt: was
+   davor liegt, bleibt in der ersten Stunde, was danach beginnt, geht in
+   die zweite. Eine Phase, die über die Grenze läuft, wird an genau
+   dieser Stelle geteilt – ihre Angaben stehen dann in beiden Teilen.
+
+   Alles Organisatorische (Klasse, Fach, Raum, Sequenz) trägt jede der
+   entstehenden Stunden; die Nachbereitung bleibt bei der ersten, weil
+   sie eine gehaltene Stunde beschreibt und sich nicht aufteilen lässt. */
+function trenneStunde(raw){
+  const l = normalizeLesson(raw);
+  const span = blockSpanOf(l);
+  if (span <= 1) return [l];
+
+  const teile = Array.from({ length: span }, ()=>[]);
+  let offset = 0;
+  for (const phase of (l.phases || [])){
+    let rest = Math.max(MIN_PHASE_MIN, Math.round(Number(phase.duration) || 0));
+    while (rest > 0){
+      const teilIndex = Math.min(span - 1, Math.floor(offset / TOTAL_MIN));
+      const platzImTeil = (teilIndex + 1) * TOTAL_MIN - offset;
+      const nimm = Math.min(rest, Math.max(1, platzImTeil));
+      teile[teilIndex].push({ ...neuePhasenIds(phase), duration: nimm });
+      offset += nimm;
+      rest -= nimm;
+    }
+  }
+
+  return teile.map((phasen, i)=>{
+    const stunde = normalizeLesson({
+      ...deepClone(l),
+      blockSpan: 1,
+      phases: phasen.length ? phasen : [neuePhase('Neue Phase', TOTAL_MIN)],
+      updatedAt: new Date().toISOString(),
+    });
+    if (i > 0) {
+      /* Die zweite Stunde ist eine eigene, noch nicht gehaltene Stunde:
+         Nachbereitung und Hausaufgabe gehören zur ersten. */
+      stunde.review = leeresReview();
+      stunde.homework = '';
+    }
+    return stunde;
+  });
 }
 
 function neuePhasenIds(phase){
@@ -1216,10 +1539,12 @@ function neuePhasenIds(phase){
 function normalizeLesson(lesson){
   const base = defaultLesson();
   const l = (lesson && typeof lesson === 'object') ? lesson : {};
-  const phases = normalizePhases(l.phases || base.phases);
+  const blockSpan = normalisiereBlockSpan(l.blockSpan);
+  const phases = normalizePhases(l.phases || base.phases, TOTAL_MIN * blockSpan);
   return {
     ...base,
     ...l,
+    blockSpan,
     sequenceId: l.sequenceId || '',
     primaryCompetency: l.primaryCompetency || '',
     competencies: Array.isArray(l.competencies) ? l.competencies : [],
@@ -1390,6 +1715,86 @@ function EmptyState({ text, actionLabel, onAction, illustration = false }){
 /* Suchvergleich ohne Akzente: In einer App für den Französischunterricht
    heissen Sequenzen "Le passé composé". Wer "passe" tippt, muss sie finden –
    sonst ist die Palette für genau die Inhalte unbrauchbar, um die es geht. */
+/* Ein dezentes Kontextmenü (⋯).
+
+   Bewusst kein neues Baukastensystem: es benutzt dieselben Flächen,
+   Abstände und Farben wie die übrigen Bedienelemente und schliesst sich
+   bei Klick nach aussen und mit Escape. Einträge sind einfache Objekte
+   – `{ label, onSelect }`, `{ trenner: true }` oder ein Eintrag mit
+   `unter: [...]` für eine Untergruppe (z. B. "Exportieren"). */
+function KebabMenu({ eintraege, titel = 'Weitere Aktionen', ausrichtung = 'rechts', knopfKlasse = 'iconBtn' }){
+  const [offen, setOffen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(()=>{
+    if (!offen) return;
+    const beiKlick = (e)=>{
+      if (!wrapRef.current) return;
+      if (!wrapRef.current.contains(e.target)) setOffen(false);
+    };
+    const beiTaste = (e)=>{ if (e.key === 'Escape') setOffen(false); };
+    window.addEventListener('mousedown', beiKlick);
+    window.addEventListener('keydown', beiTaste);
+    return ()=>{
+      window.removeEventListener('mousedown', beiKlick);
+      window.removeEventListener('keydown', beiTaste);
+    };
+  }, [offen]);
+
+  const liste = (Array.isArray(eintraege) ? eintraege : []).filter(Boolean);
+  if (!liste.length) return null;
+
+  const zeile = (e, i)=>{
+    if (e.trenner) return <div key={`t-${i}`} className="kebabTrenner" role="separator" />;
+    if (Array.isArray(e.unter)) {
+      const unter = e.unter.filter(Boolean);
+      if (!unter.length) return null;
+      return (
+        <div key={`g-${i}`} className="kebabGruppe">
+          <div className="kebabGruppeTitel">{e.label}</div>
+          {unter.map((u, j)=>zeile(u, `${i}-${j}`))}
+        </div>
+      );
+    }
+    return (
+      <button
+        key={`e-${i}`}
+        type="button"
+        className={`kebabEintrag${e.tone === 'danger' ? ' kebabEintrag--danger' : ''}`}
+        disabled={Boolean(e.disabled)}
+        title={e.title || ''}
+        onClick={(ev)=>{
+          ev.stopPropagation();
+          setOffen(false);
+          try { e.onSelect?.(); } catch {}
+        }}
+      >
+        {e.icon ? <span className="kebabIcon">{e.icon}</span> : null}
+        <span>{e.label}</span>
+      </button>
+    );
+  };
+
+  return (
+    <div className={`kebabWrap${offen ? ' is-open' : ''}`} ref={wrapRef} onClick={(e)=>e.stopPropagation()}>
+      <button
+        type="button"
+        className={knopfKlasse}
+        aria-haspopup="menu"
+        aria-expanded={offen}
+        title={titel}
+        aria-label={titel}
+        onClick={(e)=>{ e.stopPropagation(); setOffen(v => !v); }}
+      ><MoreHorizontal {...ICON_SM} /></button>
+      {offen ? (
+        <div className={`kebabMenu kebabMenu--${ausrichtung}`} role="menu">
+          {liste.map(zeile)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function foldForSearch(str){
   return String(str || '')
     .normalize('NFD')
@@ -1997,7 +2402,9 @@ function TodayView({ heute, todayISO, getSeqProgress, onOpenLesson, onOpenTodos,
                   className="todayLesson"
                   onClick={()=>onOpenLesson?.(s.dayIndex, s.slotIndex)}
                 >
-                  <span className="todaySlot">{s.slotIndex + 1}.</span>
+                  <span className="todaySlot" title={blockSpanOf(l) > 1 ? `${blockName(blockSpanOf(l))} · ${stundenBereichLabel(s.slotIndex, blockSpanOf(l))}` : ''}>
+                    {blockSpanOf(l) > 1 ? `${s.slotIndex + 1}.–${s.slotIndex + blockSpanOf(l)}.` : `${s.slotIndex + 1}.`}
+                  </span>
                   <span className="todayMain">
                     <span className="todayTopic">{String(l.topic || '').trim() || 'Noch kein Thema'}</span>
                     <span className="todayMeta">
@@ -2288,7 +2695,7 @@ function LessonReviewView({
 }){
   const l = normalizeLesson(lesson);
   const review = normalisiereReview(l.review);
-  const phasen = normalizePhases(l.phases || []);
+  const phasen = normalizePhases(l.phases || [], lessonTotalMin(l));
   const [neuerPunkt, setNeuerPunkt] = useState('');
   const [notizVormerken, setNotizVormerken] = useState(false);
 
@@ -3434,12 +3841,14 @@ function ensureDbShape(raw){
     s.finalTask = normalisiereAufgabe(s.finalTask);
   }
 
-  // Normalize templates (ensure id/lessons)
+  /* Vorlagen angleichen.
+
+     Rein additiv: die beschreibenden Angaben der Bibliothek entstehen
+     leer, die Einheiten bekommen die Spanne 1 (Einzelstunde). Eine
+     Vorlage aus einer früheren Fassung bleibt dadurch unverändert
+     einsetzbar – sie zeigt in der Bibliothek nur weniger. */
   for (const [id, t] of Object.entries(db.sequenceTemplates)){
-    if (!t || typeof t !== 'object') { db.sequenceTemplates[id] = { id, name: String(id), subject: '', createdAt: new Date().toISOString(), lessons: [] }; continue; }
-    if (!t.id) t.id = id;
-    if (!t.name) t.name = String(id);
-    if (!Array.isArray(t.lessons)) t.lessons = [];
+    db.sequenceTemplates[id] = normalisiereVorlage(t, id);
   }
 
 // Normalize group colors (Lerngruppe = Klasse||Fach)
@@ -4346,6 +4755,69 @@ useEffect(()=>{
     runUndoable('Stunde gelöscht', before, ()=>persist(nextDb));
   };
 
+  /* --- Doppelstunden: verbinden und trennen -------------------------
+
+     Beides ändert nur die Woche: die verbundene Stunde bleibt an ihrem
+     ersten Platz stehen und belegt den folgenden mit. Der Folgeplatz
+     trägt danach keinen eigenen Eintrag mehr – deshalb sieht jede
+     Auswertung genau eine Stunde, nicht zwei halbe. */
+  const joinLessonsIntoBlock = (weekStart, dayIndex, slotIndex) => {
+    const before = db;
+    const w = db?.weeks?.[weekStart];
+    if (!w) return;
+    const erste = w.lessons?.[keyOf(dayIndex, slotIndex)];
+    if (!erste) return;
+    const span = blockSpanOf(erste);
+    const folgeSlot = slotIndex + span;
+    const slots = w.slotsPerDay || 6;
+    if (span >= MAX_BLOCK_SPAN) {
+      showToast(`Mehr als ${MAX_BLOCK_SPAN} Stunden lassen sich nicht verbinden.`, { tone: 'warning' });
+      return;
+    }
+    if (folgeSlot >= slots) {
+      showToast('Nach dieser Stunde gibt es an dem Tag keinen weiteren Stundenplatz.', { tone: 'warning' });
+      return;
+    }
+    const zweite = w.lessons?.[keyOf(dayIndex, folgeSlot)];
+    if (!zweite) {
+      showToast('Zum Verbinden braucht es eine Stunde im direkt folgenden Stundenplatz.', { tone: 'warning' });
+      return;
+    }
+    if (!passenZusammen(erste, zweite)) {
+      showToast('Verbinden geht nur bei derselben Lerngruppe – gleiche Klasse und gleiches Fach.', { tone: 'warning' });
+      return;
+    }
+
+    const verbunden = verbindeStunden(erste, zweite);
+    const nextDb = deepClone(db);
+    const nw = nextDb.weeks[weekStart];
+    nw.lessons[keyOf(dayIndex, slotIndex)] = verbunden;
+    delete nw.lessons[keyOf(dayIndex, folgeSlot)];
+    try {
+      draftLessonCacheRef.current.delete(`${weekStart}|${dayIndex}|${slotIndex}`);
+      draftLessonCacheRef.current.delete(`${weekStart}|${dayIndex}|${folgeSlot}`);
+    } catch {}
+    runUndoable(`${blockName(blockSpanOf(verbunden))} verbunden`, before, ()=>persist(nextDb));
+  };
+
+  const splitBlockAt = (weekStart, dayIndex, slotIndex) => {
+    const before = db;
+    const w = db?.weeks?.[weekStart];
+    const l = w?.lessons?.[keyOf(dayIndex, slotIndex)];
+    if (!l) return;
+    const span = blockSpanOf(l);
+    if (span <= 1) return;
+
+    const teile = trenneStunde(l);
+    const nextDb = deepClone(db);
+    const nw = nextDb.weeks[weekStart];
+    teile.forEach((teil, i)=>{
+      nw.lessons[keyOf(dayIndex, slotIndex + i)] = teil;
+      try { draftLessonCacheRef.current.delete(`${weekStart}|${dayIndex}|${slotIndex + i}`); } catch {}
+    });
+    runUndoable(`${blockName(span)} getrennt`, before, ()=>persist(nextDb));
+  };
+
   // --- Stunden: Copy/Cut/Paste + Drag&Drop ---
   const copyLessonToClipboard = (weekStart, dayIndex, slotIndex) => {
     const l = getLessonAt(weekStart, dayIndex, slotIndex);
@@ -4357,7 +4829,7 @@ useEffect(()=>{
     }
     const cloned = nurPlanung(deepClone(l));
     // Neue IDs für Phasen, damit du beim Kopieren nicht versehentlich identische IDs hast.
-    cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)));
+    cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)), lessonTotalMin(cloned));
     setLessonClipboard({ lesson: cloned, source: { weekStart, dayIndex, slotIndex }, cut: false, copiedAt: Date.now() });
   };
 
@@ -4365,13 +4837,17 @@ useEffect(()=>{
     const persisted = db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, slotIndex)] || null;
     if (!persisted) return;
     const l = nurPlanung(deepClone(persisted));
-    l.phases = normalizePhases((l.phases || []).map(p => neuePhasenIds(p)));
+    l.phases = normalizePhases((l.phases || []).map(p => neuePhasenIds(p)), lessonTotalMin(l));
     setLessonClipboard({ lesson: l, source: { weekStart, dayIndex, slotIndex }, cut: true, copiedAt: Date.now() });
     deleteLessonAt(weekStart, dayIndex, slotIndex, { silent: true });
   };
 
   const pasteLessonFromClipboard = async (weekStart, dayIndex, slotIndex) => {
     if (!lessonClipboard?.lesson) return;
+    if (istAbgedeckt(db?.weeks?.[weekStart], dayIndex, slotIndex)) {
+      showToast('Dieser Stundenplatz gehört zu einer Doppelstunde. Trenne sie zuerst.', { tone: 'warning' });
+      return;
+    }
     const targetHas = !!(db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, slotIndex)]);
     if (targetHas) {
       const ok = await askConfirm({
@@ -4394,6 +4870,11 @@ useEffect(()=>{
     if (!f.weekStart || !t.weekStart) return;
     if (f.weekStart === t.weekStart && f.dayIndex === t.dayIndex && f.slotIndex === t.slotIndex) return;
 
+    if (istAbgedeckt(db?.weeks?.[t.weekStart], t.dayIndex, t.slotIndex)) {
+      showToast('Dieser Stundenplatz gehört zu einer Doppelstunde. Trenne sie zuerst.', { tone: 'warning' });
+      return;
+    }
+
     const nextDb = deepClone(db);
     if (!nextDb.weeks) nextDb.weeks = {};
     const fromW = nextDb.weeks[f.weekStart] || { slotsPerDay: 6, lessons: {}, duties: {} };
@@ -4410,6 +4891,25 @@ useEffect(()=>{
 
     const src = normalizeLesson(deepClone(srcRaw));
     const now = new Date().toISOString();
+
+    /* Eine Doppelstunde braucht am Ziel so viele freie Plätze, wie sie
+       belegt. Sonst schöbe sie sich lautlos über eine andere Planung. */
+    const srcSpan = blockSpanOf(src);
+    if (srcSpan > 1) {
+      const zielSlots = t.slotsPerDay || toW.slotsPerDay || 6;
+      const platzReicht = (t.slotIndex + srcSpan) <= zielSlots;
+      const frei = belegteSlots(t.slotIndex, srcSpan).slice(1).every(si => {
+        const k = keyOf(t.dayIndex, si);
+        const belegtVonQuelle = (f.weekStart === t.weekStart)
+          && belegteSlots(f.slotIndex, srcSpan).includes(si) && f.dayIndex === t.dayIndex;
+        if (belegtVonQuelle) return true;
+        return !toW.lessons?.[k] && !istAbgedeckt(toW, t.dayIndex, si);
+      });
+      if (!platzReicht || !frei) {
+        showToast(`Für eine ${blockName(srcSpan)} sind dort nicht genug freie Stundenplätze.`, { tone: 'warning' });
+        return;
+      }
+    }
 
     const upsertIn = (w, key, lesson) => {
       const l = normalizeLesson(lesson);
@@ -4437,7 +4937,7 @@ useEffect(()=>{
         if (!ok) return;
       }
       const cloned = nurPlanung(deepClone(src));
-      cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)));
+      cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)), lessonTotalMin(cloned));
       upsertIn(toW, toKey, cloned);
       persist(nextDb);
       return;
@@ -4447,6 +4947,14 @@ useEffect(()=>{
     const dstRaw = toW.lessons?.[toKey];
     if (dstRaw) {
       const dst = normalizeLesson(deepClone(dstRaw));
+      /* Beim Tausch müsste auch die Zielstunde am Ausgangsplatz Platz
+         finden. Bei einer Doppelstunde ist das nicht ohne Weiteres der
+         Fall – dann lieber sagen, was zu tun ist, als etwas zu
+         überschreiben. */
+      if (blockSpanOf(dst) > 1) {
+        showToast(`Dort liegt eine ${blockName(blockSpanOf(dst))}. Trenne sie zuerst oder wähle einen freien Platz.`, { tone: 'warning' });
+        return;
+      }
       upsertIn(toW, toKey, src);
       upsertIn(fromW, fromKey, dst);
       persist(nextDb);
@@ -5358,21 +5866,81 @@ const deleteTodo = (id) => {
       speechActs: normalisiereSprechabsichten(lesson.speechActs),
       languageResources: normalisiereMittel(lesson.languageResources),
       progressionNote: String(lesson.progressionNote || '').trim(),
+      /* Die Dauer der Einheit. Eine Doppelstunde bleibt beim Speichern
+         als Vorlage eine Doppelstunde – und wird beim Einsetzen wieder
+         zu einer, wenn dort zwei Plätze frei sind. */
+      blockSpan: blockSpanOf(lesson),
     }));
+
+    /* Was die Bibliothek über die Sequenz weiss, entsteht hier – aus
+       der Sequenz und aus ihren Stunden. Nichts davon wird erfunden:
+       fehlt eine Angabe, bleibt das Feld leer und die Karte zeigt sie
+       schlicht nicht. Ergänzen lässt sich alles später von Hand. */
+    const kompetenzen = (()=>{
+      const zaehler = new Map();
+      const merke = (v)=>{
+        const t = String(v || '').trim();
+        if (!t) return;
+        zaehler.set(t, (zaehler.get(t) || 0) + 1);
+      };
+      for (const c of (Array.isArray(seq?.competencies) ? seq.competencies : [])) merke(c);
+      merke(seq?.primaryCompetency);
+      for (const { lesson } of items){
+        merke(lesson.primaryCompetency);
+        for (const c of (Array.isArray(lesson.competencies) ? lesson.competencies : [])) merke(c);
+      }
+      return [...zaehler.entries()].sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0])).map(([k])=>k).slice(0, 6);
+    })();
+
+    const mittel = (()=>{
+      const sammle = (feld)=>{
+        const out = [];
+        for (const { lesson } of items){
+          const v = String(normalisiereMittel(lesson.languageResources)[feld] || '').trim();
+          if (v && !out.includes(v)) out.push(v);
+        }
+        return out.join(' · ');
+      };
+      return normalisiereMittel({
+        vocabulary: sammle('vocabulary'),
+        grammar: sammle('grammar'),
+        pronunciation: sammle('pronunciation'),
+        other: sammle('other'),
+      });
+    })();
+
+    const zielaufgabe = normalisiereAufgabe(seq?.finalTask);
 
     const nextDb = deepClone(db);
     if (!nextDb.sequenceTemplates) nextDb.sequenceTemplates = {};
     const id = uid();
-    nextDb.sequenceTemplates[id] = {
+    nextDb.sequenceTemplates[id] = normalisiereVorlage({
       id,
       name,
       subject,
       color: seq?.color || '',
       createdAt: new Date().toISOString(),
-      lessons
-    };
+      lessons,
+      competencies: kompetenzen,
+      primaryCompetency: String(seq?.primaryCompetency || '').trim() || (kompetenzen[0] || ''),
+      finalTask: zielaufgabe,
+      // Das Zielprodukt steht in der Zielaufgabe: "Was entsteht dabei?"
+      targetProduct: String(zielaufgabe.outcome || '').trim(),
+      languageResources: mittel,
+      origin: 'sequence',
+    }, id);
     persist(nextDb);
     return id;
+  };
+
+  /* Beschreibende Angaben einer Vorlage ändern. Die Einheiten selbst
+     werden dabei nie angefasst. */
+  const updateTemplate = (templateId, patch) => {
+    const nextDb = deepClone(db);
+    const t = nextDb.sequenceTemplates?.[templateId];
+    if (!t) return;
+    nextDb.sequenceTemplates[templateId] = normalisiereVorlage({ ...t, ...(patch || {}) }, templateId);
+    persist(nextDb);
   };
 
   const deleteTemplate = (templateId) => {
@@ -5468,6 +6036,28 @@ const deleteTodo = (id) => {
         if (!overwrite && !isLessonEmpty(l)) continue;
 
         const bp = blueprints[bpIndex];
+
+        /* Eine Einheit kann länger als eine Stunde sein. Sie bekommt
+           die Plätze, die sie braucht – und nur dann, wenn dort auch
+           wirklich Unterricht derselben Lerngruppe liegt. Ist kein
+           Platz für die volle Dauer, wird die Einheit als Einzelstunde
+           eingesetzt statt gar nicht: der Verlaufsplan bleibt erhalten,
+           die Lehrkraft kann anschliessend verbinden. */
+        const gewuenschteSpanne = normalisiereBlockSpan(bp.blockSpan);
+        let spanne = 1;
+        for (let n = gewuenschteSpanne; n > 1; n--){
+          if (slotIndex + n > slotsPerDay) continue;
+          const passt = Array.from({ length: n - 1 }, (_, i)=> slotIndex + 1 + i).every(si => {
+            const nachbar = w.lessons?.[keyOf(dayIndex, si)];
+            if (!nachbar) return false;
+            const nl = normalizeLesson(nachbar);
+            if (blockSpanOf(nl) > 1) return false;
+            if (((nl.classGroup || '').trim()) !== group) return false;
+            if (((nl.subject || '').trim()) !== subj) return false;
+            return overwrite || isLessonEmpty(nl);
+          });
+          if (passt) { spanne = n; break; }
+        }
         const nextLesson = normalizeLesson(l);
         nextLesson.classGroup = group;
         nextLesson.subject = (l.subject || '').trim() || subj;
@@ -5475,7 +6065,8 @@ const deleteTodo = (id) => {
         nextLesson.room = (l.room || '').trim();
         nextLesson.topic = bp.topic || '';
         nextLesson.objectives = bp.objectives || '';
-        nextLesson.phases = normalizePhases((bp.phases || []).map(p => neuePhasenIds(p)));
+        nextLesson.blockSpan = spanne;
+        nextLesson.phases = normalizePhases((bp.phases || []).map(p => neuePhasenIds(p)), TOTAL_MIN * spanne);
         nextLesson.homework = bp.homework || '';
         nextLesson.notes = bp.notes || '';
         nextLesson.competencies = Array.isArray(bp.competencies) ? bp.competencies : [];
@@ -5490,6 +6081,9 @@ const deleteTodo = (id) => {
 
         if (!w.lessons) w.lessons = {};
         w.lessons[k] = nextLesson;
+        // Die mit belegten Plätze tragen keinen eigenen Eintrag mehr.
+        for (let i = 1; i < spanne; i++) delete w.lessons[keyOf(dayIndex, slotIndex + i)];
+        slotIndex += spanne - 1;
         inserted += 1;
         bpIndex += 1;
       }
@@ -5553,6 +6147,8 @@ const doExportDocx = async (html, suggestedName) => {
           onCutLesson={(dayIndex, slotIndex)=>cutLessonToClipboard(view.weekStart, dayIndex, slotIndex)}
           onPasteLesson={(dayIndex, slotIndex)=>pasteLessonFromClipboard(view.weekStart, dayIndex, slotIndex)}
           onLessonDnd={(payload)=>moveOrCopyLessonByDnd(payload)}
+          onJoinBlock={(dayIndex, slotIndex)=>joinLessonsIntoBlock(view.weekStart, dayIndex, slotIndex)}
+          onSplitBlock={(dayIndex, slotIndex)=>splitBlockAt(view.weekStart, dayIndex, slotIndex)}
           onOpenLesson={(dayIndex, slotIndex)=>{
             setView({ name:'lesson', weekStart: view.weekStart, dayIndex, slotIndex });
           }}
@@ -5843,6 +6439,18 @@ const doExportDocx = async (html, suggestedName) => {
         onOpenReview={()=>setView({
           name:'review', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
         })}
+        onJoinBlock={()=>joinLessonsIntoBlock(view.weekStart, view.dayIndex, view.slotIndex)}
+        onSplitBlock={()=>splitBlockAt(view.weekStart, view.dayIndex, view.slotIndex)}
+        kannVerbinden={(()=>{
+          const w = db?.weeks?.[view.weekStart];
+          const l = w?.lessons?.[keyOf(view.dayIndex, view.slotIndex)];
+          if (!l) return false;
+          const span = blockSpanOf(l);
+          if (span >= MAX_BLOCK_SPAN) return false;
+          if ((view.slotIndex + span) >= (w.slotsPerDay || 6)) return false;
+          const b = w.lessons?.[keyOf(view.dayIndex, view.slotIndex + span)];
+          return Boolean(b) && passenZusammen(l, b);
+        })()}
         onRememberSpeechAct={rememberSpeechAct}
         onHideSpeechActSuggestion={(label)=>hideSuggestion('speechAct', label)}
         onRememberScaffoldLabel={rememberScaffoldLabel}
@@ -6186,11 +6794,51 @@ const doExportDocx = async (html, suggestedName) => {
 
 function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO, groupColors, duties, supervisionSuggestions, onHideSupervisionSuggestion = ()=>{},
   lessonClipboard, onCopyLesson, onCutLesson, onPasteLesson, onLessonDnd, onReviewLesson,
+  onJoinBlock, onSplitBlock,
   onOpenGroupColorPalette, onOpenLesson, onOpenMacro, onOpenTodos, onChangeSlots, onDeleteLesson, onUpsertDuty, onDeleteDuty, onExportPdf, onExportDocx }){
   const slots = week.slotsPerDay || 6;
   const dutyMap = duties || week.duties || {};
   const [dutyEditor, setDutyEditor] = useState(null);
   const [dropKey, setDropKey] = useState(null);
+
+  /* Feste Zeilen statt automatischer Platzierung.
+
+     Nötig für Doppelstunden: eine Zelle, die zwei Stundenplätze belegt,
+     überspannt drei Rasterzeilen (Stunde – Aufsichtsstreifen – Stunde).
+     Mit automatischer Platzierung würden die übrigen Zellen dabei
+     verrutschen; mit fester Zeilen-/Spaltenangabe steht jede Zelle da,
+     wo sie hingehört. */
+  const kopfZeileNr = 1;
+  const aufsichtZeileNr = (pos) => 2 + pos * 2;
+  const stundenZeileNr = (slotIndex) => 3 + slotIndex * 2;
+  const spalteNr = (dayIndex) => dayIndex + 2;
+
+  /* Wer belegt diesen Platz? Entweder er trägt selbst eine Stunde oder
+     eine Doppelstunde weiter oben deckt ihn ab. */
+  const besitzerVon = (dayIndex, slotIndex) => blockOwnerAt(week, dayIndex, slotIndex);
+
+  /* Liegt dieser Aufsichtsstreifen INNERHALB einer Doppelstunde? Dann
+     gibt es dort keine Pause und auch kein Feld dafür. */
+  const inDoppelstunde = (dayIndex, pos) => {
+    if (pos <= 0 || pos >= slots) return false;
+    const o = besitzerVon(dayIndex, pos);
+    return Boolean(o && o.covered);
+  };
+
+  /* Lässt sich die Stunde an diesem Platz mit der folgenden verbinden?
+     Beide müssen existieren, zur selben Lerngruppe gehören und der
+     Folgeplatz muss frei von einer anderen Doppelstunde sein. */
+  const verbindbarAb = (dayIndex, slotIndex) => {
+    const l = week.lessons?.[keyOf(dayIndex, slotIndex)];
+    if (!l) return false;
+    const span = blockSpanOf(l);
+    const naechster = slotIndex + span;
+    if (naechster >= slots) return false;
+    if (span >= MAX_BLOCK_SPAN) return false;
+    const b = week.lessons?.[keyOf(dayIndex, naechster)];
+    if (!b) return false;
+    return passenZusammen(l, b);
+  };
 
   const dutyLabel = (pos) => {
     if (pos === 0) return 'vor der 1. Stunde';
@@ -6214,15 +6862,19 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
     // One row of small red bars between lessons (or before first / after last)
     return (
       <React.Fragment key={`dutyrow-${pos}`}>
-        <div className="dutyRowLabel" title={dutyLabel(pos)}>{dutyRowLabelShort(pos)}</div>
+        <div className="dutyRowLabel" style={{gridColumn:1, gridRow: aufsichtZeileNr(pos)}} title={dutyLabel(pos)}>{dutyRowLabelShort(pos)}</div>
         {DAYS.map((_, dayIndex)=>{
           const dateISO = toISODate(addDays(fromISODate(weekStart), dayIndex));
           const info = getDayInfo(dateISO, schoolCalendar);
           const dutyKey = `${dayIndex}-${pos}`;
           const duty = dutyMap[dutyKey];
+          // Innerhalb einer Doppelstunde gibt es keinen Streifen: die
+          // Stunde läuft dort durch.
+          if (inDoppelstunde(dayIndex, pos)) return null;
           return (
             <div
               key={`duty-${pos}-${dayIndex}`}
+              style={{gridColumn: spalteNr(dayIndex), gridRow: aufsichtZeileNr(pos)}}
               className={`dutyCell ${duty ? 'dutyCell--has' : ''} ${info.isOff ? 'dayOffDutyCell' : ''}`}
               onClick={(e)=>{ e.stopPropagation(); openDutyEditor(dayIndex, pos); }}
               title={duty ? `Aufsicht: ${duty.title}` : 'Aufsicht eintragen'}
@@ -6304,7 +6956,7 @@ const exportWeekDocx = () => {
       <div style={{height:12}} />
 
       <div className="grid">
-        <div />
+        <div style={{gridColumn:1, gridRow: kopfZeileNr}} />
         {DAYS.map((d, dayIndex) => {
           const dateISO = toISODate(addDays(fromISODate(weekStart), dayIndex));
           const info = getDayInfo(dateISO, schoolCalendar);
@@ -6312,7 +6964,8 @@ const exportWeekDocx = () => {
           const tc = todoCountByISO.get(dateISO) || 0;
           const isToday = (dateISO === todayISO);
           return (
-            <div key={d} className={`cellHeader ${info.isOff ? 'dayOffHeader' : ''}`} title={label}>
+            <div key={d} style={{gridColumn: spalteNr(dayIndex), gridRow: kopfZeileNr}}
+                 className={`cellHeader ${info.isOff ? 'dayOffHeader' : ''}`} title={label}>
               <div style={{fontWeight:700}}>{d}</div>
               <div className="muted small">{formatDateDE(dateISO)}</div>
               {tc ? (
@@ -6328,13 +6981,22 @@ const exportWeekDocx = () => {
             <React.Fragment key={slotIndex}>
               {slotIndex === 0 ? renderDutyRow(0) : null}
 
-              <div className="slotLabel">{slotIndex+1}. Stunde</div>
+              <div className="slotLabel" style={{gridColumn:1, gridRow: stundenZeileNr(slotIndex)}}>{slotIndex+1}. Stunde</div>
               {Array.from({length: DAYS.length}).map((__, dayIndex)=>{
                 const dateISO = toISODate(addDays(fromISODate(weekStart), dayIndex));
                 const info = getDayInfo(dateISO, schoolCalendar);
                 const dayLabel = info.vac ? `Ferien: ${info.vac.name || ''}` : (info.fd ? `Schulfrei: ${info.fd.name || ''}` : '');
                 const k = keyOf(dayIndex, slotIndex);
                 const l = week.lessons?.[k];
+                /* Ein von einer Doppelstunde abgedeckter Platz bekommt
+                   keine eigene Zelle – die Stunde darüber reicht bis
+                   hierher. Der Stundenplatz selbst bleibt links in der
+                   Zeitachse sichtbar. */
+                if (!l && istAbgedeckt(week, dayIndex, slotIndex)) return null;
+                const span = l ? Math.min(blockSpanOf(l), Math.max(1, slots - slotIndex)) : 1;
+                const istBlock = span > 1;
+                const zeilenSpan = span * 2 - 1;
+                const kannVerbinden = verbindbarAb(dayIndex, slotIndex);
                 const title = l?.subject ? l.subject : (l?.topic ? l.topic : 'Planen…');
                 const sub = l?.classGroup || '';
                 const seq = l?.sequenceId ? (sequences?.[l.sequenceId] || null) : null;
@@ -6347,11 +7009,11 @@ const exportWeekDocx = () => {
                 return (
                   <div
                     key={k}
-                    style={cellStyle}
-                    className={`lessonCell ${info.isOff ? 'dayOffCell' : ''} ${gKey ? 'hasGroupColor' : ''} ${dropKey === k ? 'dropTarget' : ''}`}
+                    style={{...(cellStyle || {}), gridColumn: spalteNr(dayIndex), gridRow: `${stundenZeileNr(slotIndex)} / span ${zeilenSpan}`}}
+                    className={`lessonCell ${info.isOff ? 'dayOffCell' : ''} ${gKey ? 'hasGroupColor' : ''} ${istBlock ? 'lessonCell--block' : ''} ${dropKey === k ? 'dropTarget' : ''}`}
                     tabIndex={0}
                     onClick={()=>onOpenLesson(dayIndex, slotIndex)}
-                    title={dayLabel ? `${dayLabel} (trotzdem öffnen)` : (l ? 'Öffnen (ziehen zum Verschieben, Ctrl+Ziehen zum Kopieren)' : 'Öffnen')}
+                    title={dayLabel ? `${dayLabel} (trotzdem öffnen)` : (l ? `${istBlock ? `${blockName(span)} · ${stundenBereichLabel(slotIndex, span)} · ` : ''}Öffnen (ziehen zum Verschieben, Ctrl+Ziehen zum Kopieren)` : 'Öffnen')}
                     draggable={!!l}
                     onDragStart={(e)=>{
                       if (!l) return;
@@ -6407,6 +7069,21 @@ const exportWeekDocx = () => {
                               title="Nachbereiten"
                               aria-label="Stunde nachbereiten"
                             ><ClipboardCheck {...ICON_SM} /></button>
+                            {istBlock ? (
+                              <button
+                                className="iconBtn cellTool"
+                                onClick={()=>onSplitBlock?.(dayIndex, slotIndex)}
+                                title={`${blockName(span)} wieder in Einzelstunden trennen`}
+                                aria-label="Doppelstunde trennen"
+                              ><Unlink {...ICON_SM} /></button>
+                            ) : kannVerbinden ? (
+                              <button
+                                className="iconBtn cellTool"
+                                onClick={()=>onJoinBlock?.(dayIndex, slotIndex)}
+                                title="Mit der folgenden Stunde als Doppelstunde verbinden"
+                                aria-label="Als Doppelstunde verbinden"
+                              ><Link2 {...ICON_SM} /></button>
+                            ) : null}
                           </>
                         ) : null}
                         {lessonClipboard ? (
@@ -6445,6 +7122,11 @@ const exportWeekDocx = () => {
                     ) : null}
                     <div className="title">{title || 'Planen…'}</div>
                     <div className="sub">{sub}</div>
+                    {istBlock ? (
+                      <span className="blockBadge" title={`${stundenBereichLabel(slotIndex, span)} · ${TOTAL_MIN * span} Minuten am Stück`}>
+                        <Link2 {...ICON_SM} /> {blockName(span)} · {stundenBereichLabel(slotIndex, span)}
+                      </span>
+                    ) : null}
                     {seq ? <span className="badge" style={{borderColor: lineColor(seq.color), color: textColor(seq.color)}}>Sequenz: {seq.name}</span> : null}
                     {l?.topic ? <span className="badge">Thema: {l.topic}</span> : <span className="badge">Noch kein Thema</span>}
                     {(()=>{
@@ -6945,6 +7627,9 @@ function LessonView({
   onExportPdf,
   onExportDocx,
   onOpenExecution,
+  onJoinBlock,
+  onSplitBlock,
+  kannVerbinden = false,
   classGroupSuggestions,
   subjectSuggestions,
   onRememberClassGroup,
@@ -6965,7 +7650,8 @@ function LessonView({
     competencies: Array.isArray(l.competencies) ? l.competencies : [],
     files: Array.isArray(l.files) ? l.files : [],
     links: Array.isArray(l.links) ? l.links : [],
-    phases: normalizePhases(l.phases || []),
+    blockSpan: normalisiereBlockSpan(l.blockSpan),
+    phases: normalizePhases(l.phases || [], TOTAL_MIN * normalisiereBlockSpan(l.blockSpan)),
     // Damit die Bausteine nie auf undefined treffen.
     successCriteria: normalisiereErfolgskriterien(l.successCriteria),
     communicativeTask: normalisiereAufgabe(l.communicativeTask),
@@ -7001,7 +7687,8 @@ function LessonView({
       sequenceId: (n.sequenceId || ''),
       primaryCompetency: (n.primaryCompetency || ''),
       competencies: Array.isArray(n.competencies) ? n.competencies : [],
-      phases: normalizePhases(n.phases || []).map(p => ({
+      blockSpan: blockSpanOf(n),
+      phases: normalizePhases(n.phases || [], lessonTotalMin(n)).map(p => ({
         title: p.title || '',
         duration: Number(p.duration || 0),
         socialForm: p.socialForm || '',
@@ -7117,7 +7804,13 @@ function LessonView({
     return toISODate(addDays(start, dayIndex));
   }, [weekStart, dayIndex]);
 
-  const lessonTitle = `${DAYS[dayIndex]} · ${formatDateDE(dateISO)} · ${slotIndex+1}. Stunde`;
+  /* Der Zeitrahmen dieser Stunde: 45 Minuten je belegtem Stundenplatz,
+     durchgehend. Eine Doppelstunde wird NICHT nach 45 Minuten geteilt. */
+  const blockSpan = blockSpanOf(local);
+  const gesamtMin = TOTAL_MIN * blockSpan;
+  const istBlock = blockSpan > 1;
+
+  const lessonTitle = `${DAYS[dayIndex]} · ${formatDateDE(dateISO)} · ${stundenBereichLabel(slotIndex, blockSpan)}`;
 
   const dayInfo = useMemo(()=>getDayInfo(dateISO, schoolCalendar), [dateISO, schoolCalendar]);
 
@@ -7417,7 +8110,7 @@ const gColor = useMemo(()=>{
   };
 
   const setPhases = (nextPhases) => {
-    setLocal(prev => ({ ...prev, phases: normalizePhases(nextPhases) }));
+    setLocal(prev => ({ ...prev, phases: normalizePhases(nextPhases, lessonTotalMin(prev)) }));
   };
 
   const addPhase = () => {
@@ -7427,7 +8120,7 @@ const gColor = useMemo(()=>{
       // Erste Phase einer Stunde ohne Phasen: sie bekommt die ganze Zeit.
       // Ohne diesen Fall griff die Suche unten auf phases[0] zu.
       if (!phases.length) {
-        newPhase.duration = TOTAL_MIN;
+        newPhase.duration = gesamtMin;
         return [newPhase];
       }
       // reduce from the longest phase that can spare minutes
@@ -7471,8 +8164,9 @@ const gColor = useMemo(()=>{
       layout: exportLayout, eigenesLayout: eigenesExportLayout,
     });
     // Filename uses a safe format (dots can be awkward on some systems); keep ISO for filenames.
-    if (ziel === 'docx') onExportDocx?.(html, `Unterricht_${dateISO}_${slotIndex+1}.Stunde.doc`);
-    else onExportPdf?.(html, `Unterricht_${dateISO}_${slotIndex+1}.Stunde.pdf`);
+    const stundenTeil = istBlock ? `${slotIndex+1}-${slotIndex+blockSpan}.Stunde` : `${slotIndex+1}.Stunde`;
+    if (ziel === 'docx') onExportDocx?.(html, `Unterricht_${dateISO}_${stundenTeil}.doc`);
+    else onExportPdf?.(html, `Unterricht_${dateISO}_${stundenTeil}.pdf`);
   };
 
   const exportPdf = () => setExportZiel('pdf');
@@ -7525,8 +8219,8 @@ const exportDocx = () => {
     <div className="card">
       <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
         <div>
-          <div style={{fontWeight:900, fontSize:16}}>Einzelstunde</div>
-          <div className="muted small">{lessonTitle}</div>
+          <div style={{fontWeight:900, fontSize:16}}>{istBlock ? blockName(blockSpan) : 'Einzelstunde'}</div>
+          <div className="muted small">{lessonTitle}{istBlock ? ` · ${gesamtMin} Minuten am Stück` : ''}</div>
           {(dayInfo.vac || dayInfo.fd || (dayInfo.evs && dayInfo.evs.length)) ? (
             <div className="row wrap" style={{gap:6, marginTop:6}}>
               {dayInfo.vac ? <span className="badge badge--vacation" title={`Ferien: ${dayInfo.vac.name || ''}`}><Palmtree {...ICON_SM} /> Ferien: {dayInfo.vac.name || ''}</span> : null}
@@ -7539,6 +8233,17 @@ const exportDocx = () => {
           ) : null}
         </div>
         <div className="row" style={{gap:8}}>
+          {istBlock ? (
+            <button className="btn" onClick={()=>onSplitBlock?.()}
+                    title={`${blockName(blockSpan)} wieder in Einzelstunden trennen`}>
+              <Unlink {...ICON_SM} /> Doppelstunde trennen
+            </button>
+          ) : kannVerbinden ? (
+            <button className="btn" onClick={()=>onJoinBlock?.()}
+                    title="Mit der folgenden Stunde derselben Lerngruppe zu einer Doppelstunde verbinden">
+              <Link2 {...ICON_SM} /> Als Doppelstunde verbinden
+            </button>
+          ) : null}
           <button className="btn" onClick={()=>onOpenReview?.()}
                   title="Nach der Stunde festhalten, was daraus geworden ist">
             <ClipboardCheck {...ICON_SM} /> Nachbereiten
@@ -7770,7 +8475,7 @@ const exportDocx = () => {
       <div style={{height:14}} />
 
       <div className="split">
-        <PhaseTimeline phases={local.phases} onChange={setPhases} startTime={lessonStartHHMM} />
+        <PhaseTimeline phases={local.phases} onChange={setPhases} startTime={lessonStartHHMM} gesamt={gesamtMin} />
         <div>
           <div className="row wrap" style={{justifyContent:'space-between'}}>
             <div>
@@ -8117,7 +8822,7 @@ const exportDocx = () => {
       </div>
 
       <div style={{height:6}} />
-      <div className="muted small">Tipp: Ziehe einen Phasenblock im Zeitstrahl, um die Reihenfolge zu ändern. Ziehe die Trennlinie zwischen zwei Phasen, um Minuten zu verschieben (Summe bleibt 45).</div>
+      <div className="muted small">Tipp: Ziehe einen Phasenblock im Zeitstrahl, um die Reihenfolge zu ändern. Ziehe die Trennlinie zwischen zwei Phasen, um Minuten zu verschieben (Summe bleibt {gesamtMin}).</div>
     </div>
   );
 }
@@ -8411,7 +9116,13 @@ const exportSequenceDocx = (sequenceId) => {
             <div key={group} className="macroRow" style={colsStyle}>
               <div className="macroSticky macroGroupCell">
                 <div style={{fontWeight:800}}>{group}</div>
-                <div className="muted small">{(Array.from(dm.values()).reduce((a,b)=>a+b.length,0))} Std.</div>
+                <div className="muted small">{(()=>{
+                  /* Gezählt werden Unterrichtsstunden, nicht Einträge:
+                     eine Doppelstunde ist ein Eintrag und zwei Stunden. */
+                  const eintraege = Array.from(dm.values()).reduce((a,b)=>a+b.length,0);
+                  const stunden = Array.from(dm.values()).reduce((a,b)=> a + b.reduce((x,o)=> x + blockSpanOf(o.lesson), 0), 0);
+                  return eintraege === stunden ? `${stunden} Std.` : `${eintraege} Einheiten · ${stunden} Std.`;
+                })()}</div>
               </div>
               {dates.map(d => {
                 const info = dateInfoByISO.get(d) || { isOff: false };
@@ -8434,7 +9145,7 @@ const exportSequenceDocx = (sequenceId) => {
                           title="Öffnen"
                         >
                           <div className="row" style={{justifyContent:'space-between', gap:8, alignItems:'flex-start'}}>
-                            <div style={{fontWeight:800, fontSize:12}}>{formatDateDE(o.dateISO)} · {o.slotIndex+1}. Stunde</div>
+                            <div style={{fontWeight:800, fontSize:12}}>{formatDateDE(o.dateISO)} · {stundenBereichLabel(o.slotIndex, blockSpanOf(o.lesson))}</div>
                             <select
                               className="macroSelect"
                               value={o.lesson.sequenceId || ''}
@@ -9562,7 +10273,11 @@ function SequenceManager({
 }
 
 
-function PhaseTimeline({ phases, onChange, startTime = '' }){
+function PhaseTimeline({ phases, onChange, startTime = '', gesamt = TOTAL_MIN }){
+  /* Der Zeitstrahl zeigt den Rahmen der Stunde – 45 Minuten bei einer
+     Einzelstunde, 90 bei einer Doppelstunde. Er wird nicht nach 45
+     Minuten unterbrochen: Phasen dürfen über die Stundengrenze laufen. */
+  const gesamtMin = Math.max(MIN_PHASE_MIN, Math.round(Number(gesamt) || TOTAL_MIN));
   const [drag, setDrag] = useState(null);
   const [dragFrom, setDragFrom] = useState(null);
   const [dropIndex, setDropIndex] = useState(null);
@@ -9639,10 +10354,11 @@ function PhaseTimeline({ phases, onChange, startTime = '' }){
     <div className="timeline">
       <div className="timelineHeader">
         <div style={{fontWeight:800}}>Zeitstrahl</div>
-        <div className="muted small">{TOTAL_MIN} Minuten</div>
+        <div className="muted small">{gesamtMin} Minuten</div>
       </div>
       <div
         className="timelineBody"
+        style={{height: gesamtMin * PX_PER_MIN}}
         ref={bodyRef}
         onDragOver={(e)=>{
           // Allow drop
@@ -9671,7 +10387,7 @@ function PhaseTimeline({ phases, onChange, startTime = '' }){
             className="dropLine"
             style={{
               top: dropIndex >= phaseLayout.length
-                ? TOTAL_MIN * PX_PER_MIN - 1
+                ? gesamtMin * PX_PER_MIN - 1
                 : Math.max(0, phaseLayout[dropIndex].top - 1)
             }}
           />
@@ -11395,7 +12111,7 @@ function verlaufsZelle(phase, spalte, zeit){
 function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalendar, lesson,
                               layout = STANDARD_LAYOUT, eigenesLayout = null }){
   const l = normalizeLesson(lesson || {});
-  const phases = normalizePhases(l.phases || []);
+  const phases = normalizePhases(l.phases || [], lessonTotalMin(l));
   const lessonStart = getLessonStartTime(schoolCalendar, slotIndex);
   const times = computePhaseTimes(phases, lessonStart);
 
@@ -11563,6 +12279,7 @@ function buildWeekPdfHtml({ weekStart, week, sequences, schoolCalendar, groupCol
     const raw = lessons[`${dayIndex}-${slotIndex}`];
     if (!raw) return { html: '' };
     const l = normalizeLesson(raw);
+    const span = Math.min(blockSpanOf(l), Math.max(1, slots - slotIndex));
     const gKey = groupKey(l.classGroup, l.subject);
     const color = (groupColors?.[gKey]?.color) || defaultGroupColor(gKey);
     const bg = hexToRgba(color, 0.22);
@@ -11570,15 +12287,33 @@ function buildWeekPdfHtml({ weekStart, week, sequences, schoolCalendar, groupCol
     const comps = Array.isArray(l.competencies) ? l.competencies.filter(Boolean) : [];
     return {
       bg,
+      span,
       html: `
         <div class="cellTop">
           <div class="cellMain"><strong>${escapeHtml(l.subject || '')}</strong> · ${escapeHtml(l.classGroup || '')}${l.room ? ` · Raum ${escapeHtml(l.room)}` : ''}</div>
           ${topic ? `<div class="cellSub">${escapeHtml(topic)}</div>` : ''}
+          ${span > 1 ? `<div class="cellTiny">${escapeHtml(blockName(span))} · ${escapeHtml(stundenBereichLabel(slotIndex, span))}</div>` : ''}
           ${comps.length ? `<div class="cellTiny">Kompetenz: ${escapeHtml((l.primaryCompetency || comps[0] || ''))}</div>` : ''}
         </div>
       `
     };
   };
+
+  /* Welche Plätze eine Doppelstunde mit abdeckt. Im Export bekommt sie
+     eine Zelle über mehrere Tabellenzeilen (rowspan) – die abgedeckten
+     Plätze zeichnen dort dann keine eigene Zelle mehr. */
+  const abgedeckt = (()=>{
+    const m = new Set();
+    for (let dayIndex = 0; dayIndex < days.length; dayIndex++){
+      for (let slotIndex = 0; slotIndex < slots; slotIndex++){
+        const raw = lessons[`${dayIndex}-${slotIndex}`];
+        if (!raw) continue;
+        const span = Math.min(blockSpanOf(raw), Math.max(1, slots - slotIndex));
+        for (let i = 1; i < span; i++) m.add(`${dayIndex}-${slotIndex+i}`);
+      }
+    }
+    return m;
+  })();
 
   const dutyFor = (dayIndex, pos) => (dutyMap?.[`${dayIndex}-${pos}`] || '').trim();
 
@@ -11599,6 +12334,8 @@ function buildWeekPdfHtml({ weekStart, week, sequences, schoolCalendar, groupCol
 
   function buildDutyRow(pos){
     const tds = days.map((_, dayIndex) => {
+      // Innerhalb einer Doppelstunde läuft die Zelle durch (rowspan).
+      if (abgedeckt.has(`${dayIndex}-${pos}`)) return '';
       const title = dutyFor(dayIndex, pos);
       if (!title) return `<td class="dutyCell"></td>`;
       return `<td class="dutyCell"><div class="dutyBar">${escapeHtml(title)}</div></td>`;
@@ -11609,13 +12346,16 @@ function buildWeekPdfHtml({ weekStart, week, sequences, schoolCalendar, groupCol
 
   function buildLessonRow(slotIndex){
     const tds = days.map((_, dayIndex) => {
+      if (abgedeckt.has(`${dayIndex}-${slotIndex}`)) return '';
       const dateISO = toISODate(addDays(start, dayIndex));
       const info = getDayInfo(dateISO, schoolCalendar);
       const cell = cellFor(dayIndex, slotIndex);
       const style = [];
       if (cell.bg) style.push(`background:${cell.bg}`);
       if (info?.isOff) style.push('opacity:0.55');
-      return `<td class="lessonCell" style="${style.join(';')}">${cell.html || ''}</td>`;
+      // Eine Doppelstunde überspannt Stundenzeile + Aufsichtsstreifen + Stundenzeile.
+      const rowspan = (cell.span && cell.span > 1) ? ` rowspan="${cell.span * 2 - 1}"` : '';
+      return `<td class="lessonCell"${rowspan} style="${style.join(';')}">${cell.html || ''}</td>`;
     }).join('');
     return `<tr class="lessonRow"><td class="slotCol">${slotIndex+1}. Stunde</td>${tds}</tr>`;
   }
@@ -11720,13 +12460,13 @@ function buildSequencePdfHtml({ sequence, occurrences, schoolCalendar, groupColo
 
   const blocks = (occurrences || []).map((o, idx) => {
     const l = normalizeLesson(o.lesson);
-    const phases = normalizePhases(l.phases || []);
+    const phases = normalizePhases(l.phases || [], lessonTotalMin(l));
     const lessonStart = getLessonStartTime(schoolCalendar, o.slotIndex);
     const times = computePhaseTimes(phases, lessonStart);
 
     const dayLabel = (typeof o.dayIndex === 'number' && o.dayIndex >= 0 && o.dayIndex < DAYS.length) ? DAYS[o.dayIndex] : '';
     const dateLabel = o.dateISO ? formatDateDE(o.dateISO) : '';
-    const slotLabel = Number.isFinite(o.slotIndex) ? ` · ${String(o.slotIndex + 1)}. Std.` : '';
+    const slotLabel = Number.isFinite(o.slotIndex) ? ` · ${stundenBereichLabel(o.slotIndex, blockSpanOf(l)).replace('Stunde', 'Std.')}` : '';
     const headerRaw = `${dayLabel ? `${dayLabel} · ` : ''}${dateLabel}${slotLabel}${lessonStart ? ` · Beginn ${lessonStart}` : ''}`;
     const header = escapeHtml(headerRaw);
 

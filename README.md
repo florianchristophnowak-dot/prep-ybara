@@ -65,6 +65,7 @@ Dateien**.
 
 ```
 renderer/          Desktop-App (Electron + Browser-Fassung)   – unverändert
+  src/doppelstunde.js  Doppelstunden: welche Stundenplätze eine Stunde belegt
 electron/          Hauptprozess, Preload, Menü
 pocket/            Prép-ybara Pocket (PWA)
   src/views/       mobile Ansichten
@@ -73,7 +74,7 @@ shared/            von beiden benutzt
   exchange/        Austauschformat, stabile Kennungen, Prüfung
   types/           Typbeschreibung des Formats (.d.ts)
   datum.js         Datumsrechnung
-tests/             node:test – Format, Import, Pocket-Modell
+tests/             node:test – Format, Import, Pocket-Modell, Doppelstunden
 ```
 
 Geteilt werden **Format, Kennungen und Prüfung** – keine Oberflächenbausteine.

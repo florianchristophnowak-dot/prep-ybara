@@ -10,6 +10,14 @@ Dieses Hilfe‑Dokument erklärt die wichtigsten Funktionen von **Prép‑ybara*
 - In einer Zelle kannst du **Klasse/Kurs**, **Fach** und **Raum** eintragen.
 - Beim Klick auf eine Stunde öffnet sich die **Einzelstunde** (Detailplanung).
 
+### Doppelstunden
+- Zwei **direkt aufeinanderfolgende** Stunden **derselben Lerngruppe** (gleiche Klasse *und* gleiches Fach) lassen sich zu einer Doppelstunde verbinden.
+- Fahre über die erste der beiden Stunden und klicke auf **⛓ Als Doppelstunde verbinden** (oder in der Einzelstunde oben auf denselben Knopf).
+- Danach steht dort **eine** Stunde über beide Stundenplätze – mit **einem gemeinsamen Verlaufsplan über 90 Minuten**. Phasen dürfen über die 45‑Minuten‑Grenze hinauslaufen.
+- **Trennen** geht jederzeit: Der Verlaufsplan wird an der Stundengrenze geteilt; eine Phase, die über die Grenze läuft, steht danach in beiden Stunden.
+- Beim Verbinden geht nichts verloren: Themen, Ziele, Kompetenzen und Notizen beider Stunden werden zusammengeführt. Rückgängig machen lässt sich beides mit **Strg+Z**.
+- Die beiden Stundenplätze bleiben links in der Zeitachse sichtbar – der Stundenplan verschiebt sich nicht.
+
 ### Wochen wechseln
 - Oben im Wochenplan kannst du mit **← / →** schnell zwischen Wochen springen.
 - Das Datum zeigt immer den **Montag der ausgewählten Woche**.
@@ -27,7 +35,7 @@ Dieses Hilfe‑Dokument erklärt die wichtigsten Funktionen von **Prép‑ybara*
 ## 2) Einzelstunde (Zoom‑Ansicht)
 
 ### Zeitstrahl & Phasen
-- Eine Unterrichtsstunde ist als **Zeitstrahl (45 Min.)** dargestellt.
+- Eine Unterrichtsstunde ist als **Zeitstrahl** dargestellt: 45 Minuten bei einer Einzelstunde, **90 Minuten am Stück** bei einer Doppelstunde.
 - Du kannst **Phasen** hinzufügen und per Drag **verlängern/verkürzen**.
 - Phasen lassen sich auch **per Drag & Drop umsortieren**.
 
@@ -80,6 +88,21 @@ Filter:
 - Lerngruppe suchen
 - Sequenz filtern
 
+### Sequenzen verwalten
+- **Sequenzen verwalten** dient dem Organisieren. Jede Zeile hat ein **⋯‑Menü**: Öffnen, Duplizieren, Umbenennen, Als Vorlage speichern, Dateien, Exportieren (Word/PDF), Löschen.
+- Ist eine Sequenz geöffnet (Progressionsansicht), steht oben rechts **Exportieren ▾** mit Word und PDF.
+
+---
+
+## 4b) Jahresgrobplanung
+
+- Jede Lerngruppe ist eine **Zeile**; die farbigen Balken sind reine Orientierung und wirken sich nicht auf Sequenzen oder Exporte aus.
+- Jede Zeile hat ein **⋯‑Menü**:
+  - **Lerngruppe bearbeiten** – Klasse und Fach dieser Zeile ändern.
+  - **Jahresplanung leeren** – entfernt alle Balken der Zeile; die Zeile bleibt sichtbar.
+  - **Aus Jahresplanung entfernen** – entfernt die ganze Zeile. **Die Lerngruppe selbst bleibt erhalten**: Stunden, Sequenzen, Farben und Kompetenzen sind davon nicht betroffen.
+- Beides lässt sich sofort **rückgängig** machen (Meldung „Rückgängig" oder **Strg+Z**).
+
 ---
 
 ## 5) Sequenz‑Vorlagen (Bibliothek)
@@ -87,14 +110,28 @@ Filter:
 Du kannst Unterrichtssequenzen als Vorlagen speichern und später wiederverwenden:
 
 ### Vorlage speichern
-- Im Makro‑Plan: **Sequenzen verwalten → Als Vorlage speichern**
+- Im Makro‑Plan: **Sequenzen verwalten → ⋯ → Als Vorlage speichern**
+- Schwerpunktkompetenzen und die kommunikative Zielaufgabe der Sequenz wandern automatisch mit.
 
-### Vorlage einfügen
-- **Bibliothek → Einfügen…**
+### Vorlage auswählen
+Die Bibliothek zeigt zu jeder Vorlage, wofür sie gedacht ist: Klassenstufe/Lernjahr,
+Schwerpunktkompetenzen, Zielhandlung, Zielprodukt und den Umfang – etwa
+„7 Einheiten · 9 Unterrichtsstunden · 1 Doppelstunde".
+
+- **Einheiten** = Abschnitte der Sequenz. **Unterrichtsstunden** = benötigte Stundenplätze. Eine Doppelstunde ist eine Einheit und zwei Stunden.
+- **Vorschau** zeigt alle Angaben und die Liste der Einheiten. Sie verändert die Vorlage nicht und setzt nichts ein.
+- **Angaben bearbeiten** (im ⋯‑Menü) ergänzt Beschreibung, Klassenstufe, Zielprodukt, Voraussetzungen und Lehrwerksbezug.
+- Über **Suche und Filter** lässt sich nach Klassenstufe, Kompetenz, Fach, Umfang und Herkunft eingrenzen.
+
+### Sequenz verwenden
+- **Bibliothek → Sequenz verwenden**
 - Ziel‑Klasse/Kurs wählen, Fach wählen, Startdatum setzen.
 
-Beim Einfügen übernimmt Prép‑ybara:
+Es entsteht immer eine **eigene, bearbeitbare Sequenz**; die Vorlage selbst bleibt unverändert und beliebig oft einsetzbar.
+
+Übernommen werden:
 - Themen, Kompetenzen, Zeitstrahl, Phasen & Inhalte.
+- Die Dauer je Einheit: Eine Doppelstunde bekommt zwei aufeinanderfolgende Stundenplätze, sofern dort welche frei sind – sonst wird sie als Einzelstunde eingesetzt und lässt sich anschliessend verbinden.
 
 Und setzt automatisch:
 - **Neue Klasse/Kurs**

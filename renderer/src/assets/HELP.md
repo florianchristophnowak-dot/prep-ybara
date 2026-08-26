@@ -118,8 +118,10 @@ Jahr ins Archiv: Wochenplanung, Sequenzen, Jahresgrobplanung, To‑dos, Ferien u
   kein Löschen, kein Ziehen. Ansehen und **Ausgeben (PDF/Word)** funktionieren normal.
 - Die Navigation ist die gewohnte: Woche, Makro, Jahr, Kompetenzen, Kalender – nur mit den
   Daten des archivierten Jahres. Aktuelle und archivierte Daten werden nie vermischt.
-- **Exportieren** speichert das Schuljahr als Backup‑Datei (dieselbe Form wie **Backup exportieren**;
-  sie lässt sich mit **Backup importieren** wieder öffnen).
+- **Exportieren** speichert das Schuljahr als Backup‑Datei – dieselbe Form wie **Backup exportieren**,
+  nur mit den Daten dieses einen Jahres. Sie ist zum Aufbewahren und Weitergeben gedacht.
+  ⚠️ Sie lässt sich zwar mit **Backup importieren** öffnen, **ersetzt dabei aber alle Daten der App**
+  (laufendes Schuljahr und alle Archive). Vorher unbedingt ein vollständiges Backup exportieren.
 - **⋯ → Archiv endgültig löschen** entfernt den Abzug. Es wird vorher gefragt; direkt danach lässt
   sich das noch mit **Strg+Z** zurücknehmen.
 

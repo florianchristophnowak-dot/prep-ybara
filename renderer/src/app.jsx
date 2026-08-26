@@ -1272,7 +1272,9 @@ function archivAbzug(archiv){
 /* Die Datenbank, die eine Archivansicht zu sehen bekommt. */
 function archivDatenbank(archiv, liveDb){
   const abzug = archivAbzug(archiv);
-  const live = (liveDb && typeof liveDb === 'object') ? liveDb : {};
+  /* Die Abzüge der anderen Jahre bleiben aussen vor – sie werden hier
+     nicht gebraucht, und ohne sie ist die Kopie klein. */
+  const { schoolYearArchives: _abzuege, ...live } = (liveDb && typeof liveDb === 'object') ? liveDb : {};
   const jahresdaten = {};
   for (const feld of ARCHIV_JAHRESDATEN) {
     if (abzug[feld] !== undefined && abzug[feld] !== null) jahresdaten[feld] = abzug[feld];
@@ -1293,8 +1295,7 @@ function archivDatenbank(archiv, liveDb){
     schoolCalendar: { schoolYear: { startISO: '', endISO: '' }, lessonTimesEnabled: false, lessonTimes: [], vacations: [], freeDays: [], events: [] },
     ...deepClone(jahresdaten),
     /* Die Archivliste gehört nicht in eine Archivansicht: sie wird
-       überall aus den echten Daten gelesen. Das spart hier ausserdem
-       eine tiefe Kopie sämtlicher Abzüge. */
+       überall aus den echten Daten gelesen. */
     schoolYearArchives: [],
   });
 }
@@ -4358,20 +4359,23 @@ export default function App(){
     const hatWochen = archivKennzahlen(gewaehlt).wochen > 0;
     /* Gemerkt wird, wo man herkam – der Rückweg soll dorthin führen
        und nicht irgendwohin. */
-    setArchivAnsicht({ id: archivId, zurueckZu: { ...view } });
+    setArchivAnsicht({ id: archivId, zurueckZu: { ...view }, zurueckDatum: selectedDate });
     const wochen = Object.keys(archivAbzug(gewaehlt).weeks || {});
     wochen.sort();
     const start = wochen[0] || (gewaehlt.startISO || toISODate(new Date()));
     const ws = (()=>{
       try { return toISODate(startOfWeekMonday(fromISODate(start))); } catch { return toISODate(startOfWeekMonday(new Date())); }
     })();
+    setSelectedDate(start);
     setView(hatWochen ? { name:'week', weekStart: ws } : { name:'calendar', weekStart: ws });
     showToast(`Archivansicht: ${gewaehlt.label || 'Schuljahr'}. Änderungen sind hier nicht möglich.`, { ttl: 7000 });
   };
 
   const verlasseArchiv = () => {
     const zurueck = archivAnsicht?.zurueckZu;
+    const zurueckDatum = archivAnsicht?.zurueckDatum;
     setArchivAnsicht(null);
+    if (zurueckDatum) setSelectedDate(zurueckDatum);
     /* Keine Daten wandern zurück – es wird nur wieder auf die
        aktuellen Daten geschaut. */
     setView(zurueck && zurueck.name ? zurueck : { name:'week', weekStart: toISODate(startOfWeekMonday(new Date())) });
@@ -4422,7 +4426,7 @@ export default function App(){
     const nextDb = deepClone(liveDb);
     nextDb.schoolYearArchives = (Array.isArray(nextDb.schoolYearArchives) ? nextDb.schoolYearArchives : [])
       .filter(a => a?.id !== archivId);
-    runUndoable(`${gewaehlt.label || 'Schuljahr'} gelöscht`, before, ()=>persistLive(nextDb));
+    runUndoable(`${gewaehlt.label || 'Schuljahr'} gelöscht`, before, ()=>persistLive(nextDb), { liveAktion: true });
   };
 
   const closeSchoolYearDialog = () => setSchoolYearDialog(prev => ({ ...prev, visible: false }));
@@ -4661,23 +4665,32 @@ const classGroupSuggestions = useMemo(()=>{
   const captureUndo = useCallback((label, snapshot)=>{
     undoStack.current = [...undoStack.current.slice(-(UNDO_LIMIT - 1)), { label, db: deepClone(snapshot) }];
   }, []);
+  /* Auf dem Stapel liegen ausschliesslich Stände der ECHTEN Daten –
+     dafür sorgt runUndoable unten. Deshalb wird hier auch dann in die
+     echten Daten zurückgeschrieben, wenn gerade ein Archiv offen ist:
+     das "Rückgängig" nach dem Löschen eines Archivs soll wirken. */
   const undoLast = useCallback(()=>{
-    /* In der Archivansicht gibt es nichts rückgängig zu machen – und
-       der Stapel gehört zu den aktuellen Daten. */
-    if (imArchiv) { archivHinweisRef.current?.(); return; }
     const entry = undoStack.current[undoStack.current.length - 1];
     if (!entry) { showToast('Nichts zum Rückgängigmachen.'); return; }
     undoStack.current = undoStack.current.slice(0, -1);
-    persist(entry.db);
+    persistLive(entry.db);
     showToast(`${entry.label} rückgängig gemacht.`);
-  }, [showToast, persist, imArchiv]);
+  }, [showToast, persistLive]);
 
-  /* Umkehrbare Aktion: ausführen, dann Rückgängig anbieten. */
-  const runUndoable = useCallback((label, snapshot, mutate)=>{
+  /* Umkehrbare Aktion: ausführen, dann Rückgängig anbieten.
+
+     `liveAktion` kennzeichnet die wenigen Aktionen, die auch aus einer
+     Archivansicht heraus auf die echten Daten wirken dürfen – etwa das
+     Löschen eines Archivs. Alles andere wird in der Archivansicht gar
+     nicht erst ausgeführt: sonst landete der Archivstand auf dem
+     Rückgängig-Stapel und würde später über die echten Daten
+     geschrieben. */
+  const runUndoable = useCallback((label, snapshot, mutate, { liveAktion = false } = {})=>{
+    if (imArchiv && !liveAktion) { archivHinweisRef.current?.(); return; }
     captureUndo(label, snapshot);
     mutate();
     showToast(label, { action: { label: 'Rückgängig', onAct: undoLast } });
-  }, [captureUndo, showToast, undoLast]);
+  }, [captureUndo, showToast, undoLast, imArchiv]);
 
   /* ---- Dialoge -------------------------------------------------------- */
   const [confirmState, setConfirmState] = useState(null);
@@ -4896,11 +4909,14 @@ const classGroupSuggestions = useMemo(()=>{
     if (themeChoice === 'system') root.removeAttribute('data-theme');
     else root.setAttribute('data-theme', themeChoice);
   }, [themeChoice]);
+  /* Einstellungen gehören der App, nicht einem Schuljahr. Sie werden
+     deshalb immer in die echten Daten geschrieben – auch während eine
+     Archivansicht offen ist. Das Archiv selbst bleibt unberührt. */
   const updateAppSettings = (patch) => {
     try {
-      const nextDb = deepClone(db);
+      const nextDb = deepClone(liveDb);
       nextDb.appSettings = { ...(nextDb.appSettings || {}), ...(patch || {}) };
-      persist(nextDb);
+      persistLive(nextDb);
     } catch {}
   };
 
@@ -5620,6 +5636,18 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
       showToast('Backup-Import ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
+    /* Ein Backup wird nicht dazugelegt, es tritt an die Stelle von
+       allem. Seit sich auch einzelne archivierte Schuljahre als Backup
+       ausgeben lassen, ist die Verwechslungsgefahr real – deshalb wird
+       vorher gefragt. */
+    const anzahlArchive = (Array.isArray(liveDb?.schoolYearArchives) ? liveDb.schoolYearArchives : []).length;
+    const ok = await askConfirm({
+      title: 'Backup importieren',
+      body: `Das Backup ersetzt alle Daten dieser App – das laufende Schuljahr${anzahlArchive ? ` und ${anzahlArchive} archivierte ${anzahlArchive === 1 ? 'Schuljahr' : 'Schuljahre'}` : ''}. Am besten vorher ein eigenes Backup exportieren.`,
+      confirmLabel: 'Backup importieren',
+      tone: 'danger',
+    });
+    if (!ok) return;
     const imported = await platform.importBackup();
     if (imported) {
       persist(ensureDbShape(imported));
@@ -7632,7 +7660,7 @@ const exportWeekDocx = () => {
                         ) : null}
                       </div>
                     ) : null}
-                    {gKey ? (
+                    {(gKey && !readOnly) ? (
                       <button
                         className="groupColorChip groupColorChip--corner"
                         style={{background: surfaceColor(gColor)}}
@@ -8429,6 +8457,10 @@ function LessonView({
       skipNextSaveRef.current = false;
       return;
     }
+    /* Eine archivierte Stunde wird nicht gespeichert. Ohne diese Zeile
+       liefe bei jeder Regung des Entwurfs – etwa der Layoutwahl im
+       Exportdialog – ein Speicherversuch los, der abgewiesen würde. */
+    if (readOnly) return;
     const curr = serializeForCompare(local);
     if (curr === initialSnapshotRef.current) return;
 
@@ -8448,6 +8480,8 @@ function LessonView({
 
   // Flush any pending edits immediately when leaving the view (e.g., clicking "Zurück").
   // This prevents data loss if the user navigates away before the debounce fires.
+  const readOnlyRef = useRef(readOnly);
+  useEffect(()=>{ readOnlyRef.current = readOnly; }, [readOnly]);
   useEffect(()=>{
     return () => {
       try {
@@ -8455,6 +8489,7 @@ function LessonView({
           clearTimeout(saveTimerRef.current);
           saveTimerRef.current = null;
         }
+        if (readOnlyRef.current) return;
         const latest = localRef.current;
         const curr = serializeForCompare(latest);
         if (curr !== initialSnapshotRef.current) {
@@ -9161,7 +9196,7 @@ const exportDocx = () => {
       <div style={{height:14}} />
 
       <div className="split">
-        <PhaseTimeline phases={local.phases} onChange={setPhases} startTime={lessonStartHHMM} gesamt={gesamtMin} />
+        <PhaseTimeline phases={local.phases} onChange={setPhases} startTime={lessonStartHHMM} gesamt={gesamtMin} gesperrt={readOnly} />
         <div>
           <div className="row wrap" style={{justifyContent:'space-between'}}>
             <div>
@@ -9279,6 +9314,7 @@ const exportDocx = () => {
                       value={ph.content}
                       onChange={(v)=>setzeFeld('content', v)}
                       placeholder="Was passiert in dieser Phase? Material? Fragen? Differenzierung?"
+                      gesperrt={readOnly}
                     />
                   </>
                 ) : null}
@@ -9294,6 +9330,7 @@ const exportDocx = () => {
                             value={ph.materialsMedia || ''}
                             onChange={(v)=>setzeFeld('materialsMedia', v)}
                             placeholder="z. B. AB, Tafelbild, Beamer, Karten, ..."
+                            gesperrt={readOnly}
                           />
                         </div>
                       ) : null}
@@ -9304,6 +9341,7 @@ const exportDocx = () => {
                             value={ph.remarks || ''}
                             onChange={(v)=>setzeFeld('remarks', v)}
                             placeholder="z. B. Hinweise, Beobachtungen, Alternativen, ..."
+                            gesperrt={readOnly}
                           />
                         </div>
                       ) : null}
@@ -9336,6 +9374,7 @@ const exportDocx = () => {
                               wert={ph[feld.key]}
                               ausserhalbDesProfils={!sichtbareFelder.includes(feldId)}
                               onChange={(v)=>setzeFeld(feld.key, v)}
+                              gesperrt={readOnly}
                             />
                           );
                         })}
@@ -9841,9 +9880,12 @@ const exportSequenceDocx = (sequenceId) => {
                             <select
                               className="macroSelect"
                               value={o.lesson.sequenceId || ''}
+                              disabled={readOnly}
+                              title={readOnly ? 'Archiviert – nur zum Ansehen' : 'Sequenz zuordnen'}
                               onClick={(e)=>e.stopPropagation()}
                               onChange={(e)=>{
                                 e.stopPropagation();
+                                if (readOnly) return;
                                 const v = e.target.value;
                                 if (v === '__new__') {
                                   // In-app modal (window.prompt can be suppressed in some Electron/Windows setups)
@@ -9856,7 +9898,6 @@ const exportSequenceDocx = (sequenceId) => {
                                 }
                                 onUpdateLessonAt(o.weekStart, o.dayIndex, o.slotIndex, { ...o.lesson, sequenceId: v });
                               }}
-                              title="Sequenz zuordnen"
                             >
                               <option value="">— Sequenz —</option>
                               {Object.values(sequences || {}).sort((a,b)=>a.name.localeCompare(b.name)).map(s => (
@@ -9864,15 +9905,17 @@ const exportSequenceDocx = (sequenceId) => {
                               ))}
                               <option value="__new__">+ Neue Sequenz…</option>
                             </select>
-                            <button
-                              className="iconBtn danger"
-                              onClick={(e)=>{
-                                e.stopPropagation();
-                                onDeleteLessonAt(o.weekStart, o.dayIndex, o.slotIndex);
-                              }}
-                              title="Stunde löschen"
-                              aria-label="Stunde löschen"
-                            ><Trash2 {...ICON_SM} /></button>
+                            {!readOnly ? (
+                              <button
+                                className="iconBtn danger"
+                                onClick={(e)=>{
+                                  e.stopPropagation();
+                                  onDeleteLessonAt(o.weekStart, o.dayIndex, o.slotIndex);
+                                }}
+                                title="Stunde löschen"
+                                aria-label="Stunde löschen"
+                              ><Trash2 {...ICON_SM} /></button>
+                            ) : null}
                           </div>
 
                           <div className="macroTopic">{topic}</div>
@@ -11485,7 +11528,12 @@ function SequenceManager({
 }
 
 
-function PhaseTimeline({ phases, onChange, startTime = '', gesamt = TOTAL_MIN }){
+/* `gesperrt`: im Archiv wird der Zeitstrahl nur gezeigt.
+
+   Ein deaktiviertes <fieldset> erreicht das hier NICHT – gezogen wird
+   an gewöhnlichen <div>s, und die kennen kein "disabled". Deshalb die
+   ausdrückliche Angabe. */
+function PhaseTimeline({ phases, onChange, startTime = '', gesamt = TOTAL_MIN, gesperrt = false }){
   /* Der Zeitstrahl zeigt den Rahmen der Stunde – 45 Minuten bei einer
      Einzelstunde, 90 bei einer Doppelstunde. Er wird nicht nach 45
      Minuten unterbrochen: Phasen dürfen über die Stundengrenze laufen. */
@@ -11529,6 +11577,7 @@ function PhaseTimeline({ phases, onChange, startTime = '', gesamt = TOTAL_MIN })
   };
 
   useEffect(()=>{
+    if (gesperrt) return;
     const onMove = (e) => {
       if (!drag) return;
       const dy = e.clientY - drag.startY;
@@ -11560,7 +11609,7 @@ function PhaseTimeline({ phases, onChange, startTime = '', gesamt = TOTAL_MIN })
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, phases, onChange]);
+  }, [drag, phases, onChange, gesperrt]);
 
   return (
     <div className="timeline">
@@ -11573,6 +11622,7 @@ function PhaseTimeline({ phases, onChange, startTime = '', gesamt = TOTAL_MIN })
         style={{height: gesamtMin * PX_PER_MIN}}
         ref={bodyRef}
         onDragOver={(e)=>{
+          if (gesperrt) return;
           // Allow drop
           if (drag) return; // while resizing, ignore dnd
           e.preventDefault();
@@ -11581,7 +11631,7 @@ function PhaseTimeline({ phases, onChange, startTime = '', gesamt = TOTAL_MIN })
         }}
         onDragLeave={()=>setDropIndex(null)}
         onDrop={(e)=>{
-          if (drag) return;
+          if (gesperrt || drag) return;
           e.preventDefault();
           const from = dragFrom ?? Number(e.dataTransfer.getData('text/plain'));
           const to = dropIndex ?? computeDropIndex(e.clientY);
@@ -11612,9 +11662,9 @@ function PhaseTimeline({ phases, onChange, startTime = '', gesamt = TOTAL_MIN })
               className="phaseBlock"
               style={{ top, height }}
               title="Phase"
-              draggable={!drag}
+              draggable={!drag && !gesperrt}
               onDragStart={(e)=>{
-                if (drag) return;
+                if (gesperrt || drag) return;
                 setDragFrom(idx);
                 e.dataTransfer.effectAllowed = 'move';
                 e.dataTransfer.setData('text/plain', String(idx));
@@ -11633,7 +11683,7 @@ function PhaseTimeline({ phases, onChange, startTime = '', gesamt = TOTAL_MIN })
         })}
 
         {/* handles between phases */}
-        {phaseLayout.slice(0, -1).map(({idx, top, height})=>{
+        {(gesperrt ? [] : phaseLayout.slice(0, -1)).map(({idx, top, height})=>{
           const y = top + height - 5;
           return (
             <div
@@ -11793,7 +11843,10 @@ function PhaseNameInput({ value, suggestions, onChange, onCommit, onHideSuggesti
 
 // --- Rich text editor (bold / italic / underline / color) ---
 // Stores HTML in the field. Plain text is auto-converted to HTML for display.
-function RichTextEditor({ value, onChange, placeholder = '' }){
+/* `gesperrt`: contentEditable kennt kein "disabled" – ein umgebendes
+   <fieldset> hält hier nichts auf. Deshalb wird die Bearbeitbarkeit
+   direkt abgeschaltet; lesen und kopieren bleibt möglich. */
+function RichTextEditor({ value, onChange, placeholder = '', gesperrt = false }){
   const ref = useRef(null);
   const lastHtml = useRef('');
   const [focused, setFocused] = useState(false);
@@ -11876,7 +11929,7 @@ function RichTextEditor({ value, onChange, placeholder = '' }){
       <div
         ref={ref}
         className="rteBody"
-        contentEditable
+        contentEditable={!gesperrt}
         suppressContentEditableWarning
         data-placeholder={placeholder}
         onFocus={()=>setFocused(true)}
@@ -12323,7 +12376,7 @@ function PhaseScaffolds({ scaffolds, vorschlaege, onChange, onRemember, onHideSu
 
 /* Eine zusätzliche Angabe zur Phase. Welche Eingabeart es wird, steht
    in der Registry – hier wird sie nur ausgeführt. */
-function PhasenFeld({ feld, wert, onChange, ausserhalbDesProfils = false }){
+function PhasenFeld({ feld, wert, onChange, ausserhalbDesProfils = false, gesperrt = false }){
   const beschriftung = (
     <label className="small muted">
       {feld.label}
@@ -12339,7 +12392,7 @@ function PhasenFeld({ feld, wert, onChange, ausserhalbDesProfils = false }){
     return (
       <div className="phasenFeld phasenFeld--breit">
         {beschriftung}
-        <RichTextEditor value={wert || ''} onChange={onChange} placeholder={feld.platzhalter || ''} />
+        <RichTextEditor value={wert || ''} onChange={onChange} placeholder={feld.platzhalter || ''} gesperrt={gesperrt} />
       </div>
     );
   }

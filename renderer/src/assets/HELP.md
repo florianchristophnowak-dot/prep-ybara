@@ -123,7 +123,10 @@ Jahr ins Archiv: Wochenplanung, Sequenzen, Jahresgrobplanung, To‑dos, Ferien u
   ⚠️ Sie lässt sich zwar mit **Backup importieren** öffnen, **ersetzt dabei aber alle Daten der App**
   (laufendes Schuljahr und alle Archive). Vorher unbedingt ein vollständiges Backup exportieren.
 - **⋯ → Archiv endgültig löschen** entfernt den Abzug. Es wird vorher gefragt; direkt danach lässt
-  sich das noch mit **Strg+Z** zurücknehmen.
+  es sich über **„Rückgängig"** in der Meldung zurücknehmen.
+- Material einer archivierten Stunde (Dateien, Links) lässt sich weiterhin **öffnen** – nur nicht
+  ändern. **Strg+Z** ist in der Archivansicht abgeschaltet, damit es nicht unbemerkt etwas im
+  laufenden Schuljahr zurücknimmt.
 
 Ältere Archive enthalten weniger Bereiche (etwa keine Jahresgrobplanung). Die Übersicht sagt das
 an der jeweiligen Zeile; alles Übrige funktioniert unverändert.

@@ -1988,7 +1988,9 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
    einzelne Schaltfläche davon wissen muss. Reiner Text bleibt lesbar. */
 .archivFieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 .archivFieldset:disabled { opacity: 1; }
-.archivFieldset:disabled [contenteditable] { pointer-events: none; }
+/* Nur wirklich beschreibbare Felder abschirmen – sonst liesse sich
+   der Text einer archivierten Stunde nicht einmal markieren. */
+.archivFieldset:disabled [contenteditable="true"] { pointer-events: none; }
 .archivFieldset:disabled .input,
 .archivFieldset:disabled input,
 .archivFieldset:disabled textarea,
@@ -2007,3 +2009,7 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 /* Ein leerer Platz im Archiv war nie belegt – er lädt zu nichts ein. */
 .lessonCell--leer { cursor: default; background: transparent; border-style: dashed; box-shadow: none; }
 .lessonCell--leer:hover { border-color: var(--border); box-shadow: none; }
+/* Der Knopf, den der Archiv-Riegel nicht erfasst (siehe OeffnenKnopf):
+   ein <a> in Gestalt einer Schaltfläche. */
+a.btn { text-decoration: none; }
+a.btn.is-disabled { opacity: 0.5; pointer-events: none; }

@@ -1786,6 +1786,32 @@ function EmptyState({ text, actionLabel, onAction, illustration = false }){
    bei Klick nach aussen und mit Escape. Einträge sind einfache Objekte
    – `{ label, onSelect }`, `{ trenner: true }` oder ein Eintrag mit
    `unter: [...]` für eine Untergruppe (z. B. "Exportieren"). */
+/* Eine Schaltfläche, die auch in einem gesperrten Bereich wirkt.
+
+   Der Riegel der Archivansicht ist ein deaktiviertes <fieldset>. Es
+   erfasst Formularelemente – ein <a> ist keines. Genau richtig für
+   Aktionen, die nichts ändern: eine Datei öffnen, einen Ordner
+   anzeigen, zu einer anderen Ansicht springen. */
+function OeffnenKnopf({ onClick, disabled = false, className = 'btn', title, children }){
+  const ausloesen = (e)=>{
+    e.preventDefault();
+    e.stopPropagation();
+    if (disabled) return;
+    onClick?.();
+  };
+  return (
+    <a
+      role="button"
+      className={`${className}${disabled ? ' is-disabled' : ''}`}
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled || undefined}
+      title={title}
+      onClick={ausloesen}
+      onKeyDown={(e)=>{ if (e.key === 'Enter' || e.key === ' ') ausloesen(e); }}
+    >{children}</a>
+  );
+}
+
 function KebabMenu({ eintraege, titel = 'Weitere Aktionen', ausrichtung = 'rechts', knopfKlasse = 'iconBtn' }){
   const [offen, setOffen] = useState(false);
   const wrapRef = useRef(null);
@@ -4361,7 +4387,12 @@ export default function App(){
     const hatWochen = archivKennzahlen(gewaehlt).wochen > 0;
     /* Gemerkt wird, wo man herkam – der Rückweg soll dorthin führen
        und nicht irgendwohin. */
-    setArchivAnsicht({ id: archivId, zurueckZu: { ...view }, zurueckDatum: selectedDate });
+    /* Wer von einem Archiv ins nächste wechselt, soll am Ende dort
+       herauskommen, wo er ursprünglich war – nicht in einer
+       archivierten Woche. */
+    setArchivAnsicht(prev => (prev
+      ? { ...prev, id: archivId }
+      : { id: archivId, zurueckZu: { ...view }, zurueckDatum: selectedDate }));
     const wochen = Object.keys(archivAbzug(gewaehlt).weeks || {});
     wochen.sort();
     const start = wochen[0] || (gewaehlt.startISO || toISODate(new Date()));
@@ -4397,9 +4428,12 @@ export default function App(){
       showToast('Der Archiv-Export ist in dieser Fassung nicht verfügbar.', { tone: 'warning' });
       return;
     }
-    const inhalt = archivDatenbank(gewaehlt, liveDb);
-    // Die Archivliste selbst gehört nicht in den Abzug eines Jahres.
-    inhalt.schoolYearArchives = [];
+    /* Bewusst OHNE die aktuellen Daten: die Datei soll dieses eine
+       Schuljahr enthalten, nicht nebenbei die Vorlagenbibliothek und
+       die Einstellungen des laufenden Betriebs. Was dem Abzug fehlt,
+       ergänzt ensureDbShape leer – die Datei bleibt ein vollständiges,
+       einlesbares Backup. */
+    const inhalt = archivDatenbank(gewaehlt, {});
     const name = `Prepybara-${String(gewaehlt.label || 'Schuljahr').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '-')}.json`;
     try {
       const gespeichert = await platform.exportArchive({ data: inhalt, suggestedFileName: name });
@@ -4835,7 +4869,11 @@ const classGroupSuggestions = useMemo(()=>{
       });
     }
     return cmds;
-  }, [view.weekStart, sequences, db?.groupColors, undoLast]);
+    /* `verlasseArchiv` steht bewusst nicht in der Liste: die Funktion
+       entsteht bei jedem Rendern neu und liest nur Zustand, der sich
+       zusammen mit `imArchiv` ändert. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.weekStart, sequences, db?.groupColors, undoLast, imArchiv]);
 
   // Ein fehlgeschlagenes Speichern darf nicht still bleiben. Die Meldung
   // bleibt stehen (ttl 0), bis der Nutzer sie schliesst.
@@ -7427,7 +7465,7 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
               className={`dutyCell ${duty ? 'dutyCell--has' : ''} ${info.isOff ? 'dayOffDutyCell' : ''}`}
               onClick={(e)=>{ e.stopPropagation(); openDutyEditor(dayIndex, pos); }}
               title={duty ? `Aufsicht: ${duty.title}` : (readOnly ? '' : 'Aufsicht eintragen')}
-              aria-label={duty ? `Aufsicht: ${duty.title}` : 'Aufsicht eintragen'}
+              aria-label={duty ? `Aufsicht: ${duty.title}` : (readOnly ? 'Keine Aufsicht' : 'Aufsicht eintragen')}
               role={readOnly ? undefined : 'button'}
               tabIndex={readOnly ? -1 : 0}
               onKeyDown={(e)=>{
@@ -9123,7 +9161,7 @@ const exportDocx = () => {
               <div style={{fontWeight:800}}>Jahresgrobplanung (Orientierung)</div>
               <div className="muted small">Diese Balken wirken sich nicht auf Sequenzen aus und werden nicht exportiert.</div>
             </div>
-            <button className="btn" onClick={()=>onOpenYearPlan?.(dateISO)}>Im Jahresplan öffnen</button>
+            <OeffnenKnopf onClick={()=>onOpenYearPlan?.(dateISO)}>Im Jahresplan öffnen</OeffnenKnopf>
           </div>
           <div style={{height:8}} />
           <div className="yearHintList">
@@ -9435,7 +9473,7 @@ const exportDocx = () => {
                   <div style={{fontWeight:800}}>Links</div>
                   <div className="muted small">Klickbar in der App – wird nicht exportiert.</div>
                 </div>
-                <button className="btn primary" onClick={addLink}>Link hinzufügen</button>
+                {!readOnly ? <button className="btn primary" onClick={addLink}>Link hinzufügen</button> : null}
               </div>
               <div style={{height:10}} />
 
@@ -9450,12 +9488,14 @@ const exportDocx = () => {
                       <div className="grow" style={{minWidth:240}}>
                         <input
                           value={l.title || ''}
+                          readOnly={readOnly}
                           onChange={(e)=>updateLink(l.id, { title: e.target.value })}
                           placeholder="Titel (optional)"
                         />
                         <div style={{height:6}} />
                         <input
                           value={l.url || ''}
+                          readOnly={readOnly}
                           onChange={(e)=>updateLink(l.id, { url: e.target.value })}
                           placeholder="https://..."
                         />
@@ -9466,8 +9506,8 @@ const exportDocx = () => {
                         ) : null}
                       </div>
                       <div className="row wrap" style={{gap:8}}>
-                        <button className="btn" onClick={()=>openLink(l.url)} disabled={!String(l.url||'').trim()}>Öffnen</button>
-                        <button className="btn danger" onClick={()=>removeLink(l.id)}>Entfernen</button>
+                        <OeffnenKnopf onClick={()=>openLink(l.url)} disabled={!String(l.url||'').trim()}>Öffnen</OeffnenKnopf>
+                        {!readOnly ? <button className="btn danger" onClick={()=>removeLink(l.id)}>Entfernen</button> : null}
                       </div>
                     </div>
                   ))}
@@ -9484,13 +9524,17 @@ const exportDocx = () => {
                 <div className="muted small">Nur zur Organisation – wird nicht exportiert und beeinflusst keine Sequenzen. Optional können Dateien beim Hinzufügen in eine App-Ablage kopiert werden (opt‑in).</div>
               </div>
               <div className="row wrap" style={{gap:8, alignItems:'center'}}>
-                <button className="btn primary" onClick={addLessonFiles}>Datei hinzufügen</button>
-                <label className="row" style={{gap:8, userSelect:'none'}} title="Wenn aktiv, werden Dateien in einen App-eigenen Ordner kopiert (opt-in).">
-                  <input type="checkbox" checked={fileCopyOptIn} onChange={toggleFileCopyOptIn} />
-                  <span className="small muted">Dateien in App kopieren (opt‑in)</span>
-                </label>
+                {!readOnly ? (
+                  <>
+                    <button className="btn primary" onClick={addLessonFiles}>Datei hinzufügen</button>
+                    <label className="row" style={{gap:8, userSelect:'none'}} title="Wenn aktiv, werden Dateien in einen App-eigenen Ordner kopiert (opt-in).">
+                      <input type="checkbox" checked={fileCopyOptIn} onChange={toggleFileCopyOptIn} />
+                      <span className="small muted">Dateien in App kopieren (opt‑in)</span>
+                    </label>
+                  </>
+                ) : null}
                 {capabilities.fileLibrary ? (
-                  <button className="btn" onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</button>
+                  <OeffnenKnopf onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</OeffnenKnopf>
                 ) : null}
               </div>
             </div>
@@ -9512,9 +9556,9 @@ const exportDocx = () => {
                         {f.sourcePath ? <div className="muted small" style={{wordBreak:'break-all'}}>Original: {f.sourcePath}</div> : null}
                       </div>
                       <div className="row wrap" style={{gap:8}}>
-                        <button className="btn" onClick={()=>openFile(f.path)}>Öffnen</button>
+                        <OeffnenKnopf onClick={()=>openFile(f.path)}>Öffnen</OeffnenKnopf>
                         {capabilities.revealInFolder ? (
-                          <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                          <OeffnenKnopf onClick={()=>revealFile(f.path)}>Im Ordner</OeffnenKnopf>
                         ) : null}
                       </div>
                     </div>
@@ -9541,11 +9585,11 @@ const exportDocx = () => {
                       {f.sourcePath ? <div className="muted small" style={{wordBreak:'break-all'}}>Original: {f.sourcePath}</div> : null}
                     </div>
                     <div className="row wrap" style={{gap:8}}>
-                      <button className="btn" onClick={()=>openFile(f.path)}>Öffnen</button>
+                      <OeffnenKnopf onClick={()=>openFile(f.path)}>Öffnen</OeffnenKnopf>
                       {capabilities.revealInFolder ? (
-                          <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                          <OeffnenKnopf onClick={()=>revealFile(f.path)}>Im Ordner</OeffnenKnopf>
                         ) : null}
-                      <button className="btn danger" onClick={()=>removeLessonFile(f.id)}>Entfernen</button>
+                      {!readOnly ? <button className="btn danger" onClick={()=>removeLessonFile(f.id)}>Entfernen</button> : null}
                     </div>
                   </div>
                 ))}
@@ -11367,7 +11411,7 @@ function SequenceManager({
                   <span className="small muted">Dateien in App kopieren (opt‑in)</span>
                 </label>
                 {capabilities.fileLibrary ? (
-                  <button className="btn" onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</button>
+                  <OeffnenKnopf onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</OeffnenKnopf>
                 ) : null}
               </div>
 

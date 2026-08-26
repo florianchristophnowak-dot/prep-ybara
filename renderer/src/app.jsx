@@ -1207,6 +1207,26 @@ function normalizePhases(phases, gesamt = TOTAL_MIN){
 }
 
 
+/* Einen Verlaufsplan auf einen anderen Zeitrahmen bringen.
+
+   Gebraucht beim Einsetzen einer Vorlage: eine Einheit, die als
+   Doppelstunde geplant war, findet nicht immer zwei freie Plätze. Dann
+   wird sie zur Einzelstunde – und ihre Phasen behalten ihr Verhältnis
+   zueinander, statt dass die Kürzung auf die letzte Phase fiele.
+
+   Der Rest, den das Runden übriglässt, gleicht normalizePhases aus. */
+function skalierePhasen(phases, vonMin, aufMin){
+  const alt = Math.max(1, Math.round(Number(vonMin) || 0));
+  const neu = Math.max(1, Math.round(Number(aufMin) || 0));
+  const liste = Array.isArray(phases) ? phases : [];
+  if (!liste.length || alt === neu) return liste;
+  const faktor = neu / alt;
+  return liste.map(p => ({
+    ...p,
+    duration: Math.max(MIN_PHASE_MIN, Math.round((Number(p?.duration) || 0) * faktor)),
+  }));
+}
+
 /* Beim Kopieren bekommt eine Phase eine neue id – sonst trügen zwei
    Stunden dieselbe. Für die Hilfen darin gilt dasselbe: sie sind eigene
    Objekte mit eigener id und müssen mitgezogen werden, sonst zeigten
@@ -4768,12 +4788,19 @@ useEffect(()=>{
      ersten Platz stehen und belegt den folgenden mit. Der Folgeplatz
      trägt danach keinen eigenen Eintrag mehr – deshalb sieht jede
      Auswertung genau eine Stunde, nicht zwei halbe. */
-  const joinLessonsIntoBlock = (weekStart, dayIndex, slotIndex) => {
+  /* `entwurf`: der Stand, der gerade in der Einzelstunde offen ist.
+
+     Ohne ihn ginge alles verloren, was in den letzten Augenblicken vor
+     dem Klick getippt wurde – das verzögerte Speichern hat es dann noch
+     nicht geschrieben. Aus dem Wochenraster heraus gibt es keinen
+     Entwurf; dort zählt der gespeicherte Stand. */
+  const joinLessonsIntoBlock = (weekStart, dayIndex, slotIndex, entwurf = null) => {
     const before = db;
     const w = db?.weeks?.[weekStart];
     if (!w) return;
-    const erste = w.lessons?.[keyOf(dayIndex, slotIndex)];
-    if (!erste) return;
+    const gespeichert = w.lessons?.[keyOf(dayIndex, slotIndex)];
+    if (!gespeichert) return;
+    const erste = entwurf ? normalizeLesson(entwurf) : gespeichert;
     const span = blockSpanOf(erste);
     const folgeSlot = slotIndex + span;
     const slots = w.slotsPerDay || 6;
@@ -4823,11 +4850,12 @@ useEffect(()=>{
     }
   };
 
-  const splitBlockAt = (weekStart, dayIndex, slotIndex) => {
+  const splitBlockAt = (weekStart, dayIndex, slotIndex, entwurf = null) => {
     const before = db;
     const w = db?.weeks?.[weekStart];
-    const l = w?.lessons?.[keyOf(dayIndex, slotIndex)];
-    if (!l) return;
+    const gespeichert = w?.lessons?.[keyOf(dayIndex, slotIndex)];
+    if (!gespeichert) return;
+    const l = entwurf ? normalizeLesson(entwurf) : gespeichert;
     const span = blockSpanOf(l);
     if (span <= 1) return;
 
@@ -4987,12 +5015,15 @@ useEffect(()=>{
     const dstRaw = toW.lessons?.[toKey];
     if (dstRaw) {
       const dst = normalizeLesson(deepClone(dstRaw));
-      /* Beim Tausch müsste auch die Zielstunde am Ausgangsplatz Platz
-         finden. Bei einer Doppelstunde ist das nicht ohne Weiteres der
-         Fall – dann lieber sagen, was zu tun ist, als etwas zu
-         überschreiben. */
-      if (blockSpanOf(dst) > 1) {
-        showToast(`Dort liegt eine ${blockName(blockSpanOf(dst))}. Trenne sie zuerst oder wähle einen freien Platz.`, { tone: 'warning' });
+      /* Getauscht wird nur zwischen Einzelstunden.
+
+         Sobald eine der beiden mehr als einen Platz belegt, ist der
+         Tausch nicht mehr eindeutig: die verdrängte Stunde landete
+         sonst auf einem Platz, den die andere gerade mit abdeckt. Dann
+         lieber sagen, was zu tun ist, als etwas zu verdecken. */
+      if (blockSpanOf(dst) > 1 || srcSpan > 1) {
+        const welche = blockSpanOf(dst) > 1 ? blockSpanOf(dst) : srcSpan;
+        showToast(`Eine ${blockName(welche)} lässt sich nicht mit einer belegten Stunde tauschen. Wähle einen freien Platz oder trenne sie zuerst.`, { tone: 'warning' });
         return;
       }
       upsertIn(toW, toKey, src);
@@ -6213,7 +6244,14 @@ const deleteTodo = (id) => {
         nextLesson.topic = bp.topic || '';
         nextLesson.objectives = bp.objectives || '';
         nextLesson.blockSpan = spanne;
-        nextLesson.phases = normalizePhases((bp.phases || []).map(p => neuePhasenIds(p)), TOTAL_MIN * spanne);
+        /* Passt die Einheit nicht in ihrer geplanten Länge, behalten
+           die Phasen wenigstens ihr Verhältnis zueinander. */
+        const bpSpanne = normalisiereBlockSpan(bp.blockSpan);
+        const bpPhasen = (bp.phases || []).map(p => neuePhasenIds(p));
+        nextLesson.phases = normalizePhases(
+          spanne === bpSpanne ? bpPhasen : skalierePhasen(bpPhasen, TOTAL_MIN * bpSpanne, TOTAL_MIN * spanne),
+          TOTAL_MIN * spanne
+        );
         nextLesson.homework = bp.homework || '';
         nextLesson.notes = bp.notes || '';
         nextLesson.competencies = Array.isArray(bp.competencies) ? bp.competencies : [];
@@ -6640,8 +6678,8 @@ const doExportDocx = async (html, suggestedName) => {
         onOpenReview={()=>setView({
           name:'review', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: lessonSlotIndex,
         })}
-        onJoinBlock={()=>joinLessonsIntoBlock(view.weekStart, view.dayIndex, lessonSlotIndex)}
-        onSplitBlock={()=>splitBlockAt(view.weekStart, view.dayIndex, lessonSlotIndex)}
+        onJoinBlock={(entwurf)=>joinLessonsIntoBlock(view.weekStart, view.dayIndex, lessonSlotIndex, entwurf)}
+        onSplitBlock={(entwurf)=>splitBlockAt(view.weekStart, view.dayIndex, lessonSlotIndex, entwurf)}
         kannVerbinden={(()=>{
           const w = db?.weeks?.[view.weekStart];
           const l = w?.lessons?.[keyOf(view.dayIndex, lessonSlotIndex)];
@@ -8374,13 +8412,15 @@ const exportDocx = () => {
           ) : null}
         </div>
         <div className="row" style={{gap:8}}>
+          {/* Der gerade offene Entwurf geht mit: was eben getippt wurde,
+              ist noch nicht gespeichert. */}
           {istBlock ? (
-            <button className="btn" onClick={()=>onSplitBlock?.()}
+            <button className="btn" onClick={()=>onSplitBlock?.(local)}
                     title={`${blockName(blockSpan)} wieder in Einzelstunden trennen`}>
               <Unlink {...ICON_SM} /> Doppelstunde trennen
             </button>
           ) : kannVerbinden ? (
-            <button className="btn" onClick={()=>onJoinBlock?.()}
+            <button className="btn" onClick={()=>onJoinBlock?.(local)}
                     title="Mit der folgenden Stunde derselben Lerngruppe zu einer Doppelstunde verbinden">
               <Link2 {...ICON_SM} /> Als Doppelstunde verbinden
             </button>

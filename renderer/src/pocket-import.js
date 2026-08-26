@@ -433,9 +433,11 @@ export function fuehrePocketImportAus(nextDb, plan, werkzeuge){
       /* Eine ersetzte Stunde behält ihre Sequenzzuordnung: der Termin
          gehört weiterhin zur selben Unterrichtsreihe. */
       sequenceId: (modus === MODI.ERSETZEN && bestehend?.sequenceId) ? bestehend.sequenceId : '',
-      /* Und ihre Länge: eine ersetzte Doppelstunde bleibt eine
-         Doppelstunde, sonst würde der Folgeplatz stillschweigend frei. */
-      blockSpan: (modus === MODI.ERSETZEN && bestehend) ? spanneVon(bestehend) : 1,
+      /* Und ihre Länge: was auf zwei Stundenplätzen lag, liegt danach
+         weiter auf zweien. Das gilt für JEDEN Modus – sonst würde der
+         Folgeplatz stillschweigend frei, und das Wochenraster zeigte
+         eine Lücke, wo Unterricht ist. */
+      blockSpan: bestehend ? spanneVon(bestehend) : 1,
     });
   }
 
@@ -468,9 +470,16 @@ export function fuehrePocketImportAus(nextDb, plan, werkzeuge){
     merkeEtikett(nextDb, 'speechActs', label);
   }
 
-  merkePocketImport(nextDb, stunde.externalId, ziel);
+  /* Gemeldet wird der Platz, an dem die Stunde tatsächlich steht.
+     Bei einer Doppelstunde ist das ihr erster – sonst führte "Zur
+     Stunde" auf einen Platz ohne Eintrag. */
+  const zielPlatz = (platzIndex === ziel.slotIndex)
+    ? ziel
+    : { ...ziel, slotIndex: platzIndex, lessonNumber: platzIndex + 1 };
 
-  return { lesson: ergebnis, ziel, modus };
+  merkePocketImport(nextDb, stunde.externalId, zielPlatz);
+
+  return { lesson: ergebnis, ziel: zielPlatz, modus };
 }
 
 /* ---- Vorschau-Text --------------------------------------------------- */

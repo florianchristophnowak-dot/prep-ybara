@@ -103,6 +103,34 @@ function stundeAn(db, weekStart, dayIndex, slotIndex){
   return db?.weeks?.[weekStart]?.lessons?.[`${dayIndex}-${slotIndex}`] || null;
 }
 
+/* Wie viele Stundenplätze eine Stunde belegt (Doppelstunde = 2).
+
+   Bewusst eine eigene, winzige Lesefunktion statt eines Imports aus der
+   Oberfläche: dieses Modul kennt die Datenform, nicht die App. Fehlt
+   die Angabe – jede bisher gespeicherte Stunde –, ist es 1. */
+function spanneVon(lesson){
+  const n = Math.round(Number(lesson?.blockSpan));
+  return (Number.isFinite(n) && n > 1) ? n : 1;
+}
+
+/* Welche Stunde liegt auf diesem Platz? Entweder die eigene – oder die
+   Doppelstunde, die ihn von weiter oben mit abdeckt.
+
+   Ohne diese Prüfung böte der Import einen Platz an, auf dem bereits
+   Unterricht liegt; sichtbar wäre die Stunde dort nur nicht. */
+function stundeAmPlatz(db, weekStart, dayIndex, slotIndex){
+  const eigene = stundeAn(db, weekStart, dayIndex, slotIndex);
+  if (eigene) return eigene;
+  for (let back = 1; back <= 3; back++){
+    const start = slotIndex - back;
+    if (start < 0) break;
+    const l = stundeAn(db, weekStart, dayIndex, start);
+    if (!l) continue;
+    return spanneVon(l) > back ? l : null;
+  }
+  return null;
+}
+
 export function hatPlanungsinhalt(lesson){
   if (!lesson || typeof lesson !== 'object') return false;
   if (String(lesson.topic || '').trim()) return true;
@@ -123,7 +151,7 @@ export function naechsterFreierSlot(db, weekStart, dayIndex, { ab = 0 } = {}){
   const woche = db?.weeks?.[weekStart];
   const slots = Math.max(1, Number(woche?.slotsPerDay) || STANDARD_SLOTS);
   for (let i = Math.max(0, ab); i < slots; i++) {
-    if (!stundeAn(db, weekStart, dayIndex, i)) return i;
+    if (!stundeAmPlatz(db, weekStart, dayIndex, i)) return i;
   }
   return null;
 }
@@ -148,7 +176,7 @@ export function zielFuer(dateISO, lessonNumber){
    sich der Termin ändern kann, ohne dass sich an der Datei etwas ändert. */
 export function pruefeZiel(db, ziel){
   if (!ziel) return { bestehende: null, konflikt: false, belegt: false };
-  const bestehende = stundeAn(db, ziel.weekStart, ziel.dayIndex, ziel.slotIndex);
+  const bestehende = stundeAmPlatz(db, ziel.weekStart, ziel.dayIndex, ziel.slotIndex);
   return {
     bestehende,
     belegt: Boolean(bestehende),
@@ -198,7 +226,7 @@ export function analysierePocketStunde(roh, db, { todayISO = toISODate(new Date(
     }
   }
 
-  const bestehende = ziel ? stundeAn(db, ziel.weekStart, ziel.dayIndex, ziel.slotIndex) : null;
+  const bestehende = ziel ? stundeAmPlatz(db, ziel.weekStart, ziel.dayIndex, ziel.slotIndex) : null;
 
   /* Unbekannte Etiketten. "Unbekannt" heisst: weder Systemeintrag noch
      je im Desktop benutzt. Genau danach wird gefragt. */
@@ -366,7 +394,22 @@ export function fuehrePocketImportAus(nextDb, plan, werkzeuge){
   const felder = pocketZuStundenfeldern(stunde, { uid, klasse, fach });
 
   const woche = nextDb.weeks?.[ziel.weekStart] || { slotsPerDay: STANDARD_SLOTS, lessons: {}, duties: {} };
-  const key = `${ziel.dayIndex}-${ziel.slotIndex}`;
+
+  /* Gehört der gewählte Platz zu einer Doppelstunde, ist die Stunde
+     nicht dort gespeichert, sondern an ihrem ersten Platz. Geschrieben
+     wird deshalb dorthin – sonst entstünde ein zweiter, verdeckter
+     Eintrag auf einem bereits belegten Platz. */
+  const platzIndex = (()=>{
+    for (let back = 1; back <= 3; back++){
+      const start = ziel.slotIndex - back;
+      if (start < 0) break;
+      const l = woche.lessons?.[`${ziel.dayIndex}-${start}`];
+      if (!l) continue;
+      return spanneVon(l) > back ? start : ziel.slotIndex;
+    }
+    return ziel.slotIndex;
+  })();
+  const key = `${ziel.dayIndex}-${platzIndex}`;
   const bestehend = woche.lessons?.[key] || null;
 
   let ergebnis;
@@ -390,6 +433,11 @@ export function fuehrePocketImportAus(nextDb, plan, werkzeuge){
       /* Eine ersetzte Stunde behält ihre Sequenzzuordnung: der Termin
          gehört weiterhin zur selben Unterrichtsreihe. */
       sequenceId: (modus === MODI.ERSETZEN && bestehend?.sequenceId) ? bestehend.sequenceId : '',
+      /* Und ihre Länge: was auf zwei Stundenplätzen lag, liegt danach
+         weiter auf zweien. Das gilt für JEDEN Modus – sonst würde der
+         Folgeplatz stillschweigend frei, und das Wochenraster zeigte
+         eine Lücke, wo Unterricht ist. */
+      blockSpan: bestehend ? spanneVon(bestehend) : 1,
     });
   }
 
@@ -422,9 +470,16 @@ export function fuehrePocketImportAus(nextDb, plan, werkzeuge){
     merkeEtikett(nextDb, 'speechActs', label);
   }
 
-  merkePocketImport(nextDb, stunde.externalId, ziel);
+  /* Gemeldet wird der Platz, an dem die Stunde tatsächlich steht.
+     Bei einer Doppelstunde ist das ihr erster – sonst führte "Zur
+     Stunde" auf einen Platz ohne Eintrag. */
+  const zielPlatz = (platzIndex === ziel.slotIndex)
+    ? ziel
+    : { ...ziel, slotIndex: platzIndex, lessonNumber: platzIndex + 1 };
 
-  return { lesson: ergebnis, ziel, modus };
+  merkePocketImport(nextDb, stunde.externalId, zielPlatz);
+
+  return { lesson: ergebnis, ziel: zielPlatz, modus };
 }
 
 /* ---- Vorschau-Text --------------------------------------------------- */

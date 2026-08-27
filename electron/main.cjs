@@ -508,6 +508,18 @@ ipcMain.handle('backup:export', async () => {
   return exportTextFile(`Prepybara-Backup-${stamp}.json`, content);
 });
 
+/* Ein archiviertes Schuljahr ausgeben.
+
+   Bewusst kein neuer Dateityp: geschrieben wird dieselbe JSON-Form wie
+   beim Backup, nur mit den Daten genau eines Schuljahres. Die Datei
+   lässt sich deshalb mit "Backup importieren" wieder öffnen. */
+ipcMain.handle('archive:export', async (_evt, payload) => {
+  const daten = payload && typeof payload === 'object' ? payload.data : null;
+  if (!daten || typeof daten !== 'object') return null;
+  const vorschlag = String(payload.suggestedFileName || '').trim() || 'Prepybara-Archiv.json';
+  return exportTextFile(vorschlag, JSON.stringify(daten, null, 2));
+});
+
 ipcMain.handle('backup:import', async () => {
   const imported = await importJsonFile();
   if (!imported || typeof imported !== 'object') return null;

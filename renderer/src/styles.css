@@ -535,6 +535,8 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .split { display: grid; grid-template-columns: 340px 1fr; gap: 16px; }
 .timeline { position: relative; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--card); overflow: hidden; box-shadow: var(--shadow); }
 .timelineHeader { padding: 12px 14px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-subtle); }
+/* Die Höhe kommt aus dem Zeitrahmen der Stunde (45 min = 450 px, eine
+   Doppelstunde entsprechend mehr) und wird beim Zeichnen gesetzt. */
 .timelineBody { position: relative; height: 450px; background: linear-gradient(180deg, var(--card) 0%, var(--bg-subtle) 100%); }
 .phaseBlock { position: absolute; left: 12px; right: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: linear-gradient(135deg, var(--primary-soft) 0%, var(--card) 100%); padding: 10px 12px; overflow: hidden; box-shadow: var(--shadow-sm); transition: box-shadow var(--transition-fast); }
 .phaseBlock:hover { box-shadow: var(--shadow); }
@@ -585,7 +587,9 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 @keyframes modalIn { from { opacity: 0; transform: translateY(20px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
 
 .seqList { display: flex; flex-direction: column; gap: 10px; }
-.seqRow { display: grid; grid-template-columns: 52px 1fr 190px 110px; gap: 12px; align-items: center; }
+/* Farbe · Name · Kompetenzen · ⋯
+   Exportieren liegt im Menü und braucht keine eigene Spalte mehr. */
+.seqRow { display: grid; grid-template-columns: 52px 1fr auto auto; gap: 12px; align-items: center; }
 .seqRow input[type="color"] { width: 52px; height: 40px; border: 1px solid var(--border); background: transparent; padding: 2px; border-radius: var(--radius); cursor: pointer; }
 
 .templateGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
@@ -1814,3 +1818,207 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
   border-color: var(--primary);
   background: var(--primary-soft);
 }
+
+/* ============================================================
+   Kontextmenü (⋯)
+
+   Dieselben Flächen, Rahmen und Abstände wie überall sonst – es kommt
+   keine zweite Gestaltungssprache hinzu. Das Menü ist eine sekundäre
+   Bedienung: der Knopf bleibt zurückhaltend, das Menü erscheint erst
+   auf Klick.
+   ============================================================ */
+.kebabWrap { position: relative; display: inline-flex; }
+.kebabMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  min-width: 236px;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 10px);
+  box-shadow: var(--shadow-lg, 0 10px 30px rgba(0,0,0,0.18));
+  z-index: 210;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kebabMenu--rechts { right: 0; }
+.kebabMenu--links { left: 0; }
+.kebabEintrag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius, 8px);
+  background: transparent;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+.kebabEintrag:hover:not(:disabled) { background: var(--bg-subtle); }
+.kebabEintrag:disabled { opacity: 0.45; cursor: not-allowed; }
+.kebabEintrag--danger { color: var(--danger); }
+.kebabIcon { display: inline-flex; color: var(--muted); }
+.kebabEintrag--danger .kebabIcon { color: var(--danger); }
+.kebabTrenner { height: 1px; margin: 4px 2px; background: var(--border); }
+.kebabGruppe { display: flex; flex-direction: column; gap: 2px; }
+.kebabGruppeTitel {
+  padding: 6px 10px 2px;
+  font-size: var(--fs-2xs, 11px);
+  font-weight: var(--fw-bold);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.kebabGruppe .kebabEintrag { padding-left: 24px; }
+
+/* ============================================================
+   Doppelstunden
+
+   Eine Doppelstunde ist eine Stunde, die zwei Plätze belegt. Sie wird
+   deshalb nicht doppelt gezeichnet, sondern EINMAL über beide Zeilen –
+   die Zeitachse links zeigt weiterhin beide Stundenplätze.
+   ============================================================ */
+.lessonCell--block { border-style: solid; }
+.lessonCell--block::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  top: 50%;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, var(--border) 0 6px, transparent 6px 12px);
+  opacity: 0.7;
+  pointer-events: none;
+}
+.blockBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-2xs, 11px);
+  font-weight: var(--fw-bold);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-strong, var(--border));
+  border-radius: var(--radius-full, 999px);
+  padding: 2px 9px;
+  width: max-content;
+  background: var(--bg-subtle);
+}
+.slotLabel--block { border-style: solid; }
+
+/* ============================================================
+   Sequenzvorlagen-Bibliothek
+
+   Karten, die vor dem Übernehmen sagen, worum es geht. Sie benutzen
+   die vorhandene Kartenfläche (.templateCard) und ergänzen nur die
+   Binnengliederung.
+   ============================================================ */
+.tplKopf { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.tplTitel { font-weight: var(--fw-bold, 800); font-size: var(--fs-md); }
+.tplMeta { font-size: var(--fs-sm); color: var(--text-secondary); margin-top: 2px; }
+.tplZiel { margin-top: 8px; font-size: var(--fs-sm); color: var(--text); font-style: italic; }
+.tplZeile { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.tplUmfang { margin-top: 8px; font-size: var(--fs-sm); color: var(--text-secondary); }
+.tplProdukt { margin-top: 6px; font-size: var(--fs-sm); color: var(--text-secondary); }
+.tplAktionen { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.tplEinheit {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+.tplEinheitNr { color: var(--muted); font-weight: var(--fw-bold); font-size: var(--fs-sm); }
+.tplEinheitTitel { font-weight: var(--fw-medium); }
+.tplEinheitSub { font-size: var(--fs-sm); color: var(--muted); }
+.tplEinheitDauer { font-size: var(--fs-sm); color: var(--text-secondary); white-space: nowrap; }
+.tplFilter { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+/* Die Schwerpunktkompetenz einer Vorlage – dieselbe Pille, nur betont. */
+.pill--primary { border-color: var(--primary); color: var(--primary); font-weight: var(--fw-bold); }
+.tplFilter > div { min-width: 150px; }
+
+/* Jahresplanung: die Zeilenüberschrift trägt jetzt ein Kontextmenü.
+   Ist es offen, muss die Zeile über den folgenden Zeilen liegen –
+   sonst verschwände das Menü unter der nächsten Lerngruppe. */
+.yearPlanSticky .kebabWrap { position: absolute; top: 8px; right: 8px; }
+.yearPlanSticky:has(.kebabWrap.is-open) { z-index: 40; }
+.yearPlanRow:has(.kebabWrap.is-open) { position: relative; z-index: 40; }
+/* Die Umrandung schneidet sonst das aufgeklappte Menü ab. Sie wird nur
+   so lange durchlässig, wie ein Menü offen ist. */
+.yearPlanWrap:has(.kebabWrap.is-open) { overflow: visible; }
+
+/* ============================================================
+   Archivansicht
+
+   Ein abgeschlossenes Schuljahr wird angesehen, nicht bearbeitet. Das
+   Band sagt das dauerhaft; der leicht abgesetzte Grund hält den
+   Unterschied auch dann präsent, wenn man weiter unten arbeitet.
+   ============================================================ */
+.archivBand {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border-strong, var(--border));
+  box-shadow: inset 0 3px 0 var(--warning, #b45309);
+}
+.archivBandText { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; min-width: 0; }
+.archivBandTitel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: var(--fw-bold);
+  font-size: var(--fs-md);
+  color: var(--text);
+}
+.archivBandHinweis { font-size: var(--fs-sm); color: var(--text-secondary); }
+.appBody--archiv { background: var(--bg-subtle); }
+
+/* Der Riegel in der Darstellung: ein deaktiviertes <fieldset> nimmt
+   allen Bedienelementen darin die Wirkung – nativ, ohne dass jede
+   einzelne Schaltfläche davon wissen muss. Reiner Text bleibt lesbar. */
+.archivFieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+.archivFieldset:disabled { opacity: 1; }
+/* Nur wirklich beschreibbare Felder abschirmen – sonst liesse sich
+   der Text einer archivierten Stunde nicht einmal markieren. */
+.archivFieldset:disabled [contenteditable="true"] { pointer-events: none; }
+/* Gesperrt heisst nicht unleserlich: Browser blassen die Schrift in
+   deaktivierten Feldern ab. Ein Archiv wird aber vor allem gelesen –
+   die volle Textfarbe bleibt deshalb erhalten. */
+.archivFieldset:disabled .input,
+.archivFieldset:disabled input,
+.archivFieldset:disabled textarea,
+.archivFieldset:disabled select {
+  background: var(--bg-subtle);
+  cursor: default;
+  color: var(--text);
+  -webkit-text-fill-color: var(--text);
+  opacity: 1;
+}
+
+.archivListe { display: flex; flex-direction: column; gap: 12px; }
+.archivKarte {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 10px);
+  background: var(--card);
+  padding: 14px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--transition);
+}
+.archivKarte:hover { border-color: var(--primary); }
+/* Ein leerer Platz im Archiv war nie belegt – er lädt zu nichts ein. */
+.lessonCell--leer { cursor: default; background: transparent; border-style: dashed; box-shadow: none; }
+.lessonCell--leer:hover { border-color: var(--border); box-shadow: none; }
+/* Der Knopf, den der Archiv-Riegel nicht erfasst (siehe OeffnenKnopf):
+   ein <a> in Gestalt einer Schaltfläche. */
+a.btn { text-decoration: none; }
+a.btn.is-disabled { opacity: 0.5; pointer-events: none; }

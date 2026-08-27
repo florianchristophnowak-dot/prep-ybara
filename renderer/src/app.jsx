@@ -46,18 +46,32 @@ import {
   istLeereAufgabe, istLeereMittel, istLeererScaffold, hatAufgabenDetails, hatFachdidaktik,
   scaffoldsDerStunde, sequenzProgression,
 } from './didaktik.js';
+import {
+  SLOT_MIN, MAX_BLOCK_SPAN, MIN_PHASE_MIN,
+  normalisiereBlockSpan, blockSpanOf, lessonTotalMin, lessonKey, belegteSlots,
+  blockOwnerAt, istAbgedeckt, stundenBereichLabel, blockName, passenZusammen,
+  verteilePhasenAufPlaetze,
+} from './doppelstunde.js';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowDown, ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
-  CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, FileDown, FileText, Grid3x3, Library,
-  ListTree, Maximize2, NotebookPen, Palmtree, Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
-  Square, Star, Sun, Trash2, X,
+  Archive, CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, Download, Eraser, Eye,
+  FileDown, FileText, Grid3x3, Library, Link2, ListTree, Maximize2, MoreHorizontal, NotebookPen, Palmtree,
+  Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
+  Square, Star, Sun, Trash2, Unlink, X,
 } from 'lucide-react';
 
 const DAYS = ['Mo', 'Di', 'Mi', 'Do', 'Fr'];
+/* Der Schlüssel eines Stundenplatzes. Er kommt aus dem Doppelstunden-
+   Modul, damit dort und hier dieselbe Form gilt. */
+const keyOf = lessonKey;
 const PX_PER_MIN = 10;
-const TOTAL_MIN = 45;
-const MIN_PHASE_MIN = 1;
+const TOTAL_MIN = SLOT_MIN;
+
+/* Doppelstunden: eine Stunde kann mehrere Stundenplätze belegen.
+   Das Modell dazu steht in ./doppelstunde.js – hier wird es nur
+   benutzt. MIN_PHASE_MIN und TOTAL_MIN behalten ihre Namen, damit
+   der vorhandene Code unverändert lesbar bleibt. */
 
 // Optional clock-times support
 // Users can configure lesson period start times in the school calendar settings.
@@ -1036,7 +1050,6 @@ function weekNumberISO(date){
   const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
   return `KW ${weekNo} / ${d.getUTCFullYear()}`;
 }
-function keyOf(dayIndex, slotIndex){ return `${dayIndex}-${slotIndex}`; }
 
 /* Eine leere Phase – mit ALLEN unterstützten Feldern.
 
@@ -1115,6 +1128,11 @@ function defaultLesson(){
     customPlanningFields: [],
     preferredExportLayout: '',
 
+    /* Wie viele Stundenplätze diese Stunde belegt. 1 = Einzelstunde,
+       2 = Doppelstunde. Fehlt die Angabe (jede bisher gespeicherte
+       Stunde), gilt 1 – es ändert sich dadurch nichts. */
+    blockSpan: 1,
+
     /* Nachbereitung. Sie gehört zur Stunde, die sie betrifft – so trägt
        die vorhandene Wochenpersistenz sie ohne eine zweite Ablage mit.
        Eine Stunde ohne diese Angaben ist eine gültige Stunde. */
@@ -1124,8 +1142,14 @@ function defaultLesson(){
   };
 }
 
-function normalizePhases(phases){
-  // Ensure sum = TOTAL_MIN, min durations
+/* Die Gesamtdauer ist ab jetzt ein Parameter statt einer Konstanten.
+
+   Grund: eine Doppelstunde hat einen durchgehenden Zeitrahmen von 90
+   Minuten. Ohne Angabe bleibt es bei den 45 Minuten der Einzelstunde –
+   jeder bestehende Aufruf verhält sich dadurch exakt wie zuvor. */
+function normalizePhases(phases, gesamt = TOTAL_MIN){
+  const TOTAL = Math.max(MIN_PHASE_MIN, Math.round(Number(gesamt) || TOTAL_MIN));
+  // Ensure sum = TOTAL, min durations
   const p = (phases || []).map(ph => {
     const src = (ph && typeof ph === 'object') ? ph : {};
     return {
@@ -1159,9 +1183,9 @@ function normalizePhases(phases){
   if (!p.length) return p;
 
   let sum = p.reduce((a,b)=>a+b.duration,0);
-  if (sum === TOTAL_MIN) return p;
+  if (sum === TOTAL) return p;
   // adjust last phase to fit
-  const diff = TOTAL_MIN - sum;
+  const diff = TOTAL - sum;
   p[p.length-1].duration = Math.max(MIN_PHASE_MIN, p[p.length-1].duration + diff);
   // if we pushed below min, redistribute backwards
   while (p[p.length-1].duration < MIN_PHASE_MIN) {
@@ -1175,13 +1199,33 @@ function normalizePhases(phases){
   }
   // final clamp
   sum = p.reduce((a,b)=>a+b.duration,0);
-  if (sum !== TOTAL_MIN) {
-    const delta = TOTAL_MIN - sum;
+  if (sum !== TOTAL) {
+    const delta = TOTAL - sum;
     p[0].duration = Math.max(MIN_PHASE_MIN, p[0].duration + delta);
   }
   return p;
 }
 
+
+/* Einen Verlaufsplan auf einen anderen Zeitrahmen bringen.
+
+   Gebraucht beim Einsetzen einer Vorlage: eine Einheit, die als
+   Doppelstunde geplant war, findet nicht immer zwei freie Plätze. Dann
+   wird sie zur Einzelstunde – und ihre Phasen behalten ihr Verhältnis
+   zueinander, statt dass die Kürzung auf die letzte Phase fiele.
+
+   Der Rest, den das Runden übriglässt, gleicht normalizePhases aus. */
+function skalierePhasen(phases, vonMin, aufMin){
+  const alt = Math.max(1, Math.round(Number(vonMin) || 0));
+  const neu = Math.max(1, Math.round(Number(aufMin) || 0));
+  const liste = Array.isArray(phases) ? phases : [];
+  if (!liste.length || alt === neu) return liste;
+  const faktor = neu / alt;
+  return liste.map(p => ({
+    ...p,
+    duration: Math.max(MIN_PHASE_MIN, Math.round((Number(p?.duration) || 0) * faktor)),
+  }));
+}
 
 /* Beim Kopieren bekommt eine Phase eine neue id – sonst trügen zwei
    Stunden dieselbe. Für die Hilfen darin gilt dasselbe: sie sind eigene
@@ -1198,9 +1242,356 @@ function normalizePhases(phases){
    Deshalb geht hier alles Nachbereitende verloren, absichtlich. Die
    Planung selbst – Phasen, Inhalte, Kompetenzen, Fachdidaktik – bleibt
    vollständig erhalten. */
+/* --- Archivierte Schuljahre -----------------------------------------
+
+   Beim Start eines neuen Schuljahres wandert das alte in
+   `db.schoolYearArchives`: ein Abzug seiner jahresbezogenen Daten,
+   nicht mehr und nicht weniger.
+
+   Diese Datei liest daraus – sie schreibt nie hinein. Die
+   Archivansicht ist ein Blick zurück, kein zweiter Arbeitsstand:
+
+     - Aus dem Abzug entsteht eine vollständige, aber NUR GELESENE
+       Datenbank (`archivDatenbank`). Sie geht durch dieselbe
+       Formangleichung wie die echte, damit jede Ansicht sie ohne
+       Sonderfall darstellen kann.
+     - Was nicht zum Schuljahr gehört – Vorlagenbibliothek,
+       Einstellungen, Vorschlagslisten –, wird bewusst NICHT aus dem
+       Abzug genommen, sondern aus den aktuellen Daten. Sonst sähe die
+       Bibliothek im Archiv leer aus und die Darstellung spränge um.
+
+   Ältere Abzüge tragen weniger Felder (etwa keine Jahresplanung). Das
+   ist kein Fehlerfall: was fehlt, entsteht leer. */
+const ARCHIV_JAHRESDATEN = ['schoolCalendar', 'weeks', 'sequences', 'todos', 'groupColors', 'supervisionLabels', 'yearBars', 'yearPlanLanes'];
+
+function archivAbzug(archiv){
+  const d = (archiv?.data && typeof archiv.data === 'object') ? archiv.data : {};
+  return d;
+}
+
+/* Die Datenbank, die eine Archivansicht zu sehen bekommt. */
+function archivDatenbank(archiv, liveDb){
+  const abzug = archivAbzug(archiv);
+  /* Aus den aktuellen Daten kommt NUR, was nicht zum Schuljahr gehört.
+     Deren Wochen, Sequenzen und Abzüge werden gleich überschrieben –
+     sie vorher mitzukopieren wäre bei einem vollen Schuljahr eine
+     Kopie von einigen Megabyte für nichts. */
+  const roh = (liveDb && typeof liveDb === 'object') ? liveDb : {};
+  const live = {};
+  const nichtUebernehmen = new Set([...ARCHIV_JAHRESDATEN, 'schoolYearArchives']);
+  for (const [k, v] of Object.entries(roh)) {
+    if (!nichtUebernehmen.has(k)) live[k] = v;
+  }
+  const jahresdaten = {};
+  for (const feld of ARCHIV_JAHRESDATEN) {
+    if (abzug[feld] !== undefined && abzug[feld] !== null) jahresdaten[feld] = abzug[feld];
+  }
+  return ensureDbShape({
+    /* Nicht jahresbezogen und deshalb aus den aktuellen Daten: die
+       Vorlagenbibliothek, die Darstellungseinstellungen, der
+       Kompetenzkatalog, die Vorschlagslisten und die Archivliste
+       selbst – sonst käme man aus dem Archiv nicht mehr heraus. */
+    ...deepClone(live),
+    /* Und jetzt das Schuljahr aus dem Abzug. Fehlt ein Feld, greift
+       die Grundform von ensureDbShape: leer statt kaputt. */
+    weeks: {},
+    sequences: {},
+    todos: [],
+    yearBars: [],
+    yearPlanLanes: [],
+    groupColors: {},
+    supervisionLabels: {},
+    schoolCalendar: { schoolYear: { startISO: '', endISO: '' }, lessonTimesEnabled: false, lessonTimes: [], vacations: [], freeDays: [], events: [] },
+    ...deepClone(jahresdaten),
+    /* Die Archivliste gehört nicht in eine Archivansicht: sie wird
+       überall aus den echten Daten gelesen. */
+    schoolYearArchives: [],
+  });
+}
+
+/* Welche Bereiche dieses Archiv überhaupt KENNT.
+
+   Gefragt wird nach dem Feld, nicht nach seinem Inhalt: ein leeres
+   Feld heisst "da war nichts", ein fehlendes heisst "diese Fassung
+   kannte den Bereich noch nicht". Nur das Zweite ist eine Lücke, über
+   die man Bescheid wissen will. */
+function archivBereiche(archiv){
+  const abzug = archivAbzug(archiv);
+  const kennt = (feld)=> Object.prototype.hasOwnProperty.call(abzug, feld) && abzug[feld] != null;
+  return {
+    wochen: kennt('weeks'),
+    sequenzen: kennt('sequences'),
+    jahresplanung: kennt('yearBars'),
+    todos: kennt('todos'),
+    kalender: kennt('schoolCalendar'),
+  };
+}
+
+/* Kennzahlen für die Übersicht. Sie werden aus dem Abzug gerechnet,
+   nicht gespeichert – so stimmen sie auch für alte Archive. */
+function archivKennzahlen(archiv){
+  const abzug = archivAbzug(archiv);
+  const weeks = (abzug.weeks && typeof abzug.weeks === 'object') ? abzug.weeks : {};
+  const lerngruppen = new Set();
+  let stunden = 0;
+  let stundenplaetze = 0;
+  let mitThema = 0;
+  for (const w of Object.values(weeks)){
+    for (const l of Object.values(w?.lessons || {})){
+      if (!l) continue;
+      stunden += 1;
+      stundenplaetze += normalisiereBlockSpan(l.blockSpan);
+      if (String(l.topic || '').trim()) mitThema += 1;
+      const g = groupKey(l.classGroup, l.subject);
+      if (g) lerngruppen.add(g);
+    }
+  }
+  const sequenzen = Object.keys((abzug.sequences && typeof abzug.sequences === 'object') ? abzug.sequences : {}).length;
+  const balken = Array.isArray(abzug.yearBars) ? abzug.yearBars.length : 0;
+  const todos = Array.isArray(abzug.todos) ? abzug.todos.length : 0;
+  return { lerngruppen: lerngruppen.size, stunden, stundenplaetze, mitThema, sequenzen, balken, todos, wochen: Object.keys(weeks).length };
+}
+
+/* --- Jahresplanung: Zeilen (Lerngruppen) -----------------------------
+
+   Eine Zeile der Jahresplanung ist eine Lerngruppe: Klasse und Fach.
+   Der Schlüssel wird an mehreren Stellen gebraucht und steht deshalb
+   genau einmal hier. */
+function jahresZeileKey(classGroup, subject){
+  const g = String(classGroup || '').trim();
+  const f = String(subject || '').trim();
+  if (!g && !f) return 'allgemein';
+  return `${g}||${f}`;
+}
+
+function jahresZeileTeile(key){
+  if (!key || key === 'allgemein') return { classGroup: '', subject: '' };
+  const [g, f] = String(key).split('||');
+  return { classGroup: (g || '').trim(), subject: (f || '').trim() };
+}
+
+function jahresZeileLabel(key){
+  if (key === 'allgemein') return 'Allgemein';
+  const { classGroup, subject } = jahresZeileTeile(key);
+  return [classGroup, subject].filter(Boolean).join(' · ') || 'Allgemein';
+}
+
+/* --- Sequenz-Vorlagen -------------------------------------------------
+
+   Eine Vorlage besteht aus Einheiten. Eine Einheit ist das, was in der
+   Sequenz eine Stunde war – und kann seit den Doppelstunden mehr als
+   einen Stundenplatz umfassen. Deshalb gilt durchgehend:
+
+     Einheiten  = Anzahl der Sequenzeinheiten
+     Stunden    = benötigte Stundenplätze (Summe der Spannen)
+
+   Alle beschreibenden Angaben sind optional. Eine Vorlage aus einer
+   früheren Fassung trägt keine davon und bleibt vollständig gültig –
+   sie zeigt dann eben weniger. */
+const VORLAGEN_HERKUNFT = {
+  sequence: 'Aus Sequenz gespeichert',
+  own: 'Eigene Vorlage',
+  builtin: 'Mitgelieferte Vorlage',
+  imported: 'Importiert',
+};
+
+function herkunftName(id){
+  return VORLAGEN_HERKUNFT[String(id || '').trim()] || VORLAGEN_HERKUNFT.own;
+}
+
+function normalisiereVorlage(raw, id = ''){
+  const t = (raw && typeof raw === 'object') ? raw : {};
+  const text = (v)=> String(v ?? '').trim();
+  const lessons = (Array.isArray(t.lessons) ? t.lessons : []).map(l => {
+    const o = (l && typeof l === 'object') ? l : {};
+    return { ...o, blockSpan: normalisiereBlockSpan(o.blockSpan) };
+  });
+  return {
+    ...t,
+    id: t.id || id || uid(),
+    name: text(t.name) || String(id || 'Vorlage'),
+    subject: text(t.subject),
+    color: text(t.color),
+    createdAt: t.createdAt || new Date().toISOString(),
+    lessons,
+    /* Beschreibende Angaben. Sie helfen bei der Auswahl und ändern an
+       den Stunden der Vorlage nichts. */
+    description: text(t.description),
+    gradeLevel: text(t.gradeLevel),
+    learningYear: text(t.learningYear),
+    competencies: (Array.isArray(t.competencies) ? t.competencies : []).map(text).filter(Boolean),
+    primaryCompetency: text(t.primaryCompetency),
+    finalTask: normalisiereAufgabe(t.finalTask),
+    targetProduct: text(t.targetProduct),
+    languageResources: normalisiereMittel(t.languageResources),
+    courseRef: text(t.courseRef),
+    prerequisites: text(t.prerequisites),
+    origin: VORLAGEN_HERKUNFT[text(t.origin)] ? text(t.origin) : 'own',
+  };
+}
+
+/* Umfang einer Vorlage: Einheiten, Stundenplätze, Doppelstunden. */
+function vorlagenUmfang(tpl){
+  const lessons = Array.isArray(tpl?.lessons) ? tpl.lessons : [];
+  let stunden = 0;
+  let doppel = 0;
+  for (const l of lessons){
+    const span = normalisiereBlockSpan(l?.blockSpan);
+    stunden += span;
+    if (span > 1) doppel += 1;
+  }
+  return { einheiten: lessons.length, stunden, doppelstunden: doppel, minuten: stunden * TOTAL_MIN };
+}
+
+function umfangText(tpl){
+  const u = vorlagenUmfang(tpl);
+  const teile = [
+    `${u.einheiten} ${u.einheiten === 1 ? 'Einheit' : 'Einheiten'}`,
+    `${u.stunden} ${u.stunden === 1 ? 'Unterrichtsstunde' : 'Unterrichtsstunden'}`,
+  ];
+  if (u.doppelstunden) teile.push(`${u.doppelstunden} ${u.doppelstunden === 1 ? 'Doppelstunde' : 'Doppelstunden'}`);
+  return teile.join(' · ');
+}
+
+/* Klassenstufe und Lernjahr als eine Zeile – beides ist optional. */
+function stufenText(tpl){
+  const teile = [];
+  const k = String(tpl?.gradeLevel || '').trim();
+  const j = String(tpl?.learningYear || '').trim();
+  if (k) teile.push(/^\d+$/.test(k) ? `Klasse ${k}` : k);
+  if (j) teile.push(/^\d+$/.test(j) ? `${j}. Lernjahr` : j);
+  return teile.join(' · ');
+}
+
+/* Die Zielhandlung als ein Satz – aus der Zielaufgabe der Sequenz. */
+function zielhandlungText(tpl){
+  const a = normalisiereAufgabe(tpl?.finalTask);
+  return String(a.text || '').trim();
+}
+
 function nurPlanung(lesson){
   const l = normalizeLesson(lesson);
   return { ...l, review: leeresReview() };
+}
+
+/* --- Verbinden und Trennen -------------------------------------------
+
+   Beides sind reine Umformungen auf Stundenobjekten. Sie kennen weder
+   Woche noch Oberfläche – dadurch sind sie prüfbar und lassen sich an
+   jeder Stelle wiederverwenden. */
+
+/* Zwei Stunden zu einer Doppelstunde. Der Entwurf wird gemeinsam:
+   die Phasen laufen durch, Texte werden angefügt statt verworfen.
+   Nichts geht dabei verloren – das ist die Bedingung dafür, dass sich
+   das Verbinden ohne Nachfrage anbieten lässt. */
+function verbindeStunden(ersteRaw, zweiteRaw){
+  const a = normalizeLesson(ersteRaw);
+  const b = normalizeLesson(zweiteRaw);
+  const span = normalisiereBlockSpan(blockSpanOf(a) + blockSpanOf(b));
+
+  const text = (x, y, trenner = '\n')=>{
+    const s1 = String(x || '').trim();
+    const s2 = String(y || '').trim();
+    if (!s1) return s2;
+    if (!s2 || s1 === s2) return s1;
+    return `${s1}${trenner}${s2}`;
+  };
+  const liste = (x, y)=>{
+    const arr = [...(Array.isArray(x) ? x : []), ...(Array.isArray(y) ? y : [])];
+    return arr;
+  };
+  const eindeutig = (arr)=>{
+    const out = [];
+    for (const v of arr){
+      const t = String(v || '').trim();
+      if (t && !out.includes(t)) out.push(t);
+    }
+    return out;
+  };
+
+  const competencies = eindeutig(liste(a.competencies, b.competencies));
+  const mittelA = normalisiereMittel(a.languageResources);
+  const mittelB = normalisiereMittel(b.languageResources);
+
+  const merged = {
+    ...a,
+    blockSpan: span,
+    room: (a.room || '').trim() || (b.room || '').trim(),
+    topic: text(a.topic, b.topic, ' · '),
+    objectives: text(a.objectives, b.objectives),
+    homework: text(a.homework, b.homework),
+    notes: text(a.notes, b.notes),
+    links: liste(a.links, b.links),
+    files: liste(a.files, b.files),
+    sequenceId: (a.sequenceId || '').trim() || (b.sequenceId || '').trim(),
+    competencies,
+    primaryCompetency: (a.primaryCompetency || '').trim() || (b.primaryCompetency || '').trim(),
+    successCriteria: normalisiereErfolgskriterien(liste(a.successCriteria, b.successCriteria)),
+    speechActs: normalisiereSprechabsichten(liste(a.speechActs, b.speechActs)),
+    languageResources: normalisiereMittel({
+      vocabulary: text(mittelA.vocabulary, mittelB.vocabulary),
+      grammar: text(mittelA.grammar, mittelB.grammar),
+      pronunciation: text(mittelA.pronunciation, mittelB.pronunciation),
+      other: text(mittelA.other, mittelB.other),
+    }),
+    progressionNote: text(a.progressionNote, b.progressionNote, ' · '),
+    /* Die Phasen behalten ihre Kennungen. Nur so bleiben die
+       phasenweisen Nachbereitungen beider Stunden gültig. */
+    phases: normalizePhases([...(a.phases || []), ...(b.phases || [])], TOTAL_MIN * span),
+    review: {
+      ...normalisiereReview(a.review, uid),
+      generalNotes: text(normalisiereReview(a.review).generalNotes, normalisiereReview(b.review).generalNotes),
+      phaseReviews: {
+        ...normalisiereReview(a.review).phaseReviews,
+        ...normalisiereReview(b.review).phaseReviews,
+      },
+      carryOverItems: [
+        ...normalisiereReview(a.review).carryOverItems,
+        ...normalisiereReview(b.review).carryOverItems,
+      ],
+    },
+    updatedAt: new Date().toISOString(),
+  };
+  return normalizeLesson(merged);
+}
+
+/* Eine Doppelstunde wieder in Einzelstunden.
+
+   Der gemeinsame Verlaufsplan wird an der Stundengrenze geteilt: was
+   davor liegt, bleibt in der ersten Stunde, was danach beginnt, geht in
+   die zweite. Eine Phase, die über die Grenze läuft, wird an genau
+   dieser Stelle geteilt – ihre Angaben stehen dann in beiden Teilen.
+
+   Alles Organisatorische (Klasse, Fach, Raum, Sequenz) trägt jede der
+   entstehenden Stunden; die Nachbereitung bleibt bei der ersten, weil
+   sie eine gehaltene Stunde beschreibt und sich nicht aufteilen lässt. */
+function trenneStunde(raw){
+  const l = normalizeLesson(raw);
+  const span = blockSpanOf(l);
+  if (span <= 1) return [l];
+
+  /* Die erste Stunde behält die Kennungen ihrer Phasen. Nur so bleibt
+     die phasenweise Nachbereitung gültig, die auf sie zeigt. Die
+     weiteren Stunden bekommen eigene Kennungen – sie starten ohnehin
+     ohne Nachbereitung. */
+  const teile = verteilePhasenAufPlaetze(l.phases, span)
+    .map((phasen, i)=> (i === 0 ? phasen : phasen.map(ph => neuePhasenIds(ph))));
+
+  return teile.map((phasen, i)=>{
+    const stunde = normalizeLesson({
+      ...deepClone(l),
+      blockSpan: 1,
+      phases: phasen.length ? phasen : [neuePhase('Neue Phase', TOTAL_MIN)],
+      updatedAt: new Date().toISOString(),
+    });
+    if (i > 0) {
+      /* Die zweite Stunde ist eine eigene, noch nicht gehaltene Stunde:
+         Nachbereitung und Hausaufgabe gehören zur ersten. */
+      stunde.review = leeresReview();
+      stunde.homework = '';
+    }
+    return stunde;
+  });
 }
 
 function neuePhasenIds(phase){
@@ -1216,10 +1607,12 @@ function neuePhasenIds(phase){
 function normalizeLesson(lesson){
   const base = defaultLesson();
   const l = (lesson && typeof lesson === 'object') ? lesson : {};
-  const phases = normalizePhases(l.phases || base.phases);
+  const blockSpan = normalisiereBlockSpan(l.blockSpan);
+  const phases = normalizePhases(l.phases || base.phases, TOTAL_MIN * blockSpan);
   return {
     ...base,
     ...l,
+    blockSpan,
     sequenceId: l.sequenceId || '',
     primaryCompetency: l.primaryCompetency || '',
     competencies: Array.isArray(l.competencies) ? l.competencies : [],
@@ -1345,12 +1738,15 @@ function ConfirmDialog({ open, title, body, confirmLabel, tone = 'primary', onCo
 
 /* Eingabe an Ort und Stelle ist nicht überall möglich (etwa beim Anlegen
    aus einem Menü heraus) – dann dieses Feld statt window.prompt. */
-function PromptDialog({ open, title, label, placeholder, initialValue = '', confirmLabel = 'Übernehmen', onConfirm, onCancel }){
+/* `erlaubeLeer`: für Angaben, bei denen "nichts" eine gültige Antwort
+   ist – etwa das Fach einer Jahresplanungszeile. Ohne die Angabe
+   bleibt es beim bisherigen Verhalten: leer heisst abbrechen. */
+function PromptDialog({ open, title, label, placeholder, initialValue = '', confirmLabel = 'Übernehmen', erlaubeLeer = false, onConfirm, onCancel }){
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef(null);
   useEffect(()=>{ if (open){ setValue(initialValue); setTimeout(()=>{ inputRef.current?.focus(); inputRef.current?.select(); }, 0);} }, [open, initialValue]);
   if (!open) return null;
-  const submit = (e)=>{ e?.preventDefault?.(); const v = value.trim(); if (!v) return; onConfirm?.(v); };
+  const submit = (e)=>{ e?.preventDefault?.(); const v = value.trim(); if (!v && !erlaubeLeer) return; onConfirm?.(v); };
   return (
     <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) onCancel?.(); }}>
       <form className="modalCard" onSubmit={submit} role="dialog" aria-modal="true" aria-label={title}
@@ -1361,7 +1757,7 @@ function PromptDialog({ open, title, label, placeholder, initialValue = '', conf
                placeholder={placeholder || ''} onChange={(e)=>setValue(e.target.value)} />
         <div className="dialogActions">
           <button type="button" className="btn" onClick={onCancel}>Abbrechen</button>
-          <button type="submit" className="btn primary" disabled={!value.trim()}>{confirmLabel}</button>
+          <button type="submit" className="btn primary" disabled={!value.trim() && !erlaubeLeer}>{confirmLabel}</button>
         </div>
       </form>
     </div>
@@ -1390,6 +1786,112 @@ function EmptyState({ text, actionLabel, onAction, illustration = false }){
 /* Suchvergleich ohne Akzente: In einer App für den Französischunterricht
    heissen Sequenzen "Le passé composé". Wer "passe" tippt, muss sie finden –
    sonst ist die Palette für genau die Inhalte unbrauchbar, um die es geht. */
+/* Eine Schaltfläche, die auch in einem gesperrten Bereich wirkt.
+
+   Der Riegel der Archivansicht ist ein deaktiviertes <fieldset>. Es
+   erfasst Formularelemente – ein <a> ist keines. Genau richtig für
+   Aktionen, die nichts ändern: eine Datei öffnen, einen Ordner
+   anzeigen, zu einer anderen Ansicht springen. */
+function OeffnenKnopf({ onClick, disabled = false, className = 'btn', title, children }){
+  const ausloesen = (e)=>{
+    e.preventDefault();
+    e.stopPropagation();
+    if (disabled) return;
+    onClick?.();
+  };
+  return (
+    <a
+      role="button"
+      className={`${className}${disabled ? ' is-disabled' : ''}`}
+      tabIndex={disabled ? -1 : 0}
+      aria-disabled={disabled || undefined}
+      title={title}
+      onClick={ausloesen}
+      onKeyDown={(e)=>{ if (e.key === 'Enter' || e.key === ' ') ausloesen(e); }}
+    >{children}</a>
+  );
+}
+
+/* Ein dezentes Kontextmenü (⋯).
+
+   Bewusst kein neues Baukastensystem: es benutzt dieselben Flächen,
+   Abstände und Farben wie die übrigen Bedienelemente und schliesst sich
+   bei Klick nach aussen und mit Escape. Einträge sind einfache Objekte
+   – `{ label, onSelect }`, `{ trenner: true }` oder ein Eintrag mit
+   `unter: [...]` für eine Untergruppe (z. B. "Exportieren"). */
+function KebabMenu({ eintraege, titel = 'Weitere Aktionen', ausrichtung = 'rechts', knopfKlasse = 'iconBtn' }){
+  const [offen, setOffen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(()=>{
+    if (!offen) return;
+    const beiKlick = (e)=>{
+      if (!wrapRef.current) return;
+      if (!wrapRef.current.contains(e.target)) setOffen(false);
+    };
+    const beiTaste = (e)=>{ if (e.key === 'Escape') setOffen(false); };
+    window.addEventListener('mousedown', beiKlick);
+    window.addEventListener('keydown', beiTaste);
+    return ()=>{
+      window.removeEventListener('mousedown', beiKlick);
+      window.removeEventListener('keydown', beiTaste);
+    };
+  }, [offen]);
+
+  const liste = (Array.isArray(eintraege) ? eintraege : []).filter(Boolean);
+  if (!liste.length) return null;
+
+  const zeile = (e, i)=>{
+    if (e.trenner) return <div key={`t-${i}`} className="kebabTrenner" role="separator" />;
+    if (Array.isArray(e.unter)) {
+      const unter = e.unter.filter(Boolean);
+      if (!unter.length) return null;
+      return (
+        <div key={`g-${i}`} className="kebabGruppe">
+          <div className="kebabGruppeTitel">{e.label}</div>
+          {unter.map((u, j)=>zeile(u, `${i}-${j}`))}
+        </div>
+      );
+    }
+    return (
+      <button
+        key={`e-${i}`}
+        type="button"
+        className={`kebabEintrag${e.tone === 'danger' ? ' kebabEintrag--danger' : ''}`}
+        disabled={Boolean(e.disabled)}
+        title={e.title || ''}
+        onClick={(ev)=>{
+          ev.stopPropagation();
+          setOffen(false);
+          try { e.onSelect?.(); } catch {}
+        }}
+      >
+        {e.icon ? <span className="kebabIcon">{e.icon}</span> : null}
+        <span>{e.label}</span>
+      </button>
+    );
+  };
+
+  return (
+    <div className={`kebabWrap${offen ? ' is-open' : ''}`} ref={wrapRef} onClick={(e)=>e.stopPropagation()}>
+      <button
+        type="button"
+        className={knopfKlasse}
+        aria-haspopup="menu"
+        aria-expanded={offen}
+        title={titel}
+        aria-label={titel}
+        onClick={(e)=>{ e.stopPropagation(); setOffen(v => !v); }}
+      ><MoreHorizontal {...ICON_SM} /></button>
+      {offen ? (
+        <div className={`kebabMenu kebabMenu--${ausrichtung}`} role="menu">
+          {liste.map(zeile)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function foldForSearch(str){
   return String(str || '')
     .normalize('NFD')
@@ -1997,7 +2499,9 @@ function TodayView({ heute, todayISO, getSeqProgress, onOpenLesson, onOpenTodos,
                   className="todayLesson"
                   onClick={()=>onOpenLesson?.(s.dayIndex, s.slotIndex)}
                 >
-                  <span className="todaySlot">{s.slotIndex + 1}.</span>
+                  <span className="todaySlot" title={blockSpanOf(l) > 1 ? `${blockName(blockSpanOf(l))} · ${stundenBereichLabel(s.slotIndex, blockSpanOf(l))}` : ''}>
+                    {blockSpanOf(l) > 1 ? `${s.slotIndex + 1}.–${s.slotIndex + blockSpanOf(l)}.` : `${s.slotIndex + 1}.`}
+                  </span>
                   <span className="todayMain">
                     <span className="todayTopic">{String(l.topic || '').trim() || 'Noch kein Thema'}</span>
                     <span className="todayMeta">
@@ -2288,7 +2792,7 @@ function LessonReviewView({
 }){
   const l = normalizeLesson(lesson);
   const review = normalisiereReview(l.review);
-  const phasen = normalizePhases(l.phases || []);
+  const phasen = normalizePhases(l.phases || [], lessonTotalMin(l));
   const [neuerPunkt, setNeuerPunkt] = useState('');
   const [notizVormerken, setNotizVormerken] = useState(false);
 
@@ -2553,7 +3057,26 @@ function LessonReviewView({
    Wert. Ob eine Sequenz didaktisch trägt, entscheidet die Lehrkraft;
    die App legt ihr die eigenen Angaben nebeneinander.
    ============================================================ */
-function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, onOpenLessons }){
+/* Eine geöffnete Sequenz. Hier – und nur hier – steht der Export einer
+   konkreten Sequenz: ein dezentes "Exportieren ▾" oben rechts, in
+   derselben Zeile wie die übrigen Aktionen. */
+function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, onOpenLessons,
+                                   onExportDocx, onExportPdf }){
+  const [exportOffen, setExportOffen] = useState(false);
+  const exportRef = useRef(null);
+  useEffect(()=>{
+    if (!exportOffen) return;
+    const beiKlick = (e)=>{ if (exportRef.current && !exportRef.current.contains(e.target)) setExportOffen(false); };
+    const beiTaste = (e)=>{ if (e.key === 'Escape') setExportOffen(false); };
+    window.addEventListener('mousedown', beiKlick);
+    window.addEventListener('keydown', beiTaste);
+    return ()=>{
+      window.removeEventListener('mousedown', beiKlick);
+      window.removeEventListener('keydown', beiTaste);
+    };
+  }, [exportOffen]);
+  const exportMoeglich = (capabilities.docxExport && typeof onExportDocx === 'function')
+    || (capabilities.pdfExport && typeof onExportPdf === 'function');
   const finalTask = normalisiereAufgabe(sequenz?.finalTask);
   const details = [
     ['Situation', finalTask.situation],
@@ -2572,7 +3095,36 @@ function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, 
             Angaben der einzelnen Stunden.
           </p>
         </div>
-        <button className="btn" onClick={onOpenLessons}>Stunden im Makroplan</button>
+        <div className="row wrap" style={{gap:8}}>
+          <button className="btn" onClick={onOpenLessons}>Stunden im Makroplan</button>
+          {exportMoeglich ? (
+            <div className="kebabWrap" ref={exportRef}>
+              <button
+                className="btn"
+                aria-haspopup="menu"
+                aria-expanded={exportOffen}
+                onClick={()=>setExportOffen(v => !v)}
+                title="Diese Sequenz ausgeben"
+              ><Download {...ICON_SM} /> Exportieren <ChevronDown {...ICON_SM} /></button>
+              {exportOffen ? (
+                <div className="kebabMenu kebabMenu--rechts" role="menu">
+                  {(capabilities.docxExport && typeof onExportDocx === 'function') ? (
+                    <button className="kebabEintrag" onClick={()=>{ setExportOffen(false); onExportDocx(); }}>
+                      <span className="kebabIcon"><FileText {...ICON_SM} /></span>
+                      <span>Als Word-Datei</span>
+                    </button>
+                  ) : null}
+                  {(capabilities.pdfExport && typeof onExportPdf === 'function') ? (
+                    <button className="kebabEintrag" onClick={()=>{ setExportOffen(false); onExportPdf(); }}>
+                      <span className="kebabIcon"><FileDown {...ICON_SM} /></span>
+                      <span>Als PDF</span>
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {!istLeereAufgabe(finalTask) ? (
@@ -2865,7 +3417,13 @@ const NAV_FUSS = [
   { id: 'help',     label: 'Hilfe',         Icon: CircleHelp },
 ];
 
-function Sidebar({ aktiv, onNavigate }){
+/* Im Archiv stehen nur die Bereiche zur Wahl, die ein Schuljahr
+   überhaupt hat. "Heute" gehört zum laufenden Jahr, die Bibliothek und
+   die Einstellungen gehören der App – beides wäre im Archiv nur
+   verwirrend. */
+const NAV_ARCHIV = ['week', 'macro', 'year', 'competencies', 'calendar'];
+
+function Sidebar({ aktiv, onNavigate, imArchiv = false }){
   const eintrag = ({ id, label, Icon })=>(
     <button
       key={id}
@@ -2881,8 +3439,12 @@ function Sidebar({ aktiv, onNavigate }){
   );
   return (
     <nav className="sidebar" aria-label="Ansichten">
-      <div className="navGroup">{NAV_EBENEN.map(eintrag)}</div>
-      <div className="navGroup navGroup--fuss">{NAV_FUSS.map(eintrag)}</div>
+      <div className="navGroup">
+        {(imArchiv ? NAV_EBENEN.filter(e => NAV_ARCHIV.includes(e.id)) : NAV_EBENEN).map(eintrag)}
+      </div>
+      <div className="navGroup navGroup--fuss">
+        {(imArchiv ? NAV_FUSS.filter(e => e.id === 'help') : NAV_FUSS).map(eintrag)}
+      </div>
     </nav>
   );
 }
@@ -3337,6 +3899,12 @@ function ensureDbShape(raw){
   // Jahresgrobplanung (Orientierungs-Balken): wird in der Einzelstundenansicht nur angezeigt,
   // hat KEINEN Einfluss auf Unterrichtssequenzen und wird NICHT in Verlaufspläne/Exports übernommen.
   if (!Array.isArray(db.yearBars)) db.yearBars = [];
+  /* Zeilen der Jahresplanung, die auch OHNE Balken sichtbar bleiben
+     sollen ("Jahresplanung leeren"). Ohne diese Liste ergaben sich die
+     Zeilen allein aus den Balken – eine geleerte Zeile verschwand
+     damit sofort wieder. Fehlt die Liste, verhält sich alles wie
+     bisher: die Zeilen kommen aus den Balken. */
+  if (!Array.isArray(db.yearPlanLanes)) db.yearPlanLanes = [];
   if (!db.schoolCalendar || typeof db.schoolCalendar !== 'object') {
     db.schoolCalendar = {
       schoolYear: { startISO: '', endISO: '' },
@@ -3408,6 +3976,18 @@ function ensureDbShape(raw){
     };
   }).filter(Boolean);
 
+  db.yearPlanLanes = (Array.isArray(db.yearPlanLanes) ? db.yearPlanLanes : [])
+    .map(l => {
+      const o = (l && typeof l === 'object') ? l : null;
+      if (!o) return null;
+      return {
+        classGroup: String(o.classGroup || '').trim(),
+        subject: String(o.subject || '').trim(),
+      };
+    })
+    .filter(Boolean)
+    .filter((l, i, arr)=> arr.findIndex(x => x.classGroup === l.classGroup && x.subject === l.subject) === i);
+
   // Normalize weeks (ensure lessons/duties objects exist)
   for (const [ws, w] of Object.entries(db.weeks || {})){
     if (!w || typeof w !== 'object') { db.weeks[ws] = { slotsPerDay: 6, lessons: {}, duties: {} }; continue; }
@@ -3434,12 +4014,14 @@ function ensureDbShape(raw){
     s.finalTask = normalisiereAufgabe(s.finalTask);
   }
 
-  // Normalize templates (ensure id/lessons)
+  /* Vorlagen angleichen.
+
+     Rein additiv: die beschreibenden Angaben der Bibliothek entstehen
+     leer, die Einheiten bekommen die Spanne 1 (Einzelstunde). Eine
+     Vorlage aus einer früheren Fassung bleibt dadurch unverändert
+     einsetzbar – sie zeigt in der Bibliothek nur weniger. */
   for (const [id, t] of Object.entries(db.sequenceTemplates)){
-    if (!t || typeof t !== 'object') { db.sequenceTemplates[id] = { id, name: String(id), subject: '', createdAt: new Date().toISOString(), lessons: [] }; continue; }
-    if (!t.id) t.id = id;
-    if (!t.name) t.name = String(id);
-    if (!Array.isArray(t.lessons)) t.lessons = [];
+    db.sequenceTemplates[id] = normalisiereVorlage(t, id);
   }
 
 // Normalize group colors (Lerngruppe = Klasse||Fach)
@@ -3569,7 +4151,49 @@ function useDB(){
 }
 
 export default function App(){
-  const { db, persist, saveError } = useDB();
+  const { db: liveDb, persist: persistLive, saveError } = useDB();
+
+  /* --- Aktuelles Schuljahr oder Archiv ------------------------------
+
+     Es gibt genau eine Quelle, aus der die Ansichten lesen: `db`.
+     Normalerweise sind das die echten Daten; in der Archivansicht der
+     Abzug des gewählten Schuljahres.
+
+     Geschrieben wird IMMER nur in die echten Daten – und in der
+     Archivansicht gar nicht. Der Riegel dafür liegt nicht in den
+     Schaltflächen, sondern in `persist`: dort kommt jede Änderung
+     vorbei, von der Stundenplanung bis zum Rückgängig. Damit kann
+     keine Ansicht versehentlich in ein Archiv schreiben, auch wenn ihr
+     jemand später eine Schaltfläche hinzufügt. */
+  const [archivAnsicht, setArchivAnsicht] = useState(null); // { id, zurueckZu }
+
+  const archiv = useMemo(()=>{
+    const id = archivAnsicht?.id;
+    if (!id) return null;
+    const liste = Array.isArray(liveDb?.schoolYearArchives) ? liveDb.schoolYearArchives : [];
+    return liste.find(a => a?.id === id) || null;
+  }, [archivAnsicht?.id, liveDb?.schoolYearArchives]);
+
+  const archivDb = useMemo(
+    ()=> (archiv ? archivDatenbank(archiv, liveDb) : null),
+    [archiv, liveDb]
+  );
+
+  /* Ab hier ist `db` die Quelle für ALLE Ansichten. */
+  const db = archiv ? archivDb : liveDb;
+  const imArchiv = Boolean(archiv);
+
+  /* Der Riegel. Die Meldung kommt über eine Referenz, weil showToast
+     erst weiter unten entsteht – der Riegel selbst muss aber vor jeder
+     Schreibstelle stehen. */
+  const archivHinweisRef = useRef(()=>{});
+  const persist = useCallback((nextDb)=>{
+    if (archiv) {
+      archivHinweisRef.current?.();
+      return;
+    }
+    persistLive(nextDb);
+  }, [archiv, persistLive]);
   // Show a large logo once when the app starts (helps users recognize the app).
   const [splashVisible, setSplashVisible] = useState(true);
   const [easterEggVisible, setEasterEggVisible] = useState(false);
@@ -3720,13 +4344,22 @@ export default function App(){
         sequences: nextDb.sequences || {},
         todos: Array.isArray(nextDb.todos) ? nextDb.todos : [],
         groupColors: nextDb.groupColors || {},
-        supervisionLabels: nextDb.supervisionLabels || {}
+        supervisionLabels: nextDb.supervisionLabels || {},
+        /* Die Jahresgrobplanung gehört zum Schuljahr: ihre Balken
+           liegen auf dessen Wochen. Sie wandert deshalb mit ins Archiv
+           und startet im neuen Jahr leer – vorher blieb sie stehen und
+           rutschte an den Anfang des neuen Jahres. Ältere Archive
+           tragen sie nicht; die Archivansicht kommt damit zurecht. */
+        yearBars: Array.isArray(nextDb.yearBars) ? nextDb.yearBars : [],
+        yearPlanLanes: Array.isArray(nextDb.yearPlanLanes) ? nextDb.yearPlanLanes : []
       }
     });
 
     // Reset year-specific planning data
     nextDb.weeks = {};
     nextDb.sequences = {};
+    nextDb.yearBars = [];
+    nextDb.yearPlanLanes = [];
     nextDb.schoolCalendar = {
       schoolYear: { startISO: ns, endISO: ne },
       vacations: [],
@@ -3749,6 +4382,94 @@ export default function App(){
     } catch {}
 
     setSchoolYearDialog({ visible:false, reason:'', oldLabel:'', oldStartISO:'', oldEndISO:'', newStartISO:'', newEndISO:'', keepColors:true, keepTodos:false });
+  };
+
+  /* --- Archivansicht: hinein und wieder heraus ---------------------- */
+
+  const oeffneArchiv = (archivId) => {
+    const liste = Array.isArray(liveDb?.schoolYearArchives) ? liveDb.schoolYearArchives : [];
+    const gewaehlt = liste.find(a => a?.id === archivId);
+    if (!gewaehlt) { showToast('Dieses archivierte Schuljahr wurde nicht gefunden.', { tone: 'warning' }); return; }
+    // Wo es Wochen gibt, beginnt der Blick dort; sonst im Kalender.
+    const hatWochen = archivKennzahlen(gewaehlt).wochen > 0;
+    /* Gemerkt wird, wo man herkam – der Rückweg soll dorthin führen
+       und nicht irgendwohin. */
+    /* Wer von einem Archiv ins nächste wechselt, soll am Ende dort
+       herauskommen, wo er ursprünglich war – nicht in einer
+       archivierten Woche. */
+    setArchivAnsicht(prev => (prev
+      ? { ...prev, id: archivId }
+      : { id: archivId, zurueckZu: { ...view }, zurueckDatum: selectedDate }));
+    const wochen = Object.keys(archivAbzug(gewaehlt).weeks || {});
+    wochen.sort();
+    const start = wochen[0] || (gewaehlt.startISO || toISODate(new Date()));
+    const ws = (()=>{
+      try { return toISODate(startOfWeekMonday(fromISODate(start))); } catch { return toISODate(startOfWeekMonday(new Date())); }
+    })();
+    setSelectedDate(start);
+    setView(hatWochen ? { name:'week', weekStart: ws } : { name:'calendar', weekStart: ws });
+    showToast(`Archivansicht: ${gewaehlt.label || 'Schuljahr'}. Änderungen sind hier nicht möglich.`, { ttl: 7000 });
+  };
+
+  const verlasseArchiv = () => {
+    const zurueck = archivAnsicht?.zurueckZu;
+    const zurueckDatum = archivAnsicht?.zurueckDatum;
+    setArchivAnsicht(null);
+    if (zurueckDatum) setSelectedDate(zurueckDatum);
+    /* Keine Daten wandern zurück – es wird nur wieder auf die
+       aktuellen Daten geschaut. */
+    setView(zurueck && zurueck.name ? zurueck : { name:'week', weekStart: toISODate(startOfWeekMonday(new Date())) });
+  };
+
+  /* Ein Archiv als Backup-Datei ausgeben.
+
+     Bewusst dieselbe Form wie ein normales Backup: eine vollständige
+     Datenbank, die nur dieses eine Schuljahr enthält. Damit lässt sie
+     sich mit "Backup importieren" öffnen – es entsteht kein zweites,
+     unverträgliches Dateiformat. */
+  const exportiereArchiv = async (archivId) => {
+    const liste = Array.isArray(liveDb?.schoolYearArchives) ? liveDb.schoolYearArchives : [];
+    const gewaehlt = liste.find(a => a?.id === archivId);
+    if (!gewaehlt) return;
+    if (!capabilities.archiveFiles) {
+      showToast('Der Archiv-Export ist in dieser Fassung nicht verfügbar.', { tone: 'warning' });
+      return;
+    }
+    /* Bewusst OHNE die aktuellen Daten: die Datei soll dieses eine
+       Schuljahr enthalten, nicht nebenbei die Vorlagenbibliothek und
+       die Einstellungen des laufenden Betriebs. Was dem Abzug fehlt,
+       ergänzt ensureDbShape leer – die Datei bleibt ein vollständiges,
+       einlesbares Backup. */
+    const inhalt = archivDatenbank(gewaehlt, {});
+    const name = `Prepybara-${String(gewaehlt.label || 'Schuljahr').replace(/[\\/:*?"<>|]/g, '_').replace(/\s+/g, '-')}.json`;
+    try {
+      const gespeichert = await platform.exportArchive({ data: inhalt, suggestedFileName: name });
+      if (typeof gespeichert === 'string') toastSavedPath('Archiv gespeichert.', gespeichert);
+      else if (gespeichert) showToast('Archiv gespeichert.', { tone: 'success' });
+    } catch (err) {
+      showToast(`Archiv konnte nicht gespeichert werden: ${String(err?.message || err)}`, { tone: 'danger' });
+    }
+  };
+
+  const loescheArchiv = async (archivId) => {
+    const liste = Array.isArray(liveDb?.schoolYearArchives) ? liveDb.schoolYearArchives : [];
+    const gewaehlt = liste.find(a => a?.id === archivId);
+    if (!gewaehlt) return;
+    const k = archivKennzahlen(gewaehlt);
+    const ok = await askConfirm({
+      title: 'Archiviertes Schuljahr löschen',
+      body: `Das archivierte ${gewaehlt.label || 'Schuljahr'} wird gelöscht – mit ${k.stunden} ${k.stunden === 1 ? 'Planung' : 'Planungen'} und ${k.sequenzen} ${k.sequenzen === 1 ? 'Sequenz' : 'Sequenzen'}. Danach ist dieses Schuljahr nur noch aus einer Backup-Datei zu bekommen.`,
+      confirmLabel: 'Endgültig löschen',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    // Man kann nicht löschen, was man gerade ansieht.
+    if (archivAnsicht?.id === archivId) verlasseArchiv();
+    const before = liveDb;
+    const nextDb = deepClone(liveDb);
+    nextDb.schoolYearArchives = (Array.isArray(nextDb.schoolYearArchives) ? nextDb.schoolYearArchives : [])
+      .filter(a => a?.id !== archivId);
+    runUndoable(`${gewaehlt.label || 'Schuljahr'} gelöscht`, before, ()=>persistLive(nextDb), { liveAktion: true });
   };
 
   const closeSchoolYearDialog = () => setSchoolYearDialog(prev => ({ ...prev, visible: false }));
@@ -3784,8 +4505,12 @@ export default function App(){
   // Remembers the last "main" view (week/macro/calendar). Used for going back from lesson/library.
   const lastMainView = useRef({ name: 'week', weekStart: toISODate(startOfWeekMonday(new Date())) });
   useEffect(()=>{
+    /* Nur Ansichten der aktuellen Daten merken: sonst führte "Zurück"
+       nach dem Verlassen des Archivs in eine archivierte Woche, die es
+       im laufenden Schuljahr gar nicht gibt. */
+    if (imArchiv) return;
     if (view.name === 'week' || view.name === 'macro' || view.name === 'calendar') lastMainView.current = view;
-  }, [view]);
+  }, [view, imArchiv]);
 
   useEffect(()=>{
     if (view.name === 'week') {
@@ -3971,6 +4696,12 @@ const classGroupSuggestions = useMemo(()=>{
   }, [dismissToast]);
   useEffect(()=>()=>{ toastTimers.current.forEach(clearTimeout); toastTimers.current.clear(); }, []);
 
+  /* Die Meldung des Riegels. Sie steht hier, weil showToast erst jetzt
+     existiert; der Riegel selbst liegt weiter oben in persist(). */
+  useEffect(()=>{
+    archivHinweisRef.current = ()=> showToast('Archivansicht: Dieses Schuljahr ist archiviert. Änderungen sind hier nicht möglich.', { tone: 'warning' });
+  }, [showToast]);
+
 
   /* ---- Rückgängig -----------------------------------------------------
      Bewusst an diskrete Aktionen gebunden, nicht an persist(): persist
@@ -3981,20 +4712,32 @@ const classGroupSuggestions = useMemo(()=>{
   const captureUndo = useCallback((label, snapshot)=>{
     undoStack.current = [...undoStack.current.slice(-(UNDO_LIMIT - 1)), { label, db: deepClone(snapshot) }];
   }, []);
+  /* Auf dem Stapel liegen ausschliesslich Stände der ECHTEN Daten –
+     dafür sorgt runUndoable unten. Deshalb wird hier auch dann in die
+     echten Daten zurückgeschrieben, wenn gerade ein Archiv offen ist:
+     das "Rückgängig" nach dem Löschen eines Archivs soll wirken. */
   const undoLast = useCallback(()=>{
     const entry = undoStack.current[undoStack.current.length - 1];
     if (!entry) { showToast('Nichts zum Rückgängigmachen.'); return; }
     undoStack.current = undoStack.current.slice(0, -1);
-    persist(entry.db);
+    persistLive(entry.db);
     showToast(`${entry.label} rückgängig gemacht.`);
-  }, [showToast, persist]);
+  }, [showToast, persistLive]);
 
-  /* Umkehrbare Aktion: ausführen, dann Rückgängig anbieten. */
-  const runUndoable = useCallback((label, snapshot, mutate)=>{
+  /* Umkehrbare Aktion: ausführen, dann Rückgängig anbieten.
+
+     `liveAktion` kennzeichnet die wenigen Aktionen, die auch aus einer
+     Archivansicht heraus auf die echten Daten wirken dürfen – etwa das
+     Löschen eines Archivs. Alles andere wird in der Archivansicht gar
+     nicht erst ausgeführt: sonst landete der Archivstand auf dem
+     Rückgängig-Stapel und würde später über die echten Daten
+     geschrieben. */
+  const runUndoable = useCallback((label, snapshot, mutate, { liveAktion = false } = {})=>{
+    if (imArchiv && !liveAktion) { archivHinweisRef.current?.(); return; }
     captureUndo(label, snapshot);
     mutate();
     showToast(label, { action: { label: 'Rückgängig', onAct: undoLast } });
-  }, [captureUndo, showToast, undoLast]);
+  }, [captureUndo, showToast, undoLast, imArchiv]);
 
   /* ---- Dialoge -------------------------------------------------------- */
   const [confirmState, setConfirmState] = useState(null);
@@ -4016,12 +4759,17 @@ const classGroupSuggestions = useMemo(()=>{
       const el = e.target;
       const tag = (el?.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select' || el?.isContentEditable) return;
+      /* In der Archivansicht nähme die Tastenkombination eine Änderung
+         am LAUFENDEN Schuljahr zurück – zu sehen wäre davon nichts.
+         Das "Rückgängig" in der Meldung bleibt davon unberührt: dort
+         weiss man, worauf es sich bezieht. */
+      if (imArchiv) { archivHinweisRef.current?.(); return; }
       e.preventDefault();
       undoLast();
     };
     window.addEventListener('keydown', onKey);
     return ()=> window.removeEventListener('keydown', onKey);
-  }, [undoLast]);
+  }, [undoLast, imArchiv]);
 
   /* ---- Wochenabschluss ------------------------------------------------
      Erscheint beim Verlassen der Woche und freitags – höchstens einmal je
@@ -4031,6 +4779,11 @@ const classGroupSuggestions = useMemo(()=>{
   const reviewGezeigt = useRef(new Set());
   const letzteWoche = useRef(view.weekStart);
   useEffect(()=>{
+    /* Der Wochenabschluss gehört zum laufenden Schuljahr. In der
+       Archivansicht wäre er ein Rückblick auf einen Rückblick – und
+       der Merker darf dort gar nicht erst mitlaufen, sonst würde eine
+       archivierte Woche später gegen die aktuellen Daten geprüft. */
+    if (imArchiv) return;
     const vorher = letzteWoche.current;
     letzteWoche.current = view.weekStart;
     if (!db || appSettings?.weekReview === false) return;
@@ -4067,6 +4820,7 @@ const classGroupSuggestions = useMemo(()=>{
       { id:'v-comp',     group:'Ansicht', label:'Kompetenzen im Jahr', run: go({ name:'competencies', weekStart: ws }) },
       { id:'v-library',  group:'Ansicht', label:'Bibliothek',          run: go({ name:'library', weekStart: ws }) },
       { id:'v-calendar', group:'Ansicht', label:'Schulkalender',       run: go({ name:'calendar', weekStart: ws }) },
+      { id:'v-archives', group:'Ansicht', label:'Archivierte Schuljahre', run: go({ name:'archives', weekStart: ws }) },
       { id:'v-todos',    group:'Ansicht', label:'To-dos',              run: go({ name:'todos', weekStart: ws }) },
       { id:'v-settings', group:'Ansicht', label:'Einstellungen',       run: go({ name:'settings', weekStart: ws }) },
       { id:'v-help',     group:'Ansicht', label:'Hilfe',               run: go({ name:'help', weekStart: ws }) },
@@ -4091,6 +4845,24 @@ const classGroupSuggestions = useMemo(()=>{
       { id:'t-system', group:'Darstellung', label:'System', run: ()=>updateAppSettings({ theme:'system' }) },
     ];
 
+    /* In der Archivansicht bleibt, was nur schaut. Alles Ändernde ist
+       dort ohnehin wirkungslos – es hier gar nicht erst anzubieten,
+       erspart die Meldung. */
+    const nurAnsehen = new Set([
+      'a-undo', 'a-seq', 'a-copy', 'a-expback', 'a-impback', 'a-pocketexp', 'v-pocket',
+      'v-settings', 'v-library', 'v-today', 'w-today',
+    ]);
+    if (imArchiv) {
+      /* Nicht an Ort und Stelle leeren: `cmds` ist dieselbe Liste, die
+         unten weiter gefüllt wird. */
+      const gefiltert = cmds.filter(c => !nurAnsehen.has(c.id));
+      cmds.length = 0;
+      cmds.push(
+        { id:'a-archiv-zurueck', group:'Aktion', label:'Zurück zum aktuellen Schuljahr', run: ()=>verlasseArchiv() },
+        ...gefiltert,
+      );
+    }
+
     // Sequenzen: direkt in den Makro-Plan springen und dort filtern.
     for (const seq of Object.values(sequences || {})) {
       if (!seq?.id) continue;
@@ -4110,7 +4882,11 @@ const classGroupSuggestions = useMemo(()=>{
       });
     }
     return cmds;
-  }, [view.weekStart, sequences, db?.groupColors, undoLast]);
+    /* `verlasseArchiv` steht bewusst nicht in der Liste: die Funktion
+       entsteht bei jedem Rendern neu und liest nur Zustand, der sich
+       zusammen mit `imArchiv` ändert. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view.weekStart, sequences, db?.groupColors, undoLast, imArchiv]);
 
   // Ein fehlgeschlagenes Speichern darf nicht still bleiben. Die Meldung
   // bleibt stehen (ttl 0), bis der Nutzer sie schliesst.
@@ -4154,6 +4930,7 @@ const classGroupSuggestions = useMemo(()=>{
         return `${formatDateDE(view.startISO)} – ${formatDateDE(toISODate(addDays(fromISODate(view.startISO), (view.rangeDays || 28) - 1)))}`;
       case 'year':     return 'Jahresgrobplanung';
       case 'library':  return 'Bibliothek';
+      case 'archives': return 'Archivierte Schuljahre';
       case 'today':    return 'Heute';
       case 'competencies': return 'Kompetenzen';
       case 'progression':  return 'Progression';
@@ -4192,11 +4969,14 @@ const classGroupSuggestions = useMemo(()=>{
     if (themeChoice === 'system') root.removeAttribute('data-theme');
     else root.setAttribute('data-theme', themeChoice);
   }, [themeChoice]);
+  /* Einstellungen gehören der App, nicht einem Schuljahr. Sie werden
+     deshalb immer in die echten Daten geschrieben – auch während eine
+     Archivansicht offen ist. Das Archiv selbst bleibt unberührt. */
   const updateAppSettings = (patch) => {
     try {
-      const nextDb = deepClone(db);
+      const nextDb = deepClone(liveDb);
       nextDb.appSettings = { ...(nextDb.appSettings || {}), ...(patch || {}) };
-      persist(nextDb);
+      persistLive(nextDb);
     } catch {}
   };
 
@@ -4209,6 +4989,8 @@ const todosDueTodayCount = useMemo(()=>{
 
 useEffect(()=>{
   if (splashVisible) return;
+  // To-dos aus einem abgeschlossenen Schuljahr sind nicht "heute fällig".
+  if (imArchiv) return;
   if (todosDueTodayCount <= 0) return;
   if (todoReminderGuard.current === todayISO) return;
   todoReminderGuard.current = todayISO;
@@ -4228,6 +5010,8 @@ useEffect(()=>{
     const todayISO = toISODate(new Date());
     if (todayISO <= endISO) return;
 
+    // Kein Schuljahreswechsel aus einer Archivansicht heraus.
+    if (imArchiv) return;
     const meta = db.schoolYearRollover || {};
     if (((meta.dismissedEndISO || '').trim()) === endISO) return;
 
@@ -4346,6 +5130,110 @@ useEffect(()=>{
     runUndoable('Stunde gelöscht', before, ()=>persist(nextDb));
   };
 
+  /* --- Doppelstunden: verbinden und trennen -------------------------
+
+     Beides ändert nur die Woche: die verbundene Stunde bleibt an ihrem
+     ersten Platz stehen und belegt den folgenden mit. Der Folgeplatz
+     trägt danach keinen eigenen Eintrag mehr – deshalb sieht jede
+     Auswertung genau eine Stunde, nicht zwei halbe. */
+  /* `entwurf`: der Stand, der gerade in der Einzelstunde offen ist.
+
+     Ohne ihn ginge alles verloren, was in den letzten Augenblicken vor
+     dem Klick getippt wurde – das verzögerte Speichern hat es dann noch
+     nicht geschrieben. Aus dem Wochenraster heraus gibt es keinen
+     Entwurf; dort zählt der gespeicherte Stand. */
+  const joinLessonsIntoBlock = async (weekStart, dayIndex, slotIndex, entwurf = null) => {
+    const before = db;
+    const w = db?.weeks?.[weekStart];
+    if (!w) return;
+    const gespeichert = w.lessons?.[keyOf(dayIndex, slotIndex)];
+    if (!gespeichert) return;
+    const erste = entwurf ? normalizeLesson(entwurf) : gespeichert;
+    const span = blockSpanOf(erste);
+    const folgeSlot = slotIndex + span;
+    const slots = w.slotsPerDay || 6;
+    if (span >= MAX_BLOCK_SPAN) {
+      showToast(`Mehr als ${MAX_BLOCK_SPAN} Stunden lassen sich nicht verbinden.`, { tone: 'warning' });
+      return;
+    }
+    if (folgeSlot >= slots) {
+      showToast('Nach dieser Stunde gibt es an dem Tag keinen weiteren Stundenplatz.', { tone: 'warning' });
+      return;
+    }
+    const zweite = w.lessons?.[keyOf(dayIndex, folgeSlot)];
+    if (!zweite) {
+      showToast('Zum Verbinden braucht es eine Stunde im direkt folgenden Stundenplatz.', { tone: 'warning' });
+      return;
+    }
+    if (!passenZusammen(erste, zweite)) {
+      showToast('Verbinden geht nur bei derselben Lerngruppe – gleiche Klasse und gleiches Fach.', { tone: 'warning' });
+      return;
+    }
+    /* Zusammen dürfen beide nicht länger werden als erlaubt. Sonst
+       würde die Spanne stillschweigend gekappt – und der letzte Platz
+       trüge plötzlich keine Stunde mehr. */
+    if (span + blockSpanOf(zweite) > MAX_BLOCK_SPAN) {
+      showToast(`Zusammen wären das mehr als ${MAX_BLOCK_SPAN} Stunden. Das lässt sich nicht verbinden.`, { tone: 'warning' });
+      return;
+    }
+
+    /* Gehören die beiden zu verschiedenen Sequenzen, kann die
+       verbundene Stunde nur in einer davon liegen. Das ist eine
+       Entscheidung, keine Formsache – also wird gefragt. */
+    const seqA = String(erste.sequenceId || '').trim();
+    const seqB = String(zweite.sequenceId || '').trim();
+    if (seqA && seqB && seqA !== seqB) {
+      const nameA = db?.sequences?.[seqA]?.name || 'Sequenz';
+      const nameB = db?.sequences?.[seqB]?.name || 'Sequenz';
+      const ok = await askConfirm({
+        title: 'Zwei verschiedene Sequenzen',
+        body: `Die erste Stunde gehört zu „${nameA}", die zweite zu „${nameB}". Die verbundene Doppelstunde kann nur in einer Sequenz liegen – sie bleibt in „${nameA}". In „${nameB}" fällt dieser Termin damit weg.`,
+        confirmLabel: 'Trotzdem verbinden',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
+
+    /* Eine Aufsicht zwischen den beiden Stunden bleibt gespeichert,
+       wird aber nicht mehr angezeigt: innerhalb einer Doppelstunde gibt
+       es keine Pause. Beim Trennen ist sie wieder da. */
+    const innereAufsicht = w.duties?.[`${dayIndex}-${folgeSlot}`];
+
+    const verbunden = verbindeStunden(erste, zweite);
+    const nextDb = deepClone(db);
+    const nw = nextDb.weeks[weekStart];
+    nw.lessons[keyOf(dayIndex, slotIndex)] = verbunden;
+    delete nw.lessons[keyOf(dayIndex, folgeSlot)];
+    try {
+      draftLessonCacheRef.current.delete(`${weekStart}|${dayIndex}|${slotIndex}`);
+      draftLessonCacheRef.current.delete(`${weekStart}|${dayIndex}|${folgeSlot}`);
+    } catch {}
+    runUndoable(`${blockName(blockSpanOf(verbunden))} verbunden`, before, ()=>persist(nextDb));
+    if (innereAufsicht?.title) {
+      showToast(`Die Aufsicht „${innereAufsicht.title}" zwischen den beiden Stunden wird nicht angezeigt, solange sie verbunden sind.`,
+        { tone: 'warning', ttl: 8000 });
+    }
+  };
+
+  const splitBlockAt = (weekStart, dayIndex, slotIndex, entwurf = null) => {
+    const before = db;
+    const w = db?.weeks?.[weekStart];
+    const gespeichert = w?.lessons?.[keyOf(dayIndex, slotIndex)];
+    if (!gespeichert) return;
+    const l = entwurf ? normalizeLesson(entwurf) : gespeichert;
+    const span = blockSpanOf(l);
+    if (span <= 1) return;
+
+    const teile = trenneStunde(l);
+    const nextDb = deepClone(db);
+    const nw = nextDb.weeks[weekStart];
+    teile.forEach((teil, i)=>{
+      nw.lessons[keyOf(dayIndex, slotIndex + i)] = teil;
+      try { draftLessonCacheRef.current.delete(`${weekStart}|${dayIndex}|${slotIndex + i}`); } catch {}
+    });
+    runUndoable(`${blockName(span)} getrennt`, before, ()=>persist(nextDb));
+  };
+
   // --- Stunden: Copy/Cut/Paste + Drag&Drop ---
   const copyLessonToClipboard = (weekStart, dayIndex, slotIndex) => {
     const l = getLessonAt(weekStart, dayIndex, slotIndex);
@@ -4357,7 +5245,7 @@ useEffect(()=>{
     }
     const cloned = nurPlanung(deepClone(l));
     // Neue IDs für Phasen, damit du beim Kopieren nicht versehentlich identische IDs hast.
-    cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)));
+    cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)), lessonTotalMin(cloned));
     setLessonClipboard({ lesson: cloned, source: { weekStart, dayIndex, slotIndex }, cut: false, copiedAt: Date.now() });
   };
 
@@ -4365,13 +5253,31 @@ useEffect(()=>{
     const persisted = db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, slotIndex)] || null;
     if (!persisted) return;
     const l = nurPlanung(deepClone(persisted));
-    l.phases = normalizePhases((l.phases || []).map(p => neuePhasenIds(p)));
+    l.phases = normalizePhases((l.phases || []).map(p => neuePhasenIds(p)), lessonTotalMin(l));
     setLessonClipboard({ lesson: l, source: { weekStart, dayIndex, slotIndex }, cut: true, copiedAt: Date.now() });
     deleteLessonAt(weekStart, dayIndex, slotIndex, { silent: true });
   };
 
   const pasteLessonFromClipboard = async (weekStart, dayIndex, slotIndex) => {
     if (!lessonClipboard?.lesson) return;
+    const woche = db?.weeks?.[weekStart];
+    if (istAbgedeckt(woche, dayIndex, slotIndex)) {
+      showToast('Dieser Stundenplatz gehört zu einer Doppelstunde. Trenne sie zuerst.', { tone: 'warning' });
+      return;
+    }
+    /* Eine Doppelstunde aus der Zwischenablage braucht so viele freie
+       Plätze, wie sie belegt – sonst verdeckte sie eine Planung. */
+    const einfuegeSpanne = blockSpanOf(lessonClipboard.lesson);
+    if (einfuegeSpanne > 1) {
+      const slotsAmTag = woche?.slotsPerDay || 6;
+      const passt = (slotIndex + einfuegeSpanne) <= slotsAmTag
+        && belegteSlots(slotIndex, einfuegeSpanne).slice(1)
+          .every(si => !woche?.lessons?.[keyOf(dayIndex, si)] && !istAbgedeckt(woche, dayIndex, si));
+      if (!passt) {
+        showToast(`Für eine ${blockName(einfuegeSpanne)} sind dort nicht genug freie Stundenplätze.`, { tone: 'warning' });
+        return;
+      }
+    }
     const targetHas = !!(db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, slotIndex)]);
     if (targetHas) {
       const ok = await askConfirm({
@@ -4394,6 +5300,11 @@ useEffect(()=>{
     if (!f.weekStart || !t.weekStart) return;
     if (f.weekStart === t.weekStart && f.dayIndex === t.dayIndex && f.slotIndex === t.slotIndex) return;
 
+    if (istAbgedeckt(db?.weeks?.[t.weekStart], t.dayIndex, t.slotIndex)) {
+      showToast('Dieser Stundenplatz gehört zu einer Doppelstunde. Trenne sie zuerst.', { tone: 'warning' });
+      return;
+    }
+
     const nextDb = deepClone(db);
     if (!nextDb.weeks) nextDb.weeks = {};
     const fromW = nextDb.weeks[f.weekStart] || { slotsPerDay: 6, lessons: {}, duties: {} };
@@ -4410,6 +5321,28 @@ useEffect(()=>{
 
     const src = normalizeLesson(deepClone(srcRaw));
     const now = new Date().toISOString();
+
+    /* Eine Doppelstunde braucht am Ziel so viele freie Plätze, wie sie
+       belegt. Sonst schöbe sie sich lautlos über eine andere Planung. */
+    const srcSpan = blockSpanOf(src);
+    if (srcSpan > 1) {
+      const zielSlots = t.slotsPerDay || toW.slotsPerDay || 6;
+      const platzReicht = (t.slotIndex + srcSpan) <= zielSlots;
+      const frei = belegteSlots(t.slotIndex, srcSpan).slice(1).every(si => {
+        const k = keyOf(t.dayIndex, si);
+        /* Nur beim Verschieben gibt die Stunde ihre bisherigen Plätze
+           frei. Beim Kopieren bleibt sie liegen – dort ist kein Platz. */
+        const belegtVonQuelle = mode !== 'copy'
+          && (f.weekStart === t.weekStart)
+          && belegteSlots(f.slotIndex, srcSpan).includes(si) && f.dayIndex === t.dayIndex;
+        if (belegtVonQuelle) return true;
+        return !toW.lessons?.[k] && !istAbgedeckt(toW, t.dayIndex, si);
+      });
+      if (!platzReicht || !frei) {
+        showToast(`Für eine ${blockName(srcSpan)} sind dort nicht genug freie Stundenplätze.`, { tone: 'warning' });
+        return;
+      }
+    }
 
     const upsertIn = (w, key, lesson) => {
       const l = normalizeLesson(lesson);
@@ -4437,7 +5370,7 @@ useEffect(()=>{
         if (!ok) return;
       }
       const cloned = nurPlanung(deepClone(src));
-      cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)));
+      cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)), lessonTotalMin(cloned));
       upsertIn(toW, toKey, cloned);
       persist(nextDb);
       return;
@@ -4447,6 +5380,17 @@ useEffect(()=>{
     const dstRaw = toW.lessons?.[toKey];
     if (dstRaw) {
       const dst = normalizeLesson(deepClone(dstRaw));
+      /* Getauscht wird nur zwischen Einzelstunden.
+
+         Sobald eine der beiden mehr als einen Platz belegt, ist der
+         Tausch nicht mehr eindeutig: die verdrängte Stunde landete
+         sonst auf einem Platz, den die andere gerade mit abdeckt. Dann
+         lieber sagen, was zu tun ist, als etwas zu verdecken. */
+      if (blockSpanOf(dst) > 1 || srcSpan > 1) {
+        const welche = blockSpanOf(dst) > 1 ? blockSpanOf(dst) : srcSpan;
+        showToast(`Eine ${blockName(welche)} lässt sich nicht mit einer belegten Stunde tauschen. Wähle einen freien Platz oder trenne sie zuerst.`, { tone: 'warning' });
+        return;
+      }
       upsertIn(toW, toKey, src);
       upsertIn(fromW, fromKey, dst);
       persist(nextDb);
@@ -4610,6 +5554,12 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     l.subject = src.subject || '';
     l.classGroup = src.classGroup || '';
     l.room = src.room || '';
+    /* Die Länge gehört zum Stundenplan, nicht zum Inhalt: eine
+       Doppelstunde ist in der nächsten Woche wieder eine. Ohne diese
+       Zeile verschwände die zweite Stunde – ihr Platz trägt ja keinen
+       eigenen Eintrag. */
+    l.blockSpan = blockSpanOf(src);
+    l.phases = normalizePhases(l.phases, TOTAL_MIN * l.blockSpan);
     /* Inhalte werden bewusst nicht übernommen – das Planungsprofil aber
        schon: es beschreibt, WIE geplant wird, nicht WAS geplant wurde. */
     l.planningProfile = normalisiereProfilId(src.planningProfile || db?.appSettings?.defaultPlanningProfile);
@@ -4721,6 +5671,10 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
      Render-Runde, nicht in einem Effekt: ein zweiter Effekt an dieser
      Stelle läge wieder hinter dem frühen Rückgabepfad. */
   pocketMenuRef.current = (aktion)=>{
+    /* Der Pocket-Austausch bezieht sich immer auf das laufende
+       Schuljahr. Aus dem Menü heraus ist er auch in der Archivansicht
+       erreichbar – deshalb hier derselbe Riegel wie sonst. */
+    if (imArchiv) { archivHinweisRef.current?.(); return; }
     if (aktion === 'export-profile') exportPocketProfile();
     else setView({ name: 'pocket', weekStart: view.weekStart });
   };
@@ -4742,6 +5696,18 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
       showToast('Backup-Import ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
       return;
     }
+    /* Ein Backup wird nicht dazugelegt, es tritt an die Stelle von
+       allem. Seit sich auch einzelne archivierte Schuljahre als Backup
+       ausgeben lassen, ist die Verwechslungsgefahr real – deshalb wird
+       vorher gefragt. */
+    const anzahlArchive = (Array.isArray(liveDb?.schoolYearArchives) ? liveDb.schoolYearArchives : []).length;
+    const ok = await askConfirm({
+      title: 'Backup importieren',
+      body: `Das Backup ersetzt alle Daten dieser App – das laufende Schuljahr${anzahlArchive ? ` und ${anzahlArchive} archivierte ${anzahlArchive === 1 ? 'Schuljahr' : 'Schuljahre'}` : ''}. Am besten vorher ein eigenes Backup exportieren.`,
+      confirmLabel: 'Backup importieren',
+      tone: 'danger',
+    });
+    if (!ok) return;
     const imported = await platform.importBackup();
     if (imported) {
       persist(ensureDbShape(imported));
@@ -4772,6 +5738,29 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     if (!nextDb.sequences?.[id]) return;
     nextDb.sequences[id] = { ...nextDb.sequences[id], ...patch, id };
     persist(nextDb);
+  };
+
+  /* Eine Sequenz duplizieren.
+
+     Kopiert wird die Sequenz selbst – Name, Farbe, Schwerpunkt,
+     Zielaufgabe. Die Stunden bleiben bei der ursprünglichen Sequenz:
+     eine Kopie ist ein neuer Rahmen, keine zweite Belegung derselben
+     Stundenplätze. */
+  const duplicateSequence = (id) => {
+    const quelle = db?.sequences?.[id];
+    if (!quelle) return null;
+    const nextDb = deepClone(db);
+    const neueId = uid();
+    nextDb.sequences[neueId] = {
+      ...deepClone(quelle),
+      id: neueId,
+      name: `${String(quelle.name || 'Sequenz').trim()} (Kopie)`,
+      createdAt: new Date().toISOString(),
+      files: [],
+    };
+    persist(nextDb);
+    showToast('Sequenz dupliziert.', { tone: 'success' });
+    return neueId;
   };
 
   const deleteSequence = (id) => {
@@ -4843,6 +5832,90 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     arr[idx] = next;
     nextDb.yearBars = arr;
     persist(nextDb);
+  };
+
+  /* Eine Zeile der Jahresplanung leeren: die Balken gehen, die Zeile
+     bleibt. Damit sie ohne Balken sichtbar bleibt, wird sie in
+     `yearPlanLanes` vermerkt. */
+  const clearYearPlanLane = (laneKey) => {
+    const before = db;
+    const { classGroup, subject } = jahresZeileTeile(laneKey);
+    const nextDb = deepClone(db);
+    const alle = Array.isArray(nextDb.yearBars) ? nextDb.yearBars : [];
+    nextDb.yearBars = alle.filter(b => jahresZeileKey(b?.classGroup, b?.subject) !== laneKey);
+    if (!Array.isArray(nextDb.yearPlanLanes)) nextDb.yearPlanLanes = [];
+    const schonDa = nextDb.yearPlanLanes.some(l => jahresZeileKey(l.classGroup, l.subject) === laneKey);
+    if (!schonDa) nextDb.yearPlanLanes.push({ classGroup, subject });
+    runUndoable(`${jahresZeileLabel(laneKey)}: Jahresplanung geleert`, before, ()=>persist(nextDb));
+  };
+
+  /* Eine Zeile ganz aus der Jahresplanung nehmen.
+
+     Ausdrücklich NICHT dasselbe wie "Lerngruppe löschen": Stunden,
+     Sequenzen, Farben und Kompetenzen der Lerngruppe bleiben
+     unverändert. Es verschwindet nur diese Zeile samt ihrer
+     Orientierungsbalken – und das lässt sich rückgängig machen. */
+  const removeYearPlanLane = async (laneKey) => {
+    const anzahl = (Array.isArray(db?.yearBars) ? db.yearBars : [])
+      .filter(b => jahresZeileKey(b?.classGroup, b?.subject) === laneKey).length;
+    if (anzahl > 0) {
+      const ok = await askConfirm({
+        title: 'Aus Jahresplanung entfernen',
+        body: `Diese Lerngruppe enthält ${anzahl} ${anzahl === 1 ? 'geplanten Balken' : 'geplante Balken'}. Wirklich aus der Jahresplanung entfernen? Die Lerngruppe selbst bleibt mit allen Stunden und Sequenzen erhalten.`,
+        confirmLabel: 'Entfernen',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
+    const before = db;
+    const nextDb = deepClone(db);
+    nextDb.yearBars = (Array.isArray(nextDb.yearBars) ? nextDb.yearBars : [])
+      .filter(b => jahresZeileKey(b?.classGroup, b?.subject) !== laneKey);
+    nextDb.yearPlanLanes = (Array.isArray(nextDb.yearPlanLanes) ? nextDb.yearPlanLanes : [])
+      .filter(l => jahresZeileKey(l.classGroup, l.subject) !== laneKey);
+    runUndoable(`${jahresZeileLabel(laneKey)} wurde aus der Jahresplanung entfernt`, before, ()=>persist(nextDb));
+  };
+
+  /* Klasse und Fach einer Zeile ändern. Es werden die Balken dieser
+     Zeile umgeschrieben – an den Stunden der Lerngruppe ändert sich
+     nichts. */
+  const renameYearPlanLane = async (laneKey) => {
+    const teile = jahresZeileTeile(laneKey);
+    const klasse = await askPrompt({
+      title: 'Lerngruppe bearbeiten',
+      label: 'Klasse/Kurs (leer lassen für „Allgemein“)',
+      initialValue: teile.classGroup,
+      confirmLabel: 'Weiter',
+      erlaubeLeer: true,
+    });
+    if (klasse === null) return;
+    const fach = await askPrompt({
+      title: 'Lerngruppe bearbeiten',
+      label: 'Fach (optional)',
+      initialValue: teile.subject,
+      confirmLabel: 'Übernehmen',
+      erlaubeLeer: true,
+    });
+    if (fach === null) return;
+
+    const neuerKey = jahresZeileKey(klasse, fach);
+    if (neuerKey === laneKey) return;
+
+    const before = db;
+    const nextDb = deepClone(db);
+    const g = String(klasse || '').trim();
+    const f = String(fach || '').trim();
+    nextDb.yearBars = (Array.isArray(nextDb.yearBars) ? nextDb.yearBars : [])
+      .map(b => (jahresZeileKey(b?.classGroup, b?.subject) === laneKey
+        ? { ...b, classGroup: g, subject: f, updatedAt: new Date().toISOString() }
+        : b));
+    const lanes = (Array.isArray(nextDb.yearPlanLanes) ? nextDb.yearPlanLanes : [])
+      .filter(l => jahresZeileKey(l.classGroup, l.subject) !== laneKey);
+    const trägtBalken = nextDb.yearBars.some(b => jahresZeileKey(b?.classGroup, b?.subject) === neuerKey);
+    const schonDa = lanes.some(l => jahresZeileKey(l.classGroup, l.subject) === neuerKey);
+    if (!trägtBalken && !schonDa) lanes.push({ classGroup: g, subject: f });
+    nextDb.yearPlanLanes = lanes;
+    runUndoable(`Lerngruppe geändert: ${jahresZeileLabel(neuerKey)}`, before, ()=>persist(nextDb));
   };
 
   const deleteYearBar = (id) => {
@@ -5358,21 +6431,81 @@ const deleteTodo = (id) => {
       speechActs: normalisiereSprechabsichten(lesson.speechActs),
       languageResources: normalisiereMittel(lesson.languageResources),
       progressionNote: String(lesson.progressionNote || '').trim(),
+      /* Die Dauer der Einheit. Eine Doppelstunde bleibt beim Speichern
+         als Vorlage eine Doppelstunde – und wird beim Einsetzen wieder
+         zu einer, wenn dort zwei Plätze frei sind. */
+      blockSpan: blockSpanOf(lesson),
     }));
+
+    /* Was die Bibliothek über die Sequenz weiss, entsteht hier – aus
+       der Sequenz und aus ihren Stunden. Nichts davon wird erfunden:
+       fehlt eine Angabe, bleibt das Feld leer und die Karte zeigt sie
+       schlicht nicht. Ergänzen lässt sich alles später von Hand. */
+    const kompetenzen = (()=>{
+      const zaehler = new Map();
+      const merke = (v)=>{
+        const t = String(v || '').trim();
+        if (!t) return;
+        zaehler.set(t, (zaehler.get(t) || 0) + 1);
+      };
+      for (const c of (Array.isArray(seq?.competencies) ? seq.competencies : [])) merke(c);
+      merke(seq?.primaryCompetency);
+      for (const { lesson } of items){
+        merke(lesson.primaryCompetency);
+        for (const c of (Array.isArray(lesson.competencies) ? lesson.competencies : [])) merke(c);
+      }
+      return [...zaehler.entries()].sort((a,b)=> b[1]-a[1] || a[0].localeCompare(b[0])).map(([k])=>k).slice(0, 6);
+    })();
+
+    const mittel = (()=>{
+      const sammle = (feld)=>{
+        const out = [];
+        for (const { lesson } of items){
+          const v = String(normalisiereMittel(lesson.languageResources)[feld] || '').trim();
+          if (v && !out.includes(v)) out.push(v);
+        }
+        return out.join(' · ');
+      };
+      return normalisiereMittel({
+        vocabulary: sammle('vocabulary'),
+        grammar: sammle('grammar'),
+        pronunciation: sammle('pronunciation'),
+        other: sammle('other'),
+      });
+    })();
+
+    const zielaufgabe = normalisiereAufgabe(seq?.finalTask);
 
     const nextDb = deepClone(db);
     if (!nextDb.sequenceTemplates) nextDb.sequenceTemplates = {};
     const id = uid();
-    nextDb.sequenceTemplates[id] = {
+    nextDb.sequenceTemplates[id] = normalisiereVorlage({
       id,
       name,
       subject,
       color: seq?.color || '',
       createdAt: new Date().toISOString(),
-      lessons
-    };
+      lessons,
+      competencies: kompetenzen,
+      primaryCompetency: String(seq?.primaryCompetency || '').trim() || (kompetenzen[0] || ''),
+      finalTask: zielaufgabe,
+      // Das Zielprodukt steht in der Zielaufgabe: "Was entsteht dabei?"
+      targetProduct: String(zielaufgabe.outcome || '').trim(),
+      languageResources: mittel,
+      origin: 'sequence',
+    }, id);
     persist(nextDb);
     return id;
+  };
+
+  /* Beschreibende Angaben einer Vorlage ändern. Die Einheiten selbst
+     werden dabei nie angefasst. */
+  const updateTemplate = (templateId, patch) => {
+    const nextDb = deepClone(db);
+    const t = nextDb.sequenceTemplates?.[templateId];
+    if (!t) return;
+    nextDb.sequenceTemplates[templateId] = normalisiereVorlage({ ...t, ...(patch || {}) }, templateId);
+    persist(nextDb);
   };
 
   const deleteTemplate = (templateId) => {
@@ -5468,6 +6601,28 @@ const deleteTodo = (id) => {
         if (!overwrite && !isLessonEmpty(l)) continue;
 
         const bp = blueprints[bpIndex];
+
+        /* Eine Einheit kann länger als eine Stunde sein. Sie bekommt
+           die Plätze, die sie braucht – und nur dann, wenn dort auch
+           wirklich Unterricht derselben Lerngruppe liegt. Ist kein
+           Platz für die volle Dauer, wird die Einheit als Einzelstunde
+           eingesetzt statt gar nicht: der Verlaufsplan bleibt erhalten,
+           die Lehrkraft kann anschliessend verbinden. */
+        const gewuenschteSpanne = normalisiereBlockSpan(bp.blockSpan);
+        let spanne = 1;
+        for (let n = gewuenschteSpanne; n > 1; n--){
+          if (slotIndex + n > slotsPerDay) continue;
+          const passt = Array.from({ length: n - 1 }, (_, i)=> slotIndex + 1 + i).every(si => {
+            const nachbar = w.lessons?.[keyOf(dayIndex, si)];
+            if (!nachbar) return false;
+            const nl = normalizeLesson(nachbar);
+            if (blockSpanOf(nl) > 1) return false;
+            if (((nl.classGroup || '').trim()) !== group) return false;
+            if (((nl.subject || '').trim()) !== subj) return false;
+            return overwrite || isLessonEmpty(nl);
+          });
+          if (passt) { spanne = n; break; }
+        }
         const nextLesson = normalizeLesson(l);
         nextLesson.classGroup = group;
         nextLesson.subject = (l.subject || '').trim() || subj;
@@ -5475,7 +6630,15 @@ const deleteTodo = (id) => {
         nextLesson.room = (l.room || '').trim();
         nextLesson.topic = bp.topic || '';
         nextLesson.objectives = bp.objectives || '';
-        nextLesson.phases = normalizePhases((bp.phases || []).map(p => neuePhasenIds(p)));
+        nextLesson.blockSpan = spanne;
+        /* Passt die Einheit nicht in ihrer geplanten Länge, behalten
+           die Phasen wenigstens ihr Verhältnis zueinander. */
+        const bpSpanne = normalisiereBlockSpan(bp.blockSpan);
+        const bpPhasen = (bp.phases || []).map(p => neuePhasenIds(p));
+        nextLesson.phases = normalizePhases(
+          spanne === bpSpanne ? bpPhasen : skalierePhasen(bpPhasen, TOTAL_MIN * bpSpanne, TOTAL_MIN * spanne),
+          TOTAL_MIN * spanne
+        );
         nextLesson.homework = bp.homework || '';
         nextLesson.notes = bp.notes || '';
         nextLesson.competencies = Array.isArray(bp.competencies) ? bp.competencies : [];
@@ -5490,6 +6653,9 @@ const deleteTodo = (id) => {
 
         if (!w.lessons) w.lessons = {};
         w.lessons[k] = nextLesson;
+        // Die mit belegten Plätze tragen keinen eigenen Eintrag mehr.
+        for (let i = 1; i < spanne; i++) delete w.lessons[keyOf(dayIndex, slotIndex + i)];
+        slotIndex += spanne - 1;
         inserted += 1;
         bpIndex += 1;
       }
@@ -5528,12 +6694,54 @@ const doExportDocx = async (html, suggestedName) => {
   else if (saved) showToast('Word-Datei gespeichert.', { tone: 'success' });
 };
 
+  /* Eine Sequenz ausgeben.
+
+     Vorher stand diese Rechnung zweimal fast gleich in der
+     Sequenzverwaltung – einmal für PDF, einmal für Word. Jetzt gibt es
+     sie einmal; das Ziel ist ein Parameter. */
+  const exportSequenceAs = (sequenceId, ziel = 'pdf') => {
+    const seq = sequences?.[sequenceId];
+    if (!seq) return;
+    const raus = (ziel === 'docx') ? doExportDocx : doExportPdf;
+    if (typeof raus !== 'function') {
+      showToast(`${ziel === 'docx' ? 'Word' : 'PDF'}-Export ist nur in der Desktop-App verfügbar.`, { tone: 'warning' });
+      return;
+    }
+    try {
+      const occ = [];
+      for (const [ws, w] of Object.entries(db?.weeks || {})) {
+        for (const [k, raw] of Object.entries(w?.lessons || {})) {
+          if (!raw) continue;
+          if ((raw.sequenceId || '') !== sequenceId) continue;
+          const parts = String(k).split('-');
+          const dayIndex = Number(parts[0]);
+          const slotIndex = Number(parts[1]);
+          if (!Number.isFinite(dayIndex) || !Number.isFinite(slotIndex)) continue;
+          const dateISO = toISODate(addDays(fromISODate(ws), dayIndex));
+          const lesson = normalizeLesson(raw);
+          occ.push({ weekStart: ws, dayIndex, slotIndex, dateISO, lesson, group: lesson.classGroup || '' });
+        }
+      }
+      occ.sort((a,b)=> a.dateISO.localeCompare(b.dateISO) || (a.slotIndex - b.slotIndex) || (a.group||'').localeCompare(b.group||''));
+
+      const html = buildSequencePdfHtml({
+        sequence: seq,
+        occurrences: occ,
+        schoolCalendar,
+        groupColors: db?.groupColors || {}
+      });
+      const safe = String(seq.name || 'Sequenz').replace(/[\\/:*?"<>|]/g, '_').trim() || 'Sequenz';
+      raus(html, ziel === 'docx' ? `Sequenz_${safe}.doc` : `Sequenz_${safe}.pdf`);
+    } catch {}
+  };
+
   // Render main content in a readable way (avoids a very long nested ternary inside JSX,
   // which is easy to break and hard to maintain).
   const mainContent = (() => {
     if (view.name === 'week') {
       return (
         <WeekView
+          readOnly={imArchiv}
           weekStart={view.weekStart}
           week={week}
           sequences={sequences}
@@ -5553,6 +6761,8 @@ const doExportDocx = async (html, suggestedName) => {
           onCutLesson={(dayIndex, slotIndex)=>cutLessonToClipboard(view.weekStart, dayIndex, slotIndex)}
           onPasteLesson={(dayIndex, slotIndex)=>pasteLessonFromClipboard(view.weekStart, dayIndex, slotIndex)}
           onLessonDnd={(payload)=>moveOrCopyLessonByDnd(payload)}
+          onJoinBlock={(dayIndex, slotIndex)=>joinLessonsIntoBlock(view.weekStart, dayIndex, slotIndex)}
+          onSplitBlock={(dayIndex, slotIndex)=>splitBlockAt(view.weekStart, dayIndex, slotIndex)}
           onOpenLesson={(dayIndex, slotIndex)=>{
             setView({ name:'lesson', weekStart: view.weekStart, dayIndex, slotIndex });
           }}
@@ -5572,6 +6782,7 @@ const doExportDocx = async (html, suggestedName) => {
     if (view.name === 'macro') {
       return (
         <MacroView
+          readOnly={imArchiv}
           db={db}
           view={view}
           sequences={sequences}
@@ -5624,6 +6835,10 @@ const doExportDocx = async (html, suggestedName) => {
           onCreateBar={(payload)=>createYearBar(payload)}
           onUpdateBar={(id, patch)=>updateYearBar(id, patch)}
           onDeleteBar={(id)=>deleteYearBar(id)}
+          readOnly={imArchiv}
+          onClearLane={(laneKey)=>clearYearPlanLane(laneKey)}
+          onRemoveLane={(laneKey)=>removeYearPlanLane(laneKey)}
+          onRenameLane={(laneKey)=>renameYearPlanLane(laneKey)}
           onSetView={setView}
         />
       );
@@ -5641,6 +6856,7 @@ const doExportDocx = async (html, suggestedName) => {
           subjectSuggestions={subjectSuggestions}
           onHideClassGroupSuggestion={(label)=>hideSuggestion('classGroup', label)}
           onHideSubjectSuggestion={(label)=>hideSuggestion('subject', label)}
+          onUpdateTemplate={(id, patch)=>updateTemplate(id, patch)}
           onCreateTemplateFromSequence={(sequenceId)=>{
             const seq = sequences?.[sequenceId];
             askPrompt({
@@ -5664,7 +6880,7 @@ const doExportDocx = async (html, suggestedName) => {
           onInsert={(payload)=>{
             const res = insertTemplateIntoPlan(payload);
             if (res.inserted > 0) {
-              showToast(`Eingefügt: ${res.inserted} Stunde(n)` + (res.missing ? ` · nicht platziert: ${res.missing}` : ''), { tone: 'success' });
+              showToast(`Sequenz übernommen: ${res.inserted} ${res.inserted === 1 ? 'Einheit' : 'Einheiten'}` + (res.missing ? ` · nicht platziert: ${res.missing}` : ''), { tone: 'success' });
               // Jump to macro plan around start
               setView({ name:'macro', weekStart: toISODate(startOfWeekMonday(fromISODate(payload.startISO))), startISO: payload.startISO, rangeDays: 28 });
             } else {
@@ -5674,15 +6890,34 @@ const doExportDocx = async (html, suggestedName) => {
         />
       );
     }
+    if (view.name === 'archives') {
+      return (
+        <ArchiveOverviewView
+          /* Immer aus den ECHTEN Daten: die Archivliste gehört nicht zu
+             einem einzelnen Schuljahr. */
+          archive={liveDb?.schoolYearArchives || []}
+          onOpen={(id)=>oeffneArchiv(id)}
+          onExport={(id)=>exportiereArchiv(id)}
+          onDelete={(id)=>loescheArchiv(id)}
+          onBack={()=>setView({ name:'calendar', weekStart: view.weekStart })}
+        />
+      );
+    }
     if (view.name === 'todos') {
       return (
         <TodoView
+          readOnly={imArchiv}
           weekStart={view.weekStart}
           todos={todos}
           onAddTodo={addTodo}
           onUpdateTodo={updateTodo}
           onDeleteTodo={deleteTodo}
-          onBack={()=>setView({ ...lastMainView.current })}
+          /* Im Archiv führt der Rückweg in die Woche des archivierten
+             Jahres – die zuletzt besuchte Hauptansicht gehört zum
+             laufenden Schuljahr. */
+          onBack={()=>setView(imArchiv
+            ? { name:'week', weekStart: view.weekStart }
+            : { ...lastMainView.current })}
         />
       );
     }
@@ -5740,6 +6975,8 @@ const doExportDocx = async (html, suggestedName) => {
             name:'macro', weekStart: view.weekStart,
             startISO: zeilen[0]?.weekStart || view.weekStart, rangeDays: 84,
           })}
+          onExportDocx={()=>exportSequenceAs(view.sequenceId, 'docx')}
+          onExportPdf={()=>exportSequenceAs(view.sequenceId, 'pdf')}
         />
       );
     }
@@ -5808,7 +7045,9 @@ const doExportDocx = async (html, suggestedName) => {
       return (
         <SchoolCalendarView
           calendar={schoolCalendar}
-          archivesCount={(db.schoolYearArchives || []).length}
+          readOnly={imArchiv}
+          archivesCount={(liveDb?.schoolYearArchives || []).length}
+          onOpenArchives={()=>setView({ name:'archives', weekStart: view.weekStart })}
           onStartNewSchoolYear={()=>openNewSchoolYearDialog({ reason:'manual' })}
           onUpdate={(updater)=>{
             const nextDb = deepClone(db);
@@ -5820,14 +7059,22 @@ const doExportDocx = async (html, suggestedName) => {
       );
     }
 
+    /* Ein von einer Doppelstunde abgedeckter Stundenplatz trägt keine
+       eigene Planung. Wird er trotzdem angesteuert – etwa aus einer
+       Zuordnung im Pocket-Import –, öffnet sich die Stunde, zu der er
+       gehört, statt einer zweiten Planung auf demselben Platz. */
+    const stundenBesitzer = blockOwnerAt(db?.weeks?.[view.weekStart], view.dayIndex, view.slotIndex);
+    const lessonSlotIndex = (stundenBesitzer && stundenBesitzer.covered) ? stundenBesitzer.slotIndex : view.slotIndex;
+
     // default: Einzelstunde
     return (
       <LessonView
+        readOnly={imArchiv}
         weekStart={view.weekStart}
         dayIndex={view.dayIndex}
-        slotIndex={view.slotIndex}
-        lesson={getLessonAt(view.weekStart, view.dayIndex, view.slotIndex)}
-        exists={hasLessonAt(view.weekStart, view.dayIndex, view.slotIndex)}
+        slotIndex={lessonSlotIndex}
+        lesson={getLessonAt(view.weekStart, view.dayIndex, lessonSlotIndex)}
+        exists={hasLessonAt(view.weekStart, view.dayIndex, lessonSlotIndex)}
         sequences={sequences}
         appSettings={appSettings}
         onUpdateAppSettings={updateAppSettings}
@@ -5841,8 +7088,22 @@ const doExportDocx = async (html, suggestedName) => {
         offenePunkte={offenePunkteDerStunde}
         onResolveCarryOver={resolveCarryOver}
         onOpenReview={()=>setView({
-          name:'review', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+          name:'review', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: lessonSlotIndex,
         })}
+        onJoinBlock={(entwurf)=>joinLessonsIntoBlock(view.weekStart, view.dayIndex, lessonSlotIndex, entwurf)}
+        onSplitBlock={(entwurf)=>splitBlockAt(view.weekStart, view.dayIndex, lessonSlotIndex, entwurf)}
+        kannVerbinden={(()=>{
+          const w = db?.weeks?.[view.weekStart];
+          const l = w?.lessons?.[keyOf(view.dayIndex, lessonSlotIndex)];
+          if (!l) return false;
+          const span = blockSpanOf(l);
+          if (span >= MAX_BLOCK_SPAN) return false;
+          if ((lessonSlotIndex + span) >= (w.slotsPerDay || 6)) return false;
+          const b = w.lessons?.[keyOf(view.dayIndex, lessonSlotIndex + span)];
+          if (!b) return false;
+          if (span + blockSpanOf(b) > MAX_BLOCK_SPAN) return false;
+          return passenZusammen(l, b);
+        })()}
         onRememberSpeechAct={rememberSpeechAct}
         onHideSpeechActSuggestion={(label)=>hideSuggestion('speechAct', label)}
         onRememberScaffoldLabel={rememberScaffoldLabel}
@@ -5867,9 +7128,9 @@ const doExportDocx = async (html, suggestedName) => {
         onCreateSequence={createSequence}
           onRequestCreateSequence={openCreateSequenceModal}
         onRememberCompetency={rememberCompetency}
-        onUpdateLesson={(nextLesson)=>updateLessonAt(view.weekStart, view.dayIndex, view.slotIndex, nextLesson)}
+        onUpdateLesson={(nextLesson)=>updateLessonAt(view.weekStart, view.dayIndex, lessonSlotIndex, nextLesson)}
         getSeqProgress={(sequenceId)=> sequenceProgress(db, sequenceId, {
-          weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
+          weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: lessonSlotIndex,
         })}
         onRememberSocialForm={rememberSocialForm}
         onRememberPhaseName={rememberPhaseName}
@@ -5892,7 +7153,7 @@ const doExportDocx = async (html, suggestedName) => {
           setView({ name:'year', weekStart: view.weekStart, focusISO: String(focusISO || view.weekStart) });
         }}
         onDeleteLesson={() => {
-          deleteLessonAt(view.weekStart, view.dayIndex, view.slotIndex);
+          deleteLessonAt(view.weekStart, view.dayIndex, lessonSlotIndex);
           setView({ ...lastMainView.current });
         }}
       />
@@ -5947,11 +7208,15 @@ const doExportDocx = async (html, suggestedName) => {
                 <input className="input" style={{width:170}} type="date" min={minDate} max={maxDate} value={selectedDate} onChange={(e)=>onSelectWeekDate(e.target.value)} />
                 <button className="btn" title="Nächste Woche" aria-label="Nächste Woche" onClick={()=>goWeekDelta(1)}><ChevronRight {...ICON} /></button>
               </div>
-              <button className="btn" onClick={()=>setShowWeekCopyDialog(true)}>In nächste Woche übernehmen</button>
-              {capabilities.backupFiles ? (
+              {!imArchiv ? (
                 <>
-                  <button className="btn" onClick={()=>exportBackup()}>Backup exportieren</button>
-                  <button className="btn" onClick={()=>importBackup()}>Backup importieren</button>
+                  <button className="btn" onClick={()=>setShowWeekCopyDialog(true)}>In nächste Woche übernehmen</button>
+                  {capabilities.backupFiles ? (
+                    <>
+                      <button className="btn" onClick={()=>exportBackup()}>Backup exportieren</button>
+                      <button className="btn" onClick={()=>importBackup()}>Backup importieren</button>
+                    </>
+                  ) : null}
                 </>
               ) : null}
             </>
@@ -5959,9 +7224,24 @@ const doExportDocx = async (html, suggestedName) => {
         </div>
       </div>
 
-      <div className="appBody">
+      {/* Dauerhaft sichtbar, solange ein Archiv offen ist. Es steht über
+          allem anderen, damit niemand vergisst, wo er gerade ist. */}
+      {imArchiv ? (
+        <div className="archivBand" role="status">
+          <div className="archivBandText">
+            <span className="archivBandTitel"><Archive {...ICON_SM} /> Archivansicht · {archiv?.label || 'Schuljahr'}</span>
+            <span className="archivBandHinweis">Dieses Schuljahr ist archiviert. Änderungen sind deaktiviert.</span>
+          </div>
+          <button className="btn" onClick={verlasseArchiv}>
+            <ArrowLeft {...ICON_SM} /> Zurück zum aktuellen Schuljahr
+          </button>
+        </div>
+      ) : null}
+
+      <div className={`appBody${imArchiv ? ' appBody--archiv' : ''}`}>
         {!isHelpOnlyWindow ? (
           <Sidebar
+            imArchiv={imArchiv}
             aktiv={view.name}
             onNavigate={(ziel)=>{
               const ws = view.weekStart;
@@ -6016,6 +7296,7 @@ const doExportDocx = async (html, suggestedName) => {
         placeholder={promptState?.placeholder || ''}
         initialValue={promptState?.initialValue || ''}
         confirmLabel={promptState?.confirmLabel || 'Übernehmen'}
+        erlaubeLeer={Boolean(promptState?.erlaubeLeer)}
         onCancel={()=>{ promptState?.onCancel?.(); setPromptState(null); }}
         onConfirm={(v)=>{ const c = promptState; setPromptState(null); c?.onConfirm?.(v); }}
       />
@@ -6045,7 +7326,7 @@ const doExportDocx = async (html, suggestedName) => {
         newEndISO={schoolYearDialog.newEndISO}
         keepColors={schoolYearDialog.keepColors}
         keepTodos={schoolYearDialog.keepTodos}
-        archivesCount={(db.schoolYearArchives || []).length}
+        archivesCount={(liveDb?.schoolYearArchives || []).length}
         onChange={(patch)=>setSchoolYearDialog(prev=>({ ...prev, ...patch }))}
         onClose={closeSchoolYearDialog}
         onSnooze={()=>snoozeSchoolYearDialog(7)}
@@ -6077,6 +7358,7 @@ const doExportDocx = async (html, suggestedName) => {
           onCreate={(name)=>createSequence(name)}
           onUpdate={(id, patch)=>updateSequence(id, patch)}
           onDelete={(id)=>deleteSequence(id)}
+          onDuplicate={(id)=>duplicateSequence(id)}
           competencySuggestions={sichtbareKompetenzVorschlaege}
           languageMode={languageMode}
           competencyModel={competencyModel}
@@ -6102,81 +7384,8 @@ const doExportDocx = async (html, suggestedName) => {
               if (tid) showToast('Vorlage gespeichert – du findest sie in der Bibliothek.');
             });
           }}
-          onExportPdfSequence={(id)=>{
-            // re-use the same export logic as in Makro-Plan
-            try {
-              const seq = sequences?.[id];
-              if (!seq) return;
-              if (typeof doExportPdf !== 'function') {
-                showToast('PDF-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
-                return;
-              }
-
-              const occ = [];
-              const weeks = db?.weeks || {};
-              for (const [ws, w] of Object.entries(weeks)) {
-                const lessons = w?.lessons || {};
-                for (const [k, raw] of Object.entries(lessons)) {
-                  if (!raw) continue;
-                  if ((raw.sequenceId || '') !== id) continue;
-                  const parts = String(k).split('-');
-                  const dayIndex = Number(parts[0]);
-                  const slotIndex = Number(parts[1]);
-                  if (!Number.isFinite(dayIndex) || !Number.isFinite(slotIndex)) continue;
-                  const dateISO = toISODate(addDays(fromISODate(ws), dayIndex));
-                  const lesson = normalizeLesson(raw);
-                  occ.push({ weekStart: ws, dayIndex, slotIndex, dateISO, lesson, group: lesson.classGroup || '' });
-                }
-              }
-              occ.sort((a,b)=> a.dateISO.localeCompare(b.dateISO) || (a.slotIndex - b.slotIndex) || (a.group||'').localeCompare(b.group||''));
-
-              const html = buildSequencePdfHtml({
-                sequence: seq,
-                occurrences: occ,
-                schoolCalendar,
-                groupColors: db?.groupColors || {}
-              });
-              const safe = String(seq.name || 'Sequenz').replace(/[\\/:*?"<>|]/g, '_').trim() || 'Sequenz';
-              doExportPdf(html, `Sequenz_${safe}.pdf`);
-            } catch {}
-          }}
-          onExportDocxSequence={(id)=>{
-            try {
-              const seq = sequences?.[id];
-              if (!seq) return;
-              if (typeof doExportDocx !== 'function') {
-                showToast('Word-Export ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
-                return;
-              }
-
-              const occ = [];
-              const weeks = db?.weeks || {};
-              for (const [ws, w] of Object.entries(weeks)) {
-                const lessons = w?.lessons || {};
-                for (const [k, raw] of Object.entries(lessons)) {
-                  if (!raw) continue;
-                  if ((raw.sequenceId || '') !== id) continue;
-                  const parts = String(k).split('-');
-                  const dayIndex = Number(parts[0]);
-                  const slotIndex = Number(parts[1]);
-                  if (!Number.isFinite(dayIndex) || !Number.isFinite(slotIndex)) continue;
-                  const dateISO = toISODate(addDays(fromISODate(ws), dayIndex));
-                  const lesson = normalizeLesson(raw);
-                  occ.push({ weekStart: ws, dayIndex, slotIndex, dateISO, lesson, group: lesson.classGroup || '' });
-                }
-              }
-              occ.sort((a,b)=> a.dateISO.localeCompare(b.dateISO) || (a.slotIndex - b.slotIndex) || (a.group||'').localeCompare(b.group||''));
-
-              const html = buildSequencePdfHtml({
-                sequence: seq,
-                occurrences: occ,
-                schoolCalendar,
-                groupColors: db?.groupColors || {}
-              });
-              const safe = String(seq.name || 'Sequenz').replace(/[\\/:*?"<>|]/g, '_').trim() || 'Sequenz';
-              doExportDocx(html, `Sequenz_${safe}.doc`);
-            } catch {}
-          }}
+          onExportPdfSequence={(id)=>exportSequenceAs(id, 'pdf')}
+          onExportDocxSequence={(id)=>exportSequenceAs(id, 'docx')}
         />
       )}
     </div>
@@ -6185,12 +7394,54 @@ const doExportDocx = async (html, suggestedName) => {
 }
 
 function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO, groupColors, duties, supervisionSuggestions, onHideSupervisionSuggestion = ()=>{},
+  readOnly = false,
   lessonClipboard, onCopyLesson, onCutLesson, onPasteLesson, onLessonDnd, onReviewLesson,
+  onJoinBlock, onSplitBlock,
   onOpenGroupColorPalette, onOpenLesson, onOpenMacro, onOpenTodos, onChangeSlots, onDeleteLesson, onUpsertDuty, onDeleteDuty, onExportPdf, onExportDocx }){
   const slots = week.slotsPerDay || 6;
   const dutyMap = duties || week.duties || {};
   const [dutyEditor, setDutyEditor] = useState(null);
   const [dropKey, setDropKey] = useState(null);
+
+  /* Feste Zeilen statt automatischer Platzierung.
+
+     Nötig für Doppelstunden: eine Zelle, die zwei Stundenplätze belegt,
+     überspannt drei Rasterzeilen (Stunde – Aufsichtsstreifen – Stunde).
+     Mit automatischer Platzierung würden die übrigen Zellen dabei
+     verrutschen; mit fester Zeilen-/Spaltenangabe steht jede Zelle da,
+     wo sie hingehört. */
+  const kopfZeileNr = 1;
+  const aufsichtZeileNr = (pos) => 2 + pos * 2;
+  const stundenZeileNr = (slotIndex) => 3 + slotIndex * 2;
+  const spalteNr = (dayIndex) => dayIndex + 2;
+
+  /* Wer belegt diesen Platz? Entweder er trägt selbst eine Stunde oder
+     eine Doppelstunde weiter oben deckt ihn ab. */
+  const besitzerVon = (dayIndex, slotIndex) => blockOwnerAt(week, dayIndex, slotIndex);
+
+  /* Liegt dieser Aufsichtsstreifen INNERHALB einer Doppelstunde? Dann
+     gibt es dort keine Pause und auch kein Feld dafür. */
+  const inDoppelstunde = (dayIndex, pos) => {
+    if (pos <= 0 || pos >= slots) return false;
+    const o = besitzerVon(dayIndex, pos);
+    return Boolean(o && o.covered);
+  };
+
+  /* Lässt sich die Stunde an diesem Platz mit der folgenden verbinden?
+     Beide müssen existieren, zur selben Lerngruppe gehören und der
+     Folgeplatz muss frei von einer anderen Doppelstunde sein. */
+  const verbindbarAb = (dayIndex, slotIndex) => {
+    const l = week.lessons?.[keyOf(dayIndex, slotIndex)];
+    if (!l) return false;
+    const span = blockSpanOf(l);
+    const naechster = slotIndex + span;
+    if (naechster >= slots) return false;
+    if (span >= MAX_BLOCK_SPAN) return false;
+    const b = week.lessons?.[keyOf(dayIndex, naechster)];
+    if (!b) return false;
+    if (span + blockSpanOf(b) > MAX_BLOCK_SPAN) return false;
+    return passenZusammen(l, b);
+  };
 
   const dutyLabel = (pos) => {
     if (pos === 0) return 'vor der 1. Stunde';
@@ -6199,6 +7450,8 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
   };
 
   const openDutyEditor = (dayIndex, pos) => {
+    // In der Archivansicht wird die Aufsicht nur angezeigt.
+    if (readOnly) return;
     setDutyEditor({ dayIndex, pos });
   };
 
@@ -6214,21 +7467,25 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
     // One row of small red bars between lessons (or before first / after last)
     return (
       <React.Fragment key={`dutyrow-${pos}`}>
-        <div className="dutyRowLabel" title={dutyLabel(pos)}>{dutyRowLabelShort(pos)}</div>
+        <div className="dutyRowLabel" style={{gridColumn:1, gridRow: aufsichtZeileNr(pos)}} title={dutyLabel(pos)}>{dutyRowLabelShort(pos)}</div>
         {DAYS.map((_, dayIndex)=>{
           const dateISO = toISODate(addDays(fromISODate(weekStart), dayIndex));
           const info = getDayInfo(dateISO, schoolCalendar);
           const dutyKey = `${dayIndex}-${pos}`;
           const duty = dutyMap[dutyKey];
+          // Innerhalb einer Doppelstunde gibt es keinen Streifen: die
+          // Stunde läuft dort durch.
+          if (inDoppelstunde(dayIndex, pos)) return null;
           return (
             <div
               key={`duty-${pos}-${dayIndex}`}
+              style={{gridColumn: spalteNr(dayIndex), gridRow: aufsichtZeileNr(pos)}}
               className={`dutyCell ${duty ? 'dutyCell--has' : ''} ${info.isOff ? 'dayOffDutyCell' : ''}`}
               onClick={(e)=>{ e.stopPropagation(); openDutyEditor(dayIndex, pos); }}
-              title={duty ? `Aufsicht: ${duty.title}` : 'Aufsicht eintragen'}
-              aria-label={duty ? `Aufsicht bearbeiten: ${duty.title}` : 'Aufsicht eintragen'}
-              role="button"
-              tabIndex={0}
+              title={duty ? `Aufsicht: ${duty.title}` : (readOnly ? '' : 'Aufsicht eintragen')}
+              aria-label={duty ? `Aufsicht: ${duty.title}` : (readOnly ? 'Keine Aufsicht' : 'Aufsicht eintragen')}
+              role={readOnly ? undefined : 'button'}
+              tabIndex={readOnly ? -1 : 0}
               onKeyDown={(e)=>{
                 if (e.key === 'Enter' || e.key === ' '){
                   e.preventDefault();
@@ -6236,7 +7493,7 @@ function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO,
                 }
               }}
             >
-              <span className="dutyCellPlus">{duty ? '' : '+'}</span>
+              <span className="dutyCellPlus">{(duty || readOnly) ? '' : '+'}</span>
             </div>
           );
         })}
@@ -6285,7 +7542,9 @@ const exportWeekDocx = () => {
       <div className="row wrap" style={{justifyContent:'space-between'}}>
         <div>
           <div style={{fontWeight:800, fontSize:16}}>Wochenübersicht</div>
-          <div className="muted small">Klicke auf eine Stunde, um in die Einzelstundenplanung zu zoomen.</div>
+          <div className="muted small">{readOnly
+            ? 'Archiviertes Schuljahr – klicke auf eine Stunde, um die Planung anzusehen.'
+            : 'Klicke auf eine Stunde, um in die Einzelstundenplanung zu zoomen.'}</div>
           <span className="badge" style={{marginTop:6}}>{formatWeekLabel(weekStart)}</span>
         </div>
         <div className="row" style={{gap:8}}>
@@ -6297,14 +7556,17 @@ const exportWeekDocx = () => {
             <button className="btn iconBtn-pdf" onClick={exportWeekPdf} title="Als PDF speichern"><FileDown {...ICON_SM} /> PDF Woche</button>
           ) : null}
           <span className="muted small">Stunden pro Tag:</span>
-          <input className="input" style={{width:90}} type="number" min={1} max={12} value={slots} onChange={(e)=>onChangeSlots(Number(e.target.value||slots))} />
+          <input className="input" style={{width:90}} type="number" min={1} max={12} value={slots}
+                 disabled={readOnly}
+                 title={readOnly ? 'In der Archivansicht nicht änderbar' : ''}
+                 onChange={(e)=>onChangeSlots(Number(e.target.value||slots))} />
         </div>
       </div>
 
       <div style={{height:12}} />
 
       <div className="grid">
-        <div />
+        <div style={{gridColumn:1, gridRow: kopfZeileNr}} />
         {DAYS.map((d, dayIndex) => {
           const dateISO = toISODate(addDays(fromISODate(weekStart), dayIndex));
           const info = getDayInfo(dateISO, schoolCalendar);
@@ -6312,7 +7574,8 @@ const exportWeekDocx = () => {
           const tc = todoCountByISO.get(dateISO) || 0;
           const isToday = (dateISO === todayISO);
           return (
-            <div key={d} className={`cellHeader ${info.isOff ? 'dayOffHeader' : ''}`} title={label}>
+            <div key={d} style={{gridColumn: spalteNr(dayIndex), gridRow: kopfZeileNr}}
+                 className={`cellHeader ${info.isOff ? 'dayOffHeader' : ''}`} title={label}>
               <div style={{fontWeight:700}}>{d}</div>
               <div className="muted small">{formatDateDE(dateISO)}</div>
               {tc ? (
@@ -6328,14 +7591,23 @@ const exportWeekDocx = () => {
             <React.Fragment key={slotIndex}>
               {slotIndex === 0 ? renderDutyRow(0) : null}
 
-              <div className="slotLabel">{slotIndex+1}. Stunde</div>
+              <div className="slotLabel" style={{gridColumn:1, gridRow: stundenZeileNr(slotIndex)}}>{slotIndex+1}. Stunde</div>
               {Array.from({length: DAYS.length}).map((__, dayIndex)=>{
                 const dateISO = toISODate(addDays(fromISODate(weekStart), dayIndex));
                 const info = getDayInfo(dateISO, schoolCalendar);
                 const dayLabel = info.vac ? `Ferien: ${info.vac.name || ''}` : (info.fd ? `Schulfrei: ${info.fd.name || ''}` : '');
                 const k = keyOf(dayIndex, slotIndex);
                 const l = week.lessons?.[k];
-                const title = l?.subject ? l.subject : (l?.topic ? l.topic : 'Planen…');
+                /* Ein von einer Doppelstunde abgedeckter Platz bekommt
+                   keine eigene Zelle – die Stunde darüber reicht bis
+                   hierher. Der Stundenplatz selbst bleibt links in der
+                   Zeitachse sichtbar. */
+                if (!l && istAbgedeckt(week, dayIndex, slotIndex)) return null;
+                const span = l ? Math.min(blockSpanOf(l), Math.max(1, slots - slotIndex)) : 1;
+                const istBlock = span > 1;
+                const zeilenSpan = span * 2 - 1;
+                const kannVerbinden = verbindbarAb(dayIndex, slotIndex);
+                const title = l?.subject ? l.subject : (l?.topic ? l.topic : (readOnly ? 'Ohne Titel' : 'Planen…'));
                 const sub = l?.classGroup || '';
                 const seq = l?.sequenceId ? (sequences?.[l.sequenceId] || null) : null;
                 const gKey = l ? groupKey(l.classGroup, l.subject) : '';
@@ -6347,12 +7619,20 @@ const exportWeekDocx = () => {
                 return (
                   <div
                     key={k}
-                    style={cellStyle}
-                    className={`lessonCell ${info.isOff ? 'dayOffCell' : ''} ${gKey ? 'hasGroupColor' : ''} ${dropKey === k ? 'dropTarget' : ''}`}
-                    tabIndex={0}
-                    onClick={()=>onOpenLesson(dayIndex, slotIndex)}
-                    title={dayLabel ? `${dayLabel} (trotzdem öffnen)` : (l ? 'Öffnen (ziehen zum Verschieben, Ctrl+Ziehen zum Kopieren)' : 'Öffnen')}
-                    draggable={!!l}
+                    style={{...(cellStyle || {}), gridColumn: spalteNr(dayIndex), gridRow: `${stundenZeileNr(slotIndex)} / span ${zeilenSpan}`}}
+                    className={`lessonCell ${info.isOff ? 'dayOffCell' : ''} ${gKey ? 'hasGroupColor' : ''} ${istBlock ? 'lessonCell--block' : ''} ${dropKey === k ? 'dropTarget' : ''} ${(readOnly && !l) ? 'lessonCell--leer' : ''}`}
+                    tabIndex={(readOnly && !l) ? -1 : 0}
+                    onClick={()=>{
+                      // Im Archiv gibt es an einem leeren Platz nichts anzusehen.
+                      if (readOnly && !l) return;
+                      onOpenLesson(dayIndex, slotIndex);
+                    }}
+                    title={dayLabel
+                      ? `${dayLabel}${(readOnly && !l) ? '' : ' (trotzdem öffnen)'}`
+                      : (l
+                        ? `${istBlock ? `${blockName(span)} · ${stundenBereichLabel(slotIndex, span)} · ` : ''}${readOnly ? 'Ansehen' : 'Öffnen (ziehen zum Verschieben, Ctrl+Ziehen zum Kopieren)'}`
+                        : (readOnly ? 'Keine Stunde eingetragen' : 'Öffnen'))}
+                    draggable={!!l && !readOnly}
                     onDragStart={(e)=>{
                       if (!l) return;
                       try {
@@ -6363,6 +7643,7 @@ const exportWeekDocx = () => {
                       } catch {}
                     }}
                     onDragOver={(e)=>{
+                      if (readOnly) return;
                       try {
                         const types = Array.from(e.dataTransfer.types || []);
                         if (!types.includes('application/x-prepybara-lesson')) return;
@@ -6372,6 +7653,7 @@ const exportWeekDocx = () => {
                     }}
                     onDragLeave={()=>{ if (dropKey === k) setDropKey(null); }}
                     onDrop={(e)=>{
+                      if (readOnly) return;
                       try {
                         const raw = e.dataTransfer.getData('application/x-prepybara-lesson');
                         if (!raw) return;
@@ -6385,7 +7667,8 @@ const exportWeekDocx = () => {
                     }}
                   >
 
-                    {(l || lessonClipboard) ? (
+                    {/* Werkzeuge sind Änderungen – im Archiv gibt es keine. */}
+                    {(!readOnly && (l || lessonClipboard)) ? (
                       <div className="cellTools" onClick={(e)=>e.stopPropagation()}>
                         {l ? (
                           <>
@@ -6407,6 +7690,21 @@ const exportWeekDocx = () => {
                               title="Nachbereiten"
                               aria-label="Stunde nachbereiten"
                             ><ClipboardCheck {...ICON_SM} /></button>
+                            {istBlock ? (
+                              <button
+                                className="iconBtn cellTool"
+                                onClick={()=>onSplitBlock?.(dayIndex, slotIndex)}
+                                title={`${blockName(span)} wieder in Einzelstunden trennen`}
+                                aria-label="Doppelstunde trennen"
+                              ><Unlink {...ICON_SM} /></button>
+                            ) : kannVerbinden ? (
+                              <button
+                                className="iconBtn cellTool"
+                                onClick={()=>onJoinBlock?.(dayIndex, slotIndex)}
+                                title="Mit der folgenden Stunde als Doppelstunde verbinden"
+                                aria-label="Als Doppelstunde verbinden"
+                              ><Link2 {...ICON_SM} /></button>
+                            ) : null}
                           </>
                         ) : null}
                         {lessonClipboard ? (
@@ -6431,7 +7729,7 @@ const exportWeekDocx = () => {
                         ) : null}
                       </div>
                     ) : null}
-                    {gKey ? (
+                    {(gKey && !readOnly) ? (
                       <button
                         className="groupColorChip groupColorChip--corner"
                         style={{background: surfaceColor(gColor)}}
@@ -6443,10 +7741,17 @@ const exportWeekDocx = () => {
                         aria-label="Farbe der Lerngruppe ändern"
                       />
                     ) : null}
-                    <div className="title">{title || 'Planen…'}</div>
+                    <div className="title">{l ? title : (readOnly ? '' : 'Planen…')}</div>
                     <div className="sub">{sub}</div>
+                    {istBlock ? (
+                      <span className="blockBadge" title={`${stundenBereichLabel(slotIndex, span)} · ${TOTAL_MIN * span} Minuten am Stück`}>
+                        <Link2 {...ICON_SM} /> {blockName(span)} · {stundenBereichLabel(slotIndex, span)}
+                      </span>
+                    ) : null}
                     {seq ? <span className="badge" style={{borderColor: lineColor(seq.color), color: textColor(seq.color)}}>Sequenz: {seq.name}</span> : null}
-                    {l?.topic ? <span className="badge">Thema: {l.topic}</span> : <span className="badge">Noch kein Thema</span>}
+                    {l?.topic
+                      ? <span className="badge">Thema: {l.topic}</span>
+                      : (l || !readOnly) ? <span className="badge">Noch kein Thema</span> : null}
                     {(()=>{
                       /* Dezentes Kennzeichen, kein Warnsymbol: ein Haken für
                          nachbereitet, ein Punkt für noch Vorgemerktes. */
@@ -6499,7 +7804,120 @@ const exportWeekDocx = () => {
   );
 }
 
-function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archivesCount = 0 }){
+/* Die Übersicht über die archivierten Schuljahre.
+
+   Sie liest nur: jede Karte zeigt, was in dem Abzug steckt, und
+   bietet an, ihn anzusehen oder auszugeben. Geöffnet wird immer eine
+   Ansicht, nie ein Rückschreiben in die aktuellen Daten. */
+function ArchiveOverviewView({ archive, onOpen, onExport, onDelete, onBack }){
+  const liste = useMemo(()=>{
+    const arr = Array.isArray(archive) ? [...archive] : [];
+    // Neuestes zuerst: erst nach Archivierungszeitpunkt, dann nach Schuljahresende.
+    arr.sort((a,b)=> String(b?.archivedAt || '').localeCompare(String(a?.archivedAt || ''))
+      || String(b?.endISO || '').localeCompare(String(a?.endISO || '')));
+    return arr;
+  }, [archive]);
+
+  const zeitraum = (a)=>{
+    const s = String(a?.startISO || '').trim();
+    const e = String(a?.endISO || '').trim();
+    if (!s && !e) return 'Zeitraum nicht hinterlegt';
+    if (s && e) return `${formatDateDE(s)} – ${formatDateDE(e)}`;
+    return formatDateDE(s || e);
+  };
+
+  return (
+    <div className="card">
+      <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
+        <div>
+          <div style={{fontWeight:900, fontSize:16}}>Archivierte Schuljahre</div>
+          <div className="muted small">
+            Abgeschlossene Schuljahre. Sie lassen sich ansehen und ausgeben – geändert wird darin nichts.
+          </div>
+        </div>
+        <button className="btn" onClick={onBack}>Zum Schulkalender</button>
+      </div>
+
+      <div style={{height:14}} />
+
+      {liste.length === 0 ? (
+        <EmptyState
+          text="Noch kein Schuljahr archiviert. Beim Start eines neuen Schuljahres wird das bisherige hier abgelegt."
+        />
+      ) : (
+        <div className="archivListe">
+          {liste.map(a => {
+            const k = archivKennzahlen(a);
+            const bereiche = archivBereiche(a);
+            const fehlend = [
+              bereiche.wochen ? null : 'Wochenplanung',
+              bereiche.sequenzen ? null : 'Sequenzen',
+              bereiche.jahresplanung ? null : 'Jahresplanung',
+            ].filter(Boolean);
+            return (
+              <div key={a.id} className="archivKarte">
+                <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start', gap:12}}>
+                  <div style={{minWidth:0}}>
+                    <div className="row" style={{gap:8, alignItems:'center'}}>
+                      <Archive {...ICON_SM} />
+                      <span style={{fontWeight:900, fontSize:15}}>{a.label || 'Schuljahr'}</span>
+                    </div>
+                    <div className="muted small" style={{marginTop:2}}>{zeitraum(a)}</div>
+                    <div className="muted small">
+                      Archiviert am {formatDateDE(String(a.archivedAt || '').slice(0,10))}
+                    </div>
+                  </div>
+                  <div className="row wrap" style={{gap:8}}>
+                    <button className="btn primary" onClick={()=>onOpen(a.id)}>Ansehen</button>
+                    {capabilities.archiveFiles ? (
+                      <button className="btn" onClick={()=>onExport(a.id)} title="Als Backup-Datei speichern">
+                        <Download {...ICON_SM} /> Exportieren
+                      </button>
+                    ) : null}
+                    <KebabMenu
+                      titel={`Weitere Aktionen für ${a.label || 'dieses Schuljahr'}`}
+                      eintraege={[
+                        capabilities.archiveFiles ? {
+                          label: 'Als Backup-Datei speichern',
+                          icon: <Download {...ICON_SM} />,
+                          onSelect: ()=>onExport(a.id),
+                        } : null,
+                        capabilities.archiveFiles ? { trenner: true } : null,
+                        {
+                          label: 'Archiv endgültig löschen',
+                          icon: <Trash2 {...ICON_SM} />,
+                          tone: 'danger',
+                          onSelect: ()=>onDelete(a.id),
+                        },
+                      ].filter(Boolean)}
+                    />
+                  </div>
+                </div>
+
+                <div className="row wrap" style={{gap:6, marginTop:10}}>
+                  <span className="pill">{k.lerngruppen} {k.lerngruppen === 1 ? 'Lerngruppe' : 'Lerngruppen'}</span>
+                  <span className="pill">{k.stunden} {k.stunden === 1 ? 'Planung' : 'Planungen'}</span>
+                  <span className="pill">{k.sequenzen} {k.sequenzen === 1 ? 'Sequenz' : 'Sequenzen'}</span>
+                  {k.balken ? <span className="pill">{k.balken} {k.balken === 1 ? 'Balken' : 'Balken'} im Jahresplan</span> : null}
+                  {k.todos ? <span className="pill">{k.todos} {k.todos === 1 ? 'To-do' : 'To-dos'}</span> : null}
+                  <span className="pill">{k.wochen} {k.wochen === 1 ? 'Woche' : 'Wochen'}</span>
+                </div>
+
+                {fehlend.length ? (
+                  <div className="muted small" style={{marginTop:8}}>
+                    Nicht in diesem Abzug enthalten: {fehlend.join(', ')}. Das Archiv stammt aus einer früheren Fassung.
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archivesCount = 0, onOpenArchives, readOnly = false }){
   const cal = calendar || { schoolYear:{startISO:'', endISO:''}, lessonTimesEnabled:false, lessonTimes:[], vacations:[], freeDays:[], events:[] };
   const schoolYear = cal.schoolYear || { startISO:'', endISO:'' };
 
@@ -6640,7 +8058,9 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
       <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
         <div>
           <div style={{fontWeight:900, fontSize:16}}>Schulkalender</div>
-          <div className="muted small">Schuljahr, Ferien, schulfreie Tage und Termine – inklusive ICS-Import.</div>
+          <div className="muted small">{readOnly
+            ? 'Archiviertes Schuljahr – Ferien, schulfreie Tage und Termine werden nur angezeigt.'
+            : 'Schuljahr, Ferien, schulfreie Tage und Termine – inklusive ICS-Import.'}</div>
         </div>
         <div className="row wrap" style={{gap:8}}>
           <input
@@ -6650,11 +8070,27 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
             style={{display:'none'}}
             onChange={(e)=>onIcsSelected(e.target.files?.[0])}
           />
-          <button className="btn" onClick={onPickIcs}>ICS importieren…</button>
-          <button className="btn" onClick={()=>onStartNewSchoolYear?.()}>Neues Schuljahr…</button>
-          <span className="pill" title="Archivierte Schuljahre">Archiv: {archivesCount}</span>
+          {!readOnly ? (
+            <>
+              <button className="btn" onClick={onPickIcs}>ICS importieren…</button>
+              <button className="btn" onClick={()=>onStartNewSchoolYear?.()}>Neues Schuljahr…</button>
+            </>
+          ) : null}
+          {/* Aus der Zählung wird eine Tür: das Archiv ist von hier aus
+              zu öffnen, nicht nur zu zählen. */}
+          <button
+            className="btn"
+            onClick={()=>onOpenArchives?.()}
+            disabled={!archivesCount}
+            title={archivesCount
+              ? 'Archivierte Schuljahre ansehen'
+              : 'Noch kein Schuljahr archiviert'}
+          ><Archive {...ICON_SM} /> Archivierte Schuljahre ({archivesCount})</button>
         </div>
       </div>
+
+      {/* Der Kalender des Archivs wird gelesen, nicht gepflegt. */}
+      <fieldset className="archivFieldset" disabled={readOnly}>
 
       <div style={{height:12}} />
 
@@ -6837,6 +8273,7 @@ function SchoolCalendarView({ calendar, onUpdate, onStartNewSchoolYear, archives
           onChange={setImportRows}
         />
       )}
+      </fieldset>
     </div>
   );
 }
@@ -6945,6 +8382,10 @@ function LessonView({
   onExportPdf,
   onExportDocx,
   onOpenExecution,
+  onJoinBlock,
+  onSplitBlock,
+  kannVerbinden = false,
+  readOnly = false,
   classGroupSuggestions,
   subjectSuggestions,
   onRememberClassGroup,
@@ -6965,7 +8406,8 @@ function LessonView({
     competencies: Array.isArray(l.competencies) ? l.competencies : [],
     files: Array.isArray(l.files) ? l.files : [],
     links: Array.isArray(l.links) ? l.links : [],
-    phases: normalizePhases(l.phases || []),
+    blockSpan: normalisiereBlockSpan(l.blockSpan),
+    phases: normalizePhases(l.phases || [], TOTAL_MIN * normalisiereBlockSpan(l.blockSpan)),
     // Damit die Bausteine nie auf undefined treffen.
     successCriteria: normalisiereErfolgskriterien(l.successCriteria),
     communicativeTask: normalisiereAufgabe(l.communicativeTask),
@@ -7001,7 +8443,8 @@ function LessonView({
       sequenceId: (n.sequenceId || ''),
       primaryCompetency: (n.primaryCompetency || ''),
       competencies: Array.isArray(n.competencies) ? n.competencies : [],
-      phases: normalizePhases(n.phases || []).map(p => ({
+      blockSpan: blockSpanOf(n),
+      phases: normalizePhases(n.phases || [], lessonTotalMin(n)).map(p => ({
         title: p.title || '',
         duration: Number(p.duration || 0),
         socialForm: p.socialForm || '',
@@ -7053,6 +8496,14 @@ function LessonView({
   const skipNextSaveRef = useRef(true);
   const saveTimerRef = useRef(null);
 
+  /* Auch das Verbinden und Trennen setzt den Entwurf neu auf.
+
+     Ort und Platz der Stunde bleiben dabei gleich; was sich ändert, ist
+     ihre Länge. Ohne diese Abhängigkeit schriebe das verzögerte
+     Speichern anschliessend den Stand von VOR dem Verbinden zurück –
+     die zweite Stunde wäre wieder verloren. */
+  const lessonBlockSpan = blockSpanOf(lesson);
+
   // Only re-initialize the editor when the user navigates to a *different* lesson.
   // Do NOT depend on the `lesson` object reference, otherwise every autosave would
   // re-hydrate local state and can steal focus while typing.
@@ -7063,7 +8514,7 @@ function LessonView({
     skipNextSaveRef.current = true;
     if (onDraftTopicChange) onDraftTopicChange(next.topic || '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [weekStart, dayIndex, slotIndex]);
+  }, [weekStart, dayIndex, slotIndex, lessonBlockSpan]);
 
   useEffect(()=>{
     if (onDraftTopicChange) onDraftTopicChange(local.topic || '');
@@ -7075,6 +8526,10 @@ function LessonView({
       skipNextSaveRef.current = false;
       return;
     }
+    /* Eine archivierte Stunde wird nicht gespeichert. Ohne diese Zeile
+       liefe bei jeder Regung des Entwurfs – etwa der Layoutwahl im
+       Exportdialog – ein Speicherversuch los, der abgewiesen würde. */
+    if (readOnly) return;
     const curr = serializeForCompare(local);
     if (curr === initialSnapshotRef.current) return;
 
@@ -7094,6 +8549,8 @@ function LessonView({
 
   // Flush any pending edits immediately when leaving the view (e.g., clicking "Zurück").
   // This prevents data loss if the user navigates away before the debounce fires.
+  const readOnlyRef = useRef(readOnly);
+  useEffect(()=>{ readOnlyRef.current = readOnly; }, [readOnly]);
   useEffect(()=>{
     return () => {
       try {
@@ -7101,6 +8558,7 @@ function LessonView({
           clearTimeout(saveTimerRef.current);
           saveTimerRef.current = null;
         }
+        if (readOnlyRef.current) return;
         const latest = localRef.current;
         const curr = serializeForCompare(latest);
         if (curr !== initialSnapshotRef.current) {
@@ -7117,7 +8575,13 @@ function LessonView({
     return toISODate(addDays(start, dayIndex));
   }, [weekStart, dayIndex]);
 
-  const lessonTitle = `${DAYS[dayIndex]} · ${formatDateDE(dateISO)} · ${slotIndex+1}. Stunde`;
+  /* Der Zeitrahmen dieser Stunde: 45 Minuten je belegtem Stundenplatz,
+     durchgehend. Eine Doppelstunde wird NICHT nach 45 Minuten geteilt. */
+  const blockSpan = blockSpanOf(local);
+  const gesamtMin = TOTAL_MIN * blockSpan;
+  const istBlock = blockSpan > 1;
+
+  const lessonTitle = `${DAYS[dayIndex]} · ${formatDateDE(dateISO)} · ${stundenBereichLabel(slotIndex, blockSpan)}`;
 
   const dayInfo = useMemo(()=>getDayInfo(dateISO, schoolCalendar), [dateISO, schoolCalendar]);
 
@@ -7417,7 +8881,7 @@ const gColor = useMemo(()=>{
   };
 
   const setPhases = (nextPhases) => {
-    setLocal(prev => ({ ...prev, phases: normalizePhases(nextPhases) }));
+    setLocal(prev => ({ ...prev, phases: normalizePhases(nextPhases, lessonTotalMin(prev)) }));
   };
 
   const addPhase = () => {
@@ -7427,7 +8891,7 @@ const gColor = useMemo(()=>{
       // Erste Phase einer Stunde ohne Phasen: sie bekommt die ganze Zeit.
       // Ohne diesen Fall griff die Suche unten auf phases[0] zu.
       if (!phases.length) {
-        newPhase.duration = TOTAL_MIN;
+        newPhase.duration = gesamtMin;
         return [newPhase];
       }
       // reduce from the longest phase that can spare minutes
@@ -7471,8 +8935,9 @@ const gColor = useMemo(()=>{
       layout: exportLayout, eigenesLayout: eigenesExportLayout,
     });
     // Filename uses a safe format (dots can be awkward on some systems); keep ISO for filenames.
-    if (ziel === 'docx') onExportDocx?.(html, `Unterricht_${dateISO}_${slotIndex+1}.Stunde.doc`);
-    else onExportPdf?.(html, `Unterricht_${dateISO}_${slotIndex+1}.Stunde.pdf`);
+    const stundenTeil = istBlock ? `${slotIndex+1}-${slotIndex+blockSpan}.Stunde` : `${slotIndex+1}.Stunde`;
+    if (ziel === 'docx') onExportDocx?.(html, `Unterricht_${dateISO}_${stundenTeil}.doc`);
+    else onExportPdf?.(html, `Unterricht_${dateISO}_${stundenTeil}.pdf`);
   };
 
   const exportPdf = () => setExportZiel('pdf');
@@ -7525,8 +8990,11 @@ const exportDocx = () => {
     <div className="card">
       <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
         <div>
-          <div style={{fontWeight:900, fontSize:16}}>Einzelstunde</div>
-          <div className="muted small">{lessonTitle}</div>
+          <div style={{fontWeight:900, fontSize:16}}>{istBlock ? blockName(blockSpan) : 'Einzelstunde'}</div>
+          <div className="muted small">
+            {lessonTitle}{istBlock ? ` · ${gesamtMin} Minuten am Stück` : ''}
+            {readOnly ? ' · archiviert, nur zum Ansehen' : ''}
+          </div>
           {(dayInfo.vac || dayInfo.fd || (dayInfo.evs && dayInfo.evs.length)) ? (
             <div className="row wrap" style={{gap:6, marginTop:6}}>
               {dayInfo.vac ? <span className="badge badge--vacation" title={`Ferien: ${dayInfo.vac.name || ''}`}><Palmtree {...ICON_SM} /> Ferien: {dayInfo.vac.name || ''}</span> : null}
@@ -7539,14 +9007,31 @@ const exportDocx = () => {
           ) : null}
         </div>
         <div className="row" style={{gap:8}}>
-          <button className="btn" onClick={()=>onOpenReview?.()}
-                  title="Nach der Stunde festhalten, was daraus geworden ist">
-            <ClipboardCheck {...ICON_SM} /> Nachbereiten
-          </button>
-          {capabilities.executionWindow ? (
-            <button className="btn success" onClick={startExecution}><Play {...ICON_SM} /> Durchführung</button>
+          {/* Der gerade offene Entwurf geht mit: was eben getippt wurde,
+              ist noch nicht gespeichert. */}
+          {readOnly ? null : istBlock ? (
+            <button className="btn" onClick={()=>onSplitBlock?.(local)}
+                    title={`${blockName(blockSpan)} wieder in Einzelstunden trennen`}>
+              <Unlink {...ICON_SM} /> Doppelstunde trennen
+            </button>
+          ) : kannVerbinden ? (
+            <button className="btn" onClick={()=>onJoinBlock?.(local)}
+                    title="Mit der folgenden Stunde derselben Lerngruppe zu einer Doppelstunde verbinden">
+              <Link2 {...ICON_SM} /> Als Doppelstunde verbinden
+            </button>
           ) : null}
-          <button className="btn danger" onClick={onDeleteLesson}>Stunde löschen</button>
+          {!readOnly ? (
+            <>
+              <button className="btn" onClick={()=>onOpenReview?.()}
+                      title="Nach der Stunde festhalten, was daraus geworden ist">
+                <ClipboardCheck {...ICON_SM} /> Nachbereiten
+              </button>
+              {capabilities.executionWindow ? (
+                <button className="btn success" onClick={startExecution}><Play {...ICON_SM} /> Durchführung</button>
+              ) : null}
+              <button className="btn danger" onClick={onDeleteLesson}>Stunde löschen</button>
+            </>
+          ) : null}
           {capabilities.docxExport ? (
             <button className="btn iconBtn-word" onClick={exportDocx} title="Als Word-Datei speichern"><FileText {...ICON_SM} /> Word speichern</button>
           ) : null}
@@ -7558,6 +9043,13 @@ const exportDocx = () => {
 
       <div style={{height:12}} />
 
+      {/* Der Riegel der Archivansicht.
+
+          Ein deaktiviertes <fieldset> nimmt allen Eingabefeldern und
+          Schaltflächen darin nativ die Wirkung – zuverlässiger, als
+          jede einzelne Stelle daran zu erinnern. Die Ausgabe (PDF,
+          Word) liegt bewusst ausserhalb: sie ändert nichts. */}
+      <fieldset className="archivFieldset" disabled={readOnly}>
       <div className="row wrap">
         <div className="grow">
           <label className="small muted">Fach</label>
@@ -7603,6 +9095,8 @@ const exportDocx = () => {
 
       </div>
 
+      </fieldset>
+
       <div style={{height:10}} />
 
       <DidaktikCheckDialog
@@ -7625,6 +9119,8 @@ const exportDocx = () => {
         onSpringeZuPhase={(i)=>springeZuPhase(i)}
       />
 
+      {/* Offene Punkte zu übernehmen hiesse, die Stunde zu ändern. */}
+      {!readOnly ? (
       <CarryOverPanel
         punkte={offenePunkte}
         onUebernehmenAlsPhase={(liste)=>uebernehmeAlsPhasen(liste)}
@@ -7632,7 +9128,9 @@ const exportDocx = () => {
         onErledigt={(p)=>onResolveCarryOver?.(p, 'completed')}
         onIgnorieren={(p)=>onResolveCarryOver?.(p, 'dismissed')}
       />
+      ) : null}
 
+      <fieldset className="archivFieldset" disabled={readOnly}>
       <div className="row wrap">
         <div className="grow">
           <label className="small muted">Stundenthema</label>
@@ -7685,7 +9183,7 @@ const exportDocx = () => {
               <div style={{fontWeight:800}}>Jahresgrobplanung (Orientierung)</div>
               <div className="muted small">Diese Balken wirken sich nicht auf Sequenzen aus und werden nicht exportiert.</div>
             </div>
-            <button className="btn" onClick={()=>onOpenYearPlan?.(dateISO)}>Im Jahresplan öffnen</button>
+            <OeffnenKnopf onClick={()=>onOpenYearPlan?.(dateISO)}>Im Jahresplan öffnen</OeffnenKnopf>
           </div>
           <div style={{height:8}} />
           <div className="yearHintList">
@@ -7770,7 +9268,7 @@ const exportDocx = () => {
       <div style={{height:14}} />
 
       <div className="split">
-        <PhaseTimeline phases={local.phases} onChange={setPhases} startTime={lessonStartHHMM} />
+        <PhaseTimeline phases={local.phases} onChange={setPhases} startTime={lessonStartHHMM} gesamt={gesamtMin} gesperrt={readOnly} />
         <div>
           <div className="row wrap" style={{justifyContent:'space-between'}}>
             <div>
@@ -7888,6 +9386,7 @@ const exportDocx = () => {
                       value={ph.content}
                       onChange={(v)=>setzeFeld('content', v)}
                       placeholder="Was passiert in dieser Phase? Material? Fragen? Differenzierung?"
+                      gesperrt={readOnly}
                     />
                   </>
                 ) : null}
@@ -7903,6 +9402,7 @@ const exportDocx = () => {
                             value={ph.materialsMedia || ''}
                             onChange={(v)=>setzeFeld('materialsMedia', v)}
                             placeholder="z. B. AB, Tafelbild, Beamer, Karten, ..."
+                            gesperrt={readOnly}
                           />
                         </div>
                       ) : null}
@@ -7913,6 +9413,7 @@ const exportDocx = () => {
                             value={ph.remarks || ''}
                             onChange={(v)=>setzeFeld('remarks', v)}
                             placeholder="z. B. Hinweise, Beobachtungen, Alternativen, ..."
+                            gesperrt={readOnly}
                           />
                         </div>
                       ) : null}
@@ -7945,6 +9446,7 @@ const exportDocx = () => {
                               wert={ph[feld.key]}
                               ausserhalbDesProfils={!sichtbareFelder.includes(feldId)}
                               onChange={(v)=>setzeFeld(feld.key, v)}
+                              gesperrt={readOnly}
                             />
                           );
                         })}
@@ -7993,7 +9495,7 @@ const exportDocx = () => {
                   <div style={{fontWeight:800}}>Links</div>
                   <div className="muted small">Klickbar in der App – wird nicht exportiert.</div>
                 </div>
-                <button className="btn primary" onClick={addLink}>Link hinzufügen</button>
+                {!readOnly ? <button className="btn primary" onClick={addLink}>Link hinzufügen</button> : null}
               </div>
               <div style={{height:10}} />
 
@@ -8008,12 +9510,14 @@ const exportDocx = () => {
                       <div className="grow" style={{minWidth:240}}>
                         <input
                           value={l.title || ''}
+                          readOnly={readOnly}
                           onChange={(e)=>updateLink(l.id, { title: e.target.value })}
                           placeholder="Titel (optional)"
                         />
                         <div style={{height:6}} />
                         <input
                           value={l.url || ''}
+                          readOnly={readOnly}
                           onChange={(e)=>updateLink(l.id, { url: e.target.value })}
                           placeholder="https://..."
                         />
@@ -8024,8 +9528,8 @@ const exportDocx = () => {
                         ) : null}
                       </div>
                       <div className="row wrap" style={{gap:8}}>
-                        <button className="btn" onClick={()=>openLink(l.url)} disabled={!String(l.url||'').trim()}>Öffnen</button>
-                        <button className="btn danger" onClick={()=>removeLink(l.id)}>Entfernen</button>
+                        <OeffnenKnopf onClick={()=>openLink(l.url)} disabled={!String(l.url||'').trim()}>Öffnen</OeffnenKnopf>
+                        {!readOnly ? <button className="btn danger" onClick={()=>removeLink(l.id)}>Entfernen</button> : null}
                       </div>
                     </div>
                   ))}
@@ -8042,13 +9546,17 @@ const exportDocx = () => {
                 <div className="muted small">Nur zur Organisation – wird nicht exportiert und beeinflusst keine Sequenzen. Optional können Dateien beim Hinzufügen in eine App-Ablage kopiert werden (opt‑in).</div>
               </div>
               <div className="row wrap" style={{gap:8, alignItems:'center'}}>
-                <button className="btn primary" onClick={addLessonFiles}>Datei hinzufügen</button>
-                <label className="row" style={{gap:8, userSelect:'none'}} title="Wenn aktiv, werden Dateien in einen App-eigenen Ordner kopiert (opt-in).">
-                  <input type="checkbox" checked={fileCopyOptIn} onChange={toggleFileCopyOptIn} />
-                  <span className="small muted">Dateien in App kopieren (opt‑in)</span>
-                </label>
+                {!readOnly ? (
+                  <>
+                    <button className="btn primary" onClick={addLessonFiles}>Datei hinzufügen</button>
+                    <label className="row" style={{gap:8, userSelect:'none'}} title="Wenn aktiv, werden Dateien in einen App-eigenen Ordner kopiert (opt-in).">
+                      <input type="checkbox" checked={fileCopyOptIn} onChange={toggleFileCopyOptIn} />
+                      <span className="small muted">Dateien in App kopieren (opt‑in)</span>
+                    </label>
+                  </>
+                ) : null}
                 {capabilities.fileLibrary ? (
-                  <button className="btn" onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</button>
+                  <OeffnenKnopf onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</OeffnenKnopf>
                 ) : null}
               </div>
             </div>
@@ -8070,9 +9578,9 @@ const exportDocx = () => {
                         {f.sourcePath ? <div className="muted small" style={{wordBreak:'break-all'}}>Original: {f.sourcePath}</div> : null}
                       </div>
                       <div className="row wrap" style={{gap:8}}>
-                        <button className="btn" onClick={()=>openFile(f.path)}>Öffnen</button>
+                        <OeffnenKnopf onClick={()=>openFile(f.path)}>Öffnen</OeffnenKnopf>
                         {capabilities.revealInFolder ? (
-                          <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                          <OeffnenKnopf onClick={()=>revealFile(f.path)}>Im Ordner</OeffnenKnopf>
                         ) : null}
                       </div>
                     </div>
@@ -8099,11 +9607,11 @@ const exportDocx = () => {
                       {f.sourcePath ? <div className="muted small" style={{wordBreak:'break-all'}}>Original: {f.sourcePath}</div> : null}
                     </div>
                     <div className="row wrap" style={{gap:8}}>
-                      <button className="btn" onClick={()=>openFile(f.path)}>Öffnen</button>
+                      <OeffnenKnopf onClick={()=>openFile(f.path)}>Öffnen</OeffnenKnopf>
                       {capabilities.revealInFolder ? (
-                          <button className="btn" onClick={()=>revealFile(f.path)}>Im Ordner</button>
+                          <OeffnenKnopf onClick={()=>revealFile(f.path)}>Im Ordner</OeffnenKnopf>
                         ) : null}
-                      <button className="btn danger" onClick={()=>removeLessonFile(f.id)}>Entfernen</button>
+                      {!readOnly ? <button className="btn danger" onClick={()=>removeLessonFile(f.id)}>Entfernen</button> : null}
                     </div>
                   </div>
                 ))}
@@ -8117,7 +9625,10 @@ const exportDocx = () => {
       </div>
 
       <div style={{height:6}} />
-      <div className="muted small">Tipp: Ziehe einen Phasenblock im Zeitstrahl, um die Reihenfolge zu ändern. Ziehe die Trennlinie zwischen zwei Phasen, um Minuten zu verschieben (Summe bleibt 45).</div>
+      </fieldset>
+      {!readOnly ? (
+        <div className="muted small">Tipp: Ziehe einen Phasenblock im Zeitstrahl, um die Reihenfolge zu ändern. Ziehe die Trennlinie zwischen zwei Phasen, um Minuten zu verschieben (Summe bleibt {gesamtMin}).</div>
+      ) : null}
     </div>
   );
 }
@@ -8142,7 +9653,8 @@ function MacroView({
   onUpdateLessonAt,
   onDeleteLessonAt,
   onExportPdf,
-  onExportDocx
+  onExportDocx,
+  readOnly = false
 }){
   const startISO = view.startISO || view.weekStart;
   const rangeDays = view.rangeDays || 28;
@@ -8344,7 +9856,9 @@ const exportSequenceDocx = (sequenceId) => {
           <div className="muted small">Lerngruppen als horizontale Strahlen. Klick auf eine Stunde öffnet die Detailplanung.</div>
         </div>
         <div className="row wrap" style={{gap:8}}>
-          <button className="btn" onClick={()=>onRequestCreateSequence?.()}>Sequenzen verwalten</button>
+          {!readOnly ? (
+            <button className="btn" onClick={()=>onRequestCreateSequence?.()}>Sequenzen verwalten</button>
+          ) : null}
         </div>
       </div>
 
@@ -8411,7 +9925,13 @@ const exportSequenceDocx = (sequenceId) => {
             <div key={group} className="macroRow" style={colsStyle}>
               <div className="macroSticky macroGroupCell">
                 <div style={{fontWeight:800}}>{group}</div>
-                <div className="muted small">{(Array.from(dm.values()).reduce((a,b)=>a+b.length,0))} Std.</div>
+                <div className="muted small">{(()=>{
+                  /* Gezählt werden Unterrichtsstunden, nicht Einträge:
+                     eine Doppelstunde ist ein Eintrag und zwei Stunden. */
+                  const eintraege = Array.from(dm.values()).reduce((a,b)=>a+b.length,0);
+                  const stunden = Array.from(dm.values()).reduce((a,b)=> a + b.reduce((x,o)=> x + blockSpanOf(o.lesson), 0), 0);
+                  return eintraege === stunden ? `${stunden} Std.` : `${eintraege} Einheiten · ${stunden} Std.`;
+                })()}</div>
               </div>
               {dates.map(d => {
                 const info = dateInfoByISO.get(d) || { isOff: false };
@@ -8434,13 +9954,16 @@ const exportSequenceDocx = (sequenceId) => {
                           title="Öffnen"
                         >
                           <div className="row" style={{justifyContent:'space-between', gap:8, alignItems:'flex-start'}}>
-                            <div style={{fontWeight:800, fontSize:12}}>{formatDateDE(o.dateISO)} · {o.slotIndex+1}. Stunde</div>
+                            <div style={{fontWeight:800, fontSize:12}}>{formatDateDE(o.dateISO)} · {stundenBereichLabel(o.slotIndex, blockSpanOf(o.lesson))}</div>
                             <select
                               className="macroSelect"
                               value={o.lesson.sequenceId || ''}
+                              disabled={readOnly}
+                              title={readOnly ? 'Archiviert – nur zum Ansehen' : 'Sequenz zuordnen'}
                               onClick={(e)=>e.stopPropagation()}
                               onChange={(e)=>{
                                 e.stopPropagation();
+                                if (readOnly) return;
                                 const v = e.target.value;
                                 if (v === '__new__') {
                                   // In-app modal (window.prompt can be suppressed in some Electron/Windows setups)
@@ -8453,7 +9976,6 @@ const exportSequenceDocx = (sequenceId) => {
                                 }
                                 onUpdateLessonAt(o.weekStart, o.dayIndex, o.slotIndex, { ...o.lesson, sequenceId: v });
                               }}
-                              title="Sequenz zuordnen"
                             >
                               <option value="">— Sequenz —</option>
                               {Object.values(sequences || {}).sort((a,b)=>a.name.localeCompare(b.name)).map(s => (
@@ -8461,15 +9983,17 @@ const exportSequenceDocx = (sequenceId) => {
                               ))}
                               <option value="__new__">+ Neue Sequenz…</option>
                             </select>
-                            <button
-                              className="iconBtn danger"
-                              onClick={(e)=>{
-                                e.stopPropagation();
-                                onDeleteLessonAt(o.weekStart, o.dayIndex, o.slotIndex);
-                              }}
-                              title="Stunde löschen"
-                              aria-label="Stunde löschen"
-                            ><Trash2 {...ICON_SM} /></button>
+                            {!readOnly ? (
+                              <button
+                                className="iconBtn danger"
+                                onClick={(e)=>{
+                                  e.stopPropagation();
+                                  onDeleteLessonAt(o.weekStart, o.dayIndex, o.slotIndex);
+                                }}
+                                title="Stunde löschen"
+                                aria-label="Stunde löschen"
+                              ><Trash2 {...ICON_SM} /></button>
+                            ) : null}
                           </div>
 
                           <div className="macroTopic">{topic}</div>
@@ -8510,7 +10034,11 @@ function YearPlanView({
   onCreateBar,
   onUpdateBar,
   onDeleteBar,
-  onSetView
+  onClearLane,
+  onRemoveLane,
+  onRenameLane,
+  onSetView,
+  readOnly = false
 }){
   const schoolYear = (schoolCalendar && schoolCalendar.schoolYear) ? schoolCalendar.schoolYear : { startISO:'', endISO:'' };
   const syStart = (schoolYear.startISO || '').trim();
@@ -8535,27 +10063,22 @@ function YearPlanView({
 
   const [query, setQuery] = useState('');
 
-  const laneKey = (b) => {
-    const g = String(b?.classGroup || '').trim();
-    const s = String(b?.subject || '').trim();
-    if (!g && !s) return 'allgemein';
-    return `${g}||${s}`;
-  };
+  const laneKey = (b) => jahresZeileKey(b?.classGroup, b?.subject);
+  const laneLabel = (k) => jahresZeileLabel(k);
 
-  const laneLabel = (k) => {
-    if (k === 'allgemein') return 'Allgemein';
-    const [g, s] = String(k || '').split('||');
-    return `${(g || '').trim()} · ${(s || '').trim()}`.trim();
-  };
-
+  /* Sichtbar ist eine Zeile, wenn sie Balken trägt ODER ausdrücklich
+     behalten wurde (nach "Jahresplanung leeren"). */
   const lanes = useMemo(()=>{
     const set = new Set();
     for (const b of bars) set.add(laneKey(b));
+    for (const l of (Array.isArray(db?.yearPlanLanes) ? db.yearPlanLanes : [])) {
+      set.add(jahresZeileKey(l.classGroup, l.subject));
+    }
     const arr = Array.from(set);
     // sort: Allgemein first, then by label
     arr.sort((a,b)=> (a==='allgemein'?-1:(b==='allgemein'?1:laneLabel(a).localeCompare(laneLabel(b)))));
     return arr;
-  }, [bars]);
+  }, [bars, db?.yearPlanLanes]);
 
   const filteredLanes = useMemo(()=>{
     const q = String(query||'').trim().toLowerCase();
@@ -8658,6 +10181,7 @@ function YearPlanView({
   };
 
   const startEdit = (bar) => {
+    if (readOnly) return;
     setModal({ open:true, mode:'edit', bar: deepClone(bar) });
   };
 
@@ -8666,6 +10190,8 @@ function YearPlanView({
   const onMouseDownBar = (e, bar, mode) => {
     e.preventDefault();
     e.stopPropagation();
+    // Im Archiv wird nichts gezogen und nichts verschoben.
+    if (readOnly) return;
     if (!weekStarts.length) return;
     const startIdx = weekIndexOf(bar.startISO);
     const endIdx = weekIndexOf(bar.endISO);
@@ -8751,10 +10277,14 @@ function YearPlanView({
       <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
         <div>
           <div style={{fontWeight:900, fontSize:16}}>Jahresgrobplanung</div>
-          <div className="muted small">Farbbalken über das Schuljahr – nur Orientierung. Keine Auswirkungen auf Unterrichtssequenzen, nicht im Export.</div>
+          <div className="muted small">{readOnly
+            ? 'Archiviertes Schuljahr – die Balken werden nur angezeigt.'
+            : 'Farbbalken über das Schuljahr – nur Orientierung. Keine Auswirkungen auf Unterrichtssequenzen, nicht im Export.'}</div>
         </div>
         <div className="row wrap" style={{gap:8}}>
-          <button className="btn primary" onClick={startCreate}>+ Balken hinzufügen</button>
+          {!readOnly ? (
+            <button className="btn primary" onClick={startCreate}>+ Balken hinzufügen</button>
+          ) : null}
         </div>
       </div>
 
@@ -8812,8 +10342,35 @@ function YearPlanView({
           return (
             <div key={lk} className="yearPlanRow">
               <div className="yearPlanSticky">
-                <div style={{fontWeight:800}}>{laneLabel(lk)}</div>
-                <div className="muted small">{laneBars.length} Balken</div>
+                <div style={{fontWeight:800, paddingRight:26}}>{laneLabel(lk)}</div>
+                <div className="muted small">{laneBars.length === 1 ? '1 Balken' : `${laneBars.length} Balken`}</div>
+                {/* Aktionen der ZEILE – nicht der Lerngruppe. Die
+                    Lerngruppe selbst bleibt der App in jedem Fall
+                    erhalten; hier geht es nur um diese Jahresplanung. */}
+                {!readOnly ? (
+                <KebabMenu
+                  titel="Aktionen für diese Zeile"
+                  ausrichtung="links"
+                  eintraege={[
+                    { label: 'Lerngruppe bearbeiten', icon: <Pencil {...ICON_SM} />, onSelect: ()=>onRenameLane?.(lk) },
+                    {
+                      label: 'Jahresplanung leeren',
+                      icon: <Eraser {...ICON_SM} />,
+                      disabled: laneBars.length === 0,
+                      title: 'Alle Balken dieser Zeile entfernen – die Zeile bleibt stehen',
+                      onSelect: ()=>onClearLane?.(lk),
+                    },
+                    { trenner: true },
+                    {
+                      label: 'Aus Jahresplanung entfernen',
+                      icon: <Ban {...ICON_SM} />,
+                      tone: 'danger',
+                      title: 'Entfernt nur diese Zeile. Die Lerngruppe bleibt in Prép-ybara erhalten.',
+                      onSelect: ()=>onRemoveLane?.(lk),
+                    },
+                  ]}
+                />
+                ) : null}
               </div>
               <div className="yearPlanScroll">
                 <div className="yearPlanLane" style={{width: totalWidth}}>
@@ -8986,6 +10543,280 @@ function YearBarModal({ mode, bar, minDate, maxDate, classGroupSuggestions, subj
   );
 }
 
+/* --- Bibliothek: Sequenz-Vorlagen ------------------------------------
+
+   Die Bibliothek ist kein Regal, sondern eine Auswahlhilfe. Deshalb
+   sagt jede Karte, was sich hinter der Vorlage verbirgt: für wen sie
+   gedacht ist, worauf sie hinausläuft, wie lange sie dauert. Alles
+   davon ist optional – fehlt eine Angabe, entfällt die Zeile, und die
+   Karte bleibt trotzdem vollständig benutzbar. */
+
+/* Die Einheiten einer Vorlage als Liste: Nummer, Thema, Kompetenzen,
+   Dauer. Dieselbe Rechnung für Karte und Vorschau. */
+function vorlagenEinheiten(tpl){
+  const lessons = Array.isArray(tpl?.lessons) ? tpl.lessons : [];
+  return lessons.map((l, i)=>{
+    const span = normalisiereBlockSpan(l?.blockSpan);
+    const kompetenzen = [];
+    const primaer = String(l?.primaryCompetency || '').trim();
+    if (primaer) kompetenzen.push(primaer);
+    for (const c of (Array.isArray(l?.competencies) ? l.competencies : [])){
+      const t = String(c || '').trim();
+      if (t && !kompetenzen.includes(t)) kompetenzen.push(t);
+    }
+    return {
+      nummer: i + 1,
+      titel: String(l?.topic || '').trim() || `Einheit ${i + 1}`,
+      kompetenzen,
+      span,
+      minuten: span * TOTAL_MIN,
+    };
+  });
+}
+
+function VorlagenKarte({ tpl, onVorschau, onVerwenden, onBearbeiten, onLoeschen }){
+  const stufe = stufenText(tpl);
+  const ziel = zielhandlungText(tpl);
+  const kompetenzen = Array.isArray(tpl.competencies) ? tpl.competencies : [];
+  const beschreibung = String(tpl.description || '').trim();
+  const produkt = String(tpl.targetProduct || '').trim();
+  const bezug = String(tpl.courseRef || '').trim();
+
+  return (
+    <div className="templateCard">
+      <div className="tplKopf">
+        <div style={{minWidth:0}}>
+          <div className="tplTitel">{tpl.name || 'Ohne Name'}</div>
+          <div className="tplMeta">
+            {[stufe, String(tpl.subject || '').trim()].filter(Boolean).join(' · ') || 'Ohne Angabe zur Lerngruppe'}
+          </div>
+        </div>
+        <KebabMenu
+          titel={`Aktionen für „${tpl.name || 'Vorlage'}“`}
+          eintraege={[
+            { label: 'Vorschau', icon: <Eye {...ICON_SM} />, onSelect: onVorschau },
+            { label: 'Sequenz verwenden', icon: <Plus {...ICON_SM} />, onSelect: onVerwenden },
+            { label: 'Angaben bearbeiten', icon: <Pencil {...ICON_SM} />, onSelect: onBearbeiten },
+            { trenner: true },
+            { label: 'Löschen', icon: <Trash2 {...ICON_SM} />, tone: 'danger', onSelect: onLoeschen },
+          ]}
+        />
+      </div>
+
+      {beschreibung ? <div className="tplMeta" style={{marginTop:8}}>{beschreibung}</div> : null}
+      {ziel ? <div className="tplZiel">„{ziel}“</div> : null}
+
+      {kompetenzen.length ? (
+        <div className="tplZeile">
+          {kompetenzen.slice(0, 4).map(k => <span key={k} className="pill">{k}</span>)}
+          {kompetenzen.length > 4 ? <span className="pill">+{kompetenzen.length - 4}</span> : null}
+        </div>
+      ) : null}
+
+      <div className="tplUmfang">{umfangText(tpl)}</div>
+      {produkt ? <div className="tplProdukt">Zielprodukt: {produkt}</div> : null}
+      {bezug ? <div className="tplProdukt">Bezug: {bezug}</div> : null}
+
+      <div className="tplAktionen">
+        <button className="btn" onClick={onVorschau}><Eye {...ICON_SM} /> Vorschau</button>
+        <button className="btn primary" onClick={onVerwenden}>Sequenz verwenden</button>
+      </div>
+
+      <div className="muted small" style={{marginTop:10}}>
+        {herkunftName(tpl.origin)} · Erstellt: {formatDateDE((tpl.createdAt||'').slice(0,10))}
+      </div>
+    </div>
+  );
+}
+
+/* Die Detailvorschau. Sie zeigt nur – sie verändert die Vorlage nicht
+   und setzt nichts ein. Wer sie einsetzen will, tut das ausdrücklich
+   über "Sequenz verwenden". */
+function VorlagenVorschau({ tpl, onClose, onVerwenden, onBearbeiten }){
+  const einheiten = useMemo(()=>vorlagenEinheiten(tpl), [tpl]);
+  const aufgabe = normalisiereAufgabe(tpl?.finalTask);
+  const mittel = normalisiereMittel(tpl?.languageResources);
+  const stufe = stufenText(tpl);
+  const materialien = (Array.isArray(tpl?.lessons) ? tpl.lessons : [])
+    .reduce((a, l)=> a + ((Array.isArray(l?.files) ? l.files.length : 0) + (Array.isArray(l?.links) ? l.links.length : 0)), 0);
+
+  const zeile = (label, wert)=> (String(wert || '').trim()
+    ? <div style={{marginTop:8}}><span className="muted small">{label}: </span>{wert}</div>
+    : null);
+
+  return (
+    <div className="modalBackdrop" role="dialog" aria-modal="true">
+      <div className="modal" style={{maxWidth:820}}>
+        <div className="row" style={{justifyContent:'space-between', alignItems:'flex-start', gap:10}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontWeight:900, fontSize:16}}>{tpl?.name || 'Vorlage'}</div>
+            <div className="muted small">
+              {[stufe, String(tpl?.subject || '').trim(), herkunftName(tpl?.origin)].filter(Boolean).join(' · ')}
+            </div>
+          </div>
+          <button className="btn" onClick={onClose}>Schließen</button>
+        </div>
+
+        <div style={{height:12}} />
+
+        {String(tpl?.description || '').trim() ? <p style={{margin:0}}>{tpl.description}</p> : null}
+
+        <div className="tplUmfang" style={{marginTop:10}}>
+          {umfangText(tpl)} · ca. {vorlagenUmfang(tpl).minuten} Minuten
+        </div>
+
+        {(Array.isArray(tpl?.competencies) && tpl.competencies.length) ? (
+          <div className="tplZeile">
+            {tpl.competencies.map(k => (
+              <span key={k} className={`pill${k === tpl.primaryCompetency ? ' pill--primary' : ''}`}>{k}</span>
+            ))}
+          </div>
+        ) : null}
+
+        {!istLeereAufgabe(aufgabe) ? (
+          <section className="zielaufgabe" style={{marginTop:12}}>
+            <div className="zielaufgabeKopf">Kommunikative Zielhandlung</div>
+            {aufgabe.text ? <p className="zielaufgabeText">{aufgabe.text}</p> : null}
+            <div className="zielaufgabeDetails">
+              {aufgabe.situation ? <div><span className="muted small">Situation: </span>{aufgabe.situation}</div> : null}
+              {aufgabe.audience ? <div><span className="muted small">Adressat: </span>{aufgabe.audience}</div> : null}
+              {aufgabe.intention ? <div><span className="muted small">Absicht: </span>{aufgabe.intention}</div> : null}
+              {aufgabe.outcome ? <div><span className="muted small">Ergebnis: </span>{aufgabe.outcome}</div> : null}
+            </div>
+          </section>
+        ) : null}
+
+        {zeile('Zielprodukt', tpl?.targetProduct)}
+        {zeile('Voraussetzungen', tpl?.prerequisites)}
+        {zeile('Wortschatz', mittel.vocabulary)}
+        {zeile('Grammatik', mittel.grammar)}
+        {zeile('Aussprache', mittel.pronunciation)}
+        {zeile('Weitere Mittel', mittel.other)}
+        {zeile('Bezug', tpl?.courseRef)}
+        {materialien ? zeile('Enthaltene Materialien', `${materialien} ${materialien === 1 ? 'Verweis' : 'Verweise'} (Dateien/Links)`) : null}
+
+        <div style={{height:14}} />
+        <div style={{fontWeight:800}}>Sequenzeinheiten</div>
+        <div className="muted small">Die Reihenfolge, in der die Einheiten eingesetzt werden.</div>
+        <div style={{marginTop:8}}>
+          {einheiten.length === 0 ? (
+            <div className="muted small">Diese Vorlage enthält noch keine Einheiten.</div>
+          ) : einheiten.map(e => (
+            <div key={e.nummer} className="tplEinheit">
+              <div className="tplEinheitNr">{e.nummer}.</div>
+              <div style={{minWidth:0}}>
+                <div className="tplEinheitTitel">{e.titel}</div>
+                {e.kompetenzen.length ? <div className="tplEinheitSub">{e.kompetenzen.join(' · ')}</div> : null}
+              </div>
+              <div className="tplEinheitDauer">
+                {e.minuten} Min.{e.span > 1 ? ` · ${blockName(e.span)}` : ''}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{height:14}} />
+        <div className="row wrap" style={{justifyContent:'flex-end', gap:8}}>
+          <button className="btn" onClick={onBearbeiten}><Pencil {...ICON_SM} /> Angaben bearbeiten</button>
+          <button className="btn primary" onClick={onVerwenden}>Sequenz verwenden</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Die beschreibenden Angaben einer Vorlage bearbeiten. Die Einheiten
+   selbst bleiben unberührt – sie kommen aus der Sequenz, aus der die
+   Vorlage entstanden ist. */
+function VorlagenAngaben({ tpl, onClose, onSave }){
+  const [local, setLocal] = useState(()=>({
+    name: String(tpl?.name || ''),
+    subject: String(tpl?.subject || ''),
+    description: String(tpl?.description || ''),
+    gradeLevel: String(tpl?.gradeLevel || ''),
+    learningYear: String(tpl?.learningYear || ''),
+    targetProduct: String(tpl?.targetProduct || ''),
+    prerequisites: String(tpl?.prerequisites || ''),
+    courseRef: String(tpl?.courseRef || ''),
+    finalTask: normalisiereAufgabe(tpl?.finalTask),
+  }));
+  const setzen = (feld, wert)=> setLocal(prev => ({ ...prev, [feld]: wert }));
+
+  return (
+    <div className="modalBackdrop" role="dialog" aria-modal="true">
+      <div className="modal" style={{maxWidth:720}}>
+        <div className="row" style={{justifyContent:'space-between'}}>
+          <div>
+            <div style={{fontWeight:900}}>Angaben zur Vorlage</div>
+            <div className="muted small">Hilft beim Auswählen. Die Einheiten der Vorlage ändern sich dadurch nicht.</div>
+          </div>
+          <button className="btn" onClick={onClose}>Schließen</button>
+        </div>
+
+        <div style={{height:12}} />
+
+        <div className="row wrap" style={{gap:10}}>
+          <div style={{minWidth:260, flex:1}}>
+            <label className="small muted">Titel</label>
+            <input className="input" value={local.name} onChange={(e)=>setzen('name', e.target.value)} placeholder="z. B. Paris autrement" />
+          </div>
+          <div style={{minWidth:180, flex:1}}>
+            <label className="small muted">Fach</label>
+            <input className="input" value={local.subject} onChange={(e)=>setzen('subject', e.target.value)} placeholder="z. B. Französisch" />
+          </div>
+          <div style={{width:130}}>
+            <label className="small muted">Klassenstufe</label>
+            <input className="input" value={local.gradeLevel} onChange={(e)=>setzen('gradeLevel', e.target.value)} placeholder="z. B. 8" />
+          </div>
+          <div style={{width:130}}>
+            <label className="small muted">Lernjahr</label>
+            <input className="input" value={local.learningYear} onChange={(e)=>setzen('learningYear', e.target.value)} placeholder="z. B. 2" />
+          </div>
+        </div>
+
+        <div style={{height:10}} />
+        <label className="small muted">Kurze Beschreibung</label>
+        <textarea className="input" rows={2} value={local.description}
+                  onChange={(e)=>setzen('description', e.target.value)}
+                  placeholder="Worum geht es in dieser Sequenz?" />
+
+        <div style={{height:10}} />
+        <CommunicativeTaskEditor
+          wert={local.finalTask}
+          onChange={(next)=>setzen('finalTask', next)}
+          titel="Kommunikative Zielhandlung"
+          hinweis="Worauf die Sequenz hinausläuft. Steht oben auf der Karte."
+          platzhalter="z. B. Paris erkunden und Sehenswürdigkeiten für eine Klassenfahrt empfehlen."
+        />
+
+        <div style={{height:10}} />
+        <div className="row wrap" style={{gap:10}}>
+          <div style={{minWidth:220, flex:1}}>
+            <label className="small muted">Zielprodukt</label>
+            <input className="input" value={local.targetProduct} onChange={(e)=>setzen('targetProduct', e.target.value)} placeholder="z. B. Mini-Reiseführer" />
+          </div>
+          <div style={{minWidth:220, flex:1}}>
+            <label className="small muted">Lehrwerks-/Themenbezug</label>
+            <input className="input" value={local.courseRef} onChange={(e)=>setzen('courseRef', e.target.value)} placeholder="z. B. Découvertes 3, Unité 2" />
+          </div>
+        </div>
+
+        <div style={{height:10}} />
+        <label className="small muted">Voraussetzungen</label>
+        <textarea className="input" rows={2} value={local.prerequisites}
+                  onChange={(e)=>setzen('prerequisites', e.target.value)}
+                  placeholder="Was sollten die Lernenden mitbringen?" />
+
+        <div style={{height:14}} />
+        <div className="row" style={{justifyContent:'flex-end', gap:8}}>
+          <button className="btn" onClick={onClose}>Abbrechen</button>
+          <button className="btn primary" onClick={()=>onSave(local)}>Übernehmen</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SequenceLibraryView({
   db,
   templates,
@@ -8994,6 +10825,7 @@ function SequenceLibraryView({
   minDate,
   maxDate,
   onCreateTemplateFromSequence,
+  onUpdateTemplate,
   onDeleteTemplate,
   onExportTemplates,
   onImportTemplates,
@@ -9040,7 +10872,6 @@ function SequenceLibraryView({
   const groupSuggestions = classGroupSuggestionsProp || groupSuggestionsLocal;
   const subjectSuggestions = subjectSuggestionsProp || subjectSuggestionsLocal;
 
-
   const [selectedSeqId, setSelectedSeqId] = useState(seqList?.[0]?.id || '');
   useEffect(()=>{
     if (!selectedSeqId && seqList.length) setSelectedSeqId(seqList[0].id);
@@ -9048,13 +10879,91 @@ function SequenceLibraryView({
 
   const [activeTemplate, setActiveTemplate] = useState(null);
   const [showInsert, setShowInsert] = useState(false);
+  const [vorschauId, setVorschauId] = useState('');
+  const [angabenId, setAngabenId] = useState('');
+
+  /* --- Suchen und Filtern ------------------------------------------
+     Die Auswahlmöglichkeiten kommen aus den vorhandenen Vorlagen. Was
+     es nicht gibt, steht auch nicht zur Wahl. */
+  const [suche, setSuche] = useState('');
+  const [filterStufe, setFilterStufe] = useState('');
+  const [filterKompetenz, setFilterKompetenz] = useState('');
+  const [filterThema, setFilterThema] = useState('');
+  const [filterUmfang, setFilterUmfang] = useState('');
+  const [filterHerkunft, setFilterHerkunft] = useState('');
+
+  const werte = useMemo(()=>{
+    const stufen = new Set();
+    const kompetenzen = new Set();
+    const themen = new Set();
+    const herkuenfte = new Set();
+    for (const t of list){
+      const st = String(t.gradeLevel || '').trim();
+      if (st) stufen.add(st);
+      for (const k of (Array.isArray(t.competencies) ? t.competencies : [])) kompetenzen.add(k);
+      const f = String(t.subject || '').trim();
+      if (f) themen.add(f);
+      herkuenfte.add(String(t.origin || 'own'));
+    }
+    const sortiert = (set)=> Array.from(set).sort((a,b)=>a.localeCompare(b, 'de', { numeric: true }));
+    return {
+      stufen: sortiert(stufen),
+      kompetenzen: sortiert(kompetenzen),
+      themen: sortiert(themen),
+      herkuenfte: sortiert(herkuenfte),
+    };
+  }, [list]);
+
+  const UMFANG_STUFEN = [
+    { id: 'kurz', label: 'bis 5 Unterrichtsstunden', passt: (n)=> n <= 5 },
+    { id: 'mittel', label: '6–10 Unterrichtsstunden', passt: (n)=> n >= 6 && n <= 10 },
+    { id: 'lang', label: 'mehr als 10 Unterrichtsstunden', passt: (n)=> n > 10 },
+  ];
+
+  const gefiltert = useMemo(()=>{
+    const q = foldForSearch(String(suche || '').trim());
+    return list.filter(t => {
+      if (filterStufe && String(t.gradeLevel || '').trim() !== filterStufe) return false;
+      if (filterKompetenz && !(Array.isArray(t.competencies) ? t.competencies : []).includes(filterKompetenz)) return false;
+      if (filterThema && String(t.subject || '').trim() !== filterThema) return false;
+      if (filterHerkunft && String(t.origin || 'own') !== filterHerkunft) return false;
+      if (filterUmfang) {
+        const stufe = UMFANG_STUFEN.find(u => u.id === filterUmfang);
+        if (stufe && !stufe.passt(vorlagenUmfang(t).stunden)) return false;
+      }
+      if (!q) return true;
+      const heuhaufen = foldForSearch([
+        t.name, t.description, t.subject, t.targetProduct, t.courseRef,
+        zielhandlungText(t),
+        (Array.isArray(t.competencies) ? t.competencies.join(' ') : ''),
+        (Array.isArray(t.lessons) ? t.lessons.map(l => l?.topic || '').join(' ') : ''),
+      ].filter(Boolean).join(' '));
+      return heuhaufen.includes(q);
+    });
+  }, [list, suche, filterStufe, filterKompetenz, filterThema, filterUmfang, filterHerkunft]);
+
+  const filterAktiv = Boolean(suche || filterStufe || filterKompetenz || filterThema || filterUmfang || filterHerkunft);
+  const filterZuruecksetzen = ()=>{
+    setSuche(''); setFilterStufe(''); setFilterKompetenz('');
+    setFilterThema(''); setFilterUmfang(''); setFilterHerkunft('');
+  };
+
+  const vorschau = vorschauId ? (templates?.[vorschauId] || null) : null;
+  const angaben = angabenId ? (templates?.[angabenId] || null) : null;
+
+  const verwenden = (t)=>{
+    setVorschauId('');
+    setAngabenId('');
+    setActiveTemplate(t);
+    setShowInsert(true);
+  };
 
   return (
     <div className="card">
       <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
         <div>
           <div style={{fontWeight:900, fontSize:16}}>Bibliothek – Sequenz‑Vorlagen</div>
-          <div className="muted small">Speichere Unterrichtssequenzen als wiederverwendbare Vorlagen und füge sie in neue Klassen/Schuljahre ein.</div>
+          <div className="muted small">Vorlagen ansehen, vergleichen und als eigene, bearbeitbare Sequenz verwenden. Die Vorlage selbst bleibt dabei unverändert.</div>
         </div>
         <div className="row wrap" style={{gap:8}}>
           <button className="btn" onClick={onImportTemplates}>Importieren…</button>
@@ -9081,32 +10990,109 @@ function SequenceLibraryView({
 
       <div style={{height:14}} />
 
+      {list.length ? (
+        <>
+          <div className="tplFilter">
+            <div style={{minWidth:220, flex:1}}>
+              <label className="small muted">Suchen</label>
+              <input className="input" value={suche} onChange={(e)=>setSuche(e.target.value)} placeholder="Titel, Thema, Zielprodukt…" />
+            </div>
+            {werte.stufen.length ? (
+              <div>
+                <label className="small muted">Klassenstufe</label>
+                <select className="input" value={filterStufe} onChange={(e)=>setFilterStufe(e.target.value)}>
+                  <option value="">alle</option>
+                  {werte.stufen.map(v => <option key={v} value={v}>{/^\d+$/.test(v) ? `Klasse ${v}` : v}</option>)}
+                </select>
+              </div>
+            ) : null}
+            {werte.kompetenzen.length ? (
+              <div>
+                <label className="small muted">Kompetenz</label>
+                <select className="input" value={filterKompetenz} onChange={(e)=>setFilterKompetenz(e.target.value)}>
+                  <option value="">alle</option>
+                  {werte.kompetenzen.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+            ) : null}
+            {werte.themen.length ? (
+              <div>
+                <label className="small muted">Fach / Thema</label>
+                <select className="input" value={filterThema} onChange={(e)=>setFilterThema(e.target.value)}>
+                  <option value="">alle</option>
+                  {werte.themen.map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+            ) : null}
+            <div>
+              <label className="small muted">Umfang</label>
+              <select className="input" value={filterUmfang} onChange={(e)=>setFilterUmfang(e.target.value)}>
+                <option value="">alle</option>
+                {UMFANG_STUFEN.map(u => <option key={u.id} value={u.id}>{u.label}</option>)}
+              </select>
+            </div>
+            {werte.herkuenfte.length > 1 ? (
+              <div>
+                <label className="small muted">Herkunft</label>
+                <select className="input" value={filterHerkunft} onChange={(e)=>setFilterHerkunft(e.target.value)}>
+                  <option value="">alle</option>
+                  {werte.herkuenfte.map(v => <option key={v} value={v}>{herkunftName(v)}</option>)}
+                </select>
+              </div>
+            ) : null}
+            {filterAktiv ? (
+              <button className="btn" onClick={filterZuruecksetzen}>Filter zurücksetzen</button>
+            ) : null}
+          </div>
+          <div style={{height:6}} />
+          <div className="muted small">
+            {gefiltert.length === list.length
+              ? `${list.length} ${list.length === 1 ? 'Vorlage' : 'Vorlagen'}`
+              : `${gefiltert.length} von ${list.length} Vorlagen`}
+          </div>
+          <div style={{height:8}} />
+        </>
+      ) : null}
+
       <div className="templateGrid">
         {list.length === 0 ? (
           <EmptyState
             text="Vorlagen sind Sequenzen, die du wiederverwenden kannst – einmal geplant, in jedem Jahrgang wieder einsetzbar. Lege im Makro-Plan eine Sequenz an und speichere sie als Vorlage."
           />
-        ) : list.map(t => (
-          <div key={t.id} className="templateCard">
-            <div className="row" style={{justifyContent:'space-between', alignItems:'flex-start', gap:10}}>
-              <div>
-                <div style={{fontWeight:900}}>{t.name || 'Ohne Name'}</div>
-                <div className="row wrap" style={{gap:6, marginTop:6}}>
-                  <span className="pill">Fach: {(t.subject||'—')}</span>
-                  <span className="pill">Stunden: {(Array.isArray(t.lessons) ? t.lessons.length : 0)}</span>
-                </div>
-              </div>
-              <div className="row" style={{gap:8}}>
-                <button className="btn" onClick={()=>{ setActiveTemplate(t); setShowInsert(true); }}>Einfügen…</button>
-                <button className="btn danger" onClick={()=>onDeleteTemplate(t.id)}>Löschen</button>
-              </div>
-            </div>
-            <div className="muted small" style={{marginTop:10}}>
-              Erstellt: {formatDateDE((t.createdAt||'').slice(0,10))}
-            </div>
-          </div>
+        ) : gefiltert.length === 0 ? (
+          <EmptyState
+            text="Keine Vorlage passt zu dieser Auswahl."
+            actionLabel="Filter zurücksetzen"
+            onAction={filterZuruecksetzen}
+          />
+        ) : gefiltert.map(t => (
+          <VorlagenKarte
+            key={t.id}
+            tpl={t}
+            onVorschau={()=>setVorschauId(t.id)}
+            onVerwenden={()=>verwenden(t)}
+            onBearbeiten={()=>setAngabenId(t.id)}
+            onLoeschen={()=>onDeleteTemplate(t.id)}
+          />
         ))}
       </div>
+
+      {vorschau ? (
+        <VorlagenVorschau
+          tpl={vorschau}
+          onClose={()=>setVorschauId('')}
+          onVerwenden={()=>verwenden(vorschau)}
+          onBearbeiten={()=>{ setAngabenId(vorschau.id); setVorschauId(''); }}
+        />
+      ) : null}
+
+      {angaben ? (
+        <VorlagenAngaben
+          tpl={angaben}
+          onClose={()=>setAngabenId('')}
+          onSave={(patch)=>{ onUpdateTemplate?.(angaben.id, patch); setAngabenId(''); }}
+        />
+      ) : null}
 
       {showInsert && activeTemplate && (
         <InsertTemplateModal
@@ -9125,6 +11111,11 @@ function SequenceLibraryView({
   );
 }
 
+/* Eine Vorlage verwenden.
+
+   "Verwenden" statt "Importieren": es entsteht immer eine eigene,
+   bearbeitbare Sequenz – die Vorlage selbst wird dabei nie verändert.
+   Das steht hier ausdrücklich, damit niemand raten muss. */
 function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, minDate, maxDate, onHideGroupSuggestion, onHideSubjectSuggestion, onClose, onInsert }){
   const [targetGroup, setTargetGroup] = useState(groupSuggestions?.[0] || '');
   const [subject, setSubject] = useState((template?.subject || '').trim());
@@ -9143,8 +11134,10 @@ function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, m
       <div className="modal">
         <div className="row" style={{justifyContent:'space-between'}}>
           <div>
-            <div style={{fontWeight:900}}>Vorlage einfügen</div>
-            <div className="muted small">"{template?.name || ''}"</div>
+            <div style={{fontWeight:900}}>Sequenz verwenden</div>
+            <div className="muted small">
+              „{template?.name || ''}“ · {umfangText(template)}
+            </div>
           </div>
           <button className="btn" onClick={onClose}>Schließen</button>
         </div>
@@ -9186,7 +11179,7 @@ function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, m
 
         <div className="row wrap" style={{gap:10, alignItems:'flex-end'}}>
           <div style={{minWidth:280, flex:1}}>
-            <label className="small muted">Name der neuen Sequenz (wird im Makro‑Plan angelegt)</label>
+            <label className="small muted">Name der neuen Sequenz (eigene, bearbeitbare Kopie im Makro‑Plan)</label>
             <input className="input" value={sequenceName} onChange={(e)=>setSequenceName(e.target.value)} placeholder="z. B. Argumentieren – Kurzsequenz" />
           </div>
           <label className="row" style={{gap:8, userSelect:'none'}}>
@@ -9197,7 +11190,9 @@ function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, m
 
         <div style={{height:10}} />
         <div className="muted small">
-          Hinweis: Die App platziert die Vorlagenstunden automatisch in passende Stundenplätze (gleiche Lerngruppe + Fach) ab dem Startdatum.
+          Es entsteht eine eigene Sequenz für diese Lerngruppe. Die Vorlage bleibt unverändert und lässt sich beliebig oft weiterverwenden.
+          Die App platziert die Einheiten automatisch in passende Stundenplätze (gleiche Lerngruppe + Fach) ab dem Startdatum;
+          eine Doppelstunde bekommt zwei aufeinanderfolgende Plätze, sofern dort welche frei sind.
           Damit Räume übernommen werden können, sollte der Stundenplan in den Zielwochen bereits angelegt sein (Klasse/Fach/Raum). Danach kannst du Stunden flexibel löschen oder neue hinzufügen.
         </div>
 
@@ -9208,7 +11203,7 @@ function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, m
           <button
             className="btn primary"
             onClick={()=>onInsert({ templateId: template.id, targetGroup, subject, startISO, overwrite, sequenceName })}
-          >Einfügen</button>
+          >Sequenz verwenden</button>
         </div>
       </div>
     </div>
@@ -9217,6 +11212,7 @@ function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, m
 
 function SequenceManager({
   sequences,
+  onDuplicate,
   appSettings,
   onUpdateAppSettings,
   schoolCalendar,
@@ -9437,7 +11433,7 @@ function SequenceManager({
                   <span className="small muted">Dateien in App kopieren (opt‑in)</span>
                 </label>
                 {capabilities.fileLibrary ? (
-                  <button className="btn" onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</button>
+                  <OeffnenKnopf onClick={openLibraryRoot} title="App-Ablage öffnen">Ablage öffnen</OeffnenKnopf>
                 ) : null}
               </div>
 
@@ -9496,30 +11492,78 @@ function SequenceManager({
                 onChange={(e)=>onUpdate(s.id, { name: e.target.value })}
                 placeholder="Sequenzname"
               />
-              <button className="btn" onClick={()=>{
-                if (typeof onSaveAsTemplate === 'function') onSaveAsTemplate(s.id);
-              }} title="Sequenz als Vorlage für spätere Schuljahre speichern">Als Vorlage speichern</button>
-              <button className="btn iconBtn-pdf" onClick={()=>{
-                if (typeof onExportPdfSequence === 'function') onExportPdfSequence(s.id);
-              }} title="Sequenz als PDF speichern"><FileDown {...ICON_SM} /> PDF</button>
-              <button className="btn iconBtn-word" onClick={()=>{
-                if (typeof onExportDocxSequence === 'function') onExportDocxSequence(s.id);
-              }} title="Sequenz als Word speichern"><FileText {...ICON_SM} /> Word</button>
-              <button className="btn" onClick={()=>openSeqFiles(s.id)} title="Dateien für diese Sequenz hinterlegen (nur Verweise, nicht exportiert)">Dateien</button>
+              {/* Verwalten steht vorn, Exportieren liegt im Menü:
+                  hier wird organisiert, nicht ausgegeben. */}
               <button className={`btn${kompetenzSeqId === s.id ? ' primary' : ''}`}
                       onClick={()=>setKompetenzSeqId(kompetenzSeqId === s.id ? '' : s.id)}
                       title="Schwerpunkt und Zielaufgabe der Sequenz – die Stunden dürfen davon abweichen">
                 {languageMode ? 'Didaktik' : 'Kompetenzen'}{(s.competencies || []).length ? ` (${s.competencies.length})` : ''}
               </button>
-              {languageMode ? (
-                <button className="btn" onClick={()=>onOpenProgression?.(s.id)}
-                        title="Wie sich das sprachliche Handeln über die Sequenz entwickelt">
-                  <ListTree {...ICON_SM} /> Progression
-                </button>
-              ) : null}
-              <button className="btn danger" onClick={()=>{
-                onDelete(s.id);
-              }}>Löschen</button>
+              <KebabMenu
+                titel={`Aktionen für „${s.name || 'Sequenz'}“`}
+                eintraege={[
+                  {
+                    label: 'Öffnen',
+                    icon: <ListTree {...ICON_SM} />,
+                    title: 'Progression der Sequenz ansehen',
+                    onSelect: ()=>onOpenProgression?.(s.id),
+                  },
+                  {
+                    label: 'Duplizieren',
+                    icon: <Copy {...ICON_SM} />,
+                    title: 'Eine Kopie dieser Sequenz anlegen (ohne Stunden)',
+                    onSelect: ()=>onDuplicate?.(s.id),
+                  },
+                  {
+                    label: 'Umbenennen',
+                    icon: <Pencil {...ICON_SM} />,
+                    onSelect: async ()=>{
+                      const name = await ui.askInput({
+                        title: 'Sequenz umbenennen',
+                        label: 'Name der Sequenz',
+                        initialValue: s.name || '',
+                        confirmLabel: 'Umbenennen',
+                      });
+                      if (name) onUpdate(s.id, { name });
+                    },
+                  },
+                  {
+                    label: 'Als Vorlage speichern',
+                    icon: <Library {...ICON_SM} />,
+                    title: 'Sequenz als Vorlage für spätere Schuljahre speichern',
+                    onSelect: ()=>onSaveAsTemplate?.(s.id),
+                  },
+                  {
+                    label: 'Dateien…',
+                    icon: <FileText {...ICON_SM} />,
+                    title: 'Dateien für diese Sequenz hinterlegen (nur Verweise, nicht exportiert)',
+                    onSelect: ()=>openSeqFiles(s.id),
+                  },
+                  { trenner: true },
+                  {
+                    label: 'Exportieren',
+                    unter: [
+                      capabilities.docxExport ? {
+                        label: 'Als Word-Datei',
+                        icon: <FileText {...ICON_SM} />,
+                        onSelect: ()=>onExportDocxSequence?.(s.id),
+                      } : null,
+                      capabilities.pdfExport ? {
+                        label: 'Als PDF',
+                        icon: <FileDown {...ICON_SM} />,
+                        onSelect: ()=>onExportPdfSequence?.(s.id),
+                      } : null,
+                    ],
+                  },
+                  { trenner: true },
+                  {
+                    label: 'Löschen',
+                    icon: <Trash2 {...ICON_SM} />,
+                    tone: 'danger',
+                    onSelect: ()=>onDelete(s.id),
+                  },
+                ]}
+              />
             </div>
             {kompetenzSeqId === s.id ? (
               <div className="seqKompetenzen">
@@ -9562,7 +11606,16 @@ function SequenceManager({
 }
 
 
-function PhaseTimeline({ phases, onChange, startTime = '' }){
+/* `gesperrt`: im Archiv wird der Zeitstrahl nur gezeigt.
+
+   Ein deaktiviertes <fieldset> erreicht das hier NICHT – gezogen wird
+   an gewöhnlichen <div>s, und die kennen kein "disabled". Deshalb die
+   ausdrückliche Angabe. */
+function PhaseTimeline({ phases, onChange, startTime = '', gesamt = TOTAL_MIN, gesperrt = false }){
+  /* Der Zeitstrahl zeigt den Rahmen der Stunde – 45 Minuten bei einer
+     Einzelstunde, 90 bei einer Doppelstunde. Er wird nicht nach 45
+     Minuten unterbrochen: Phasen dürfen über die Stundengrenze laufen. */
+  const gesamtMin = Math.max(MIN_PHASE_MIN, Math.round(Number(gesamt) || TOTAL_MIN));
   const [drag, setDrag] = useState(null);
   const [dragFrom, setDragFrom] = useState(null);
   const [dropIndex, setDropIndex] = useState(null);
@@ -9602,6 +11655,7 @@ function PhaseTimeline({ phases, onChange, startTime = '' }){
   };
 
   useEffect(()=>{
+    if (gesperrt) return;
     const onMove = (e) => {
       if (!drag) return;
       const dy = e.clientY - drag.startY;
@@ -9633,18 +11687,20 @@ function PhaseTimeline({ phases, onChange, startTime = '' }){
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [drag, phases, onChange]);
+  }, [drag, phases, onChange, gesperrt]);
 
   return (
     <div className="timeline">
       <div className="timelineHeader">
         <div style={{fontWeight:800}}>Zeitstrahl</div>
-        <div className="muted small">{TOTAL_MIN} Minuten</div>
+        <div className="muted small">{gesamtMin} Minuten</div>
       </div>
       <div
         className="timelineBody"
+        style={{height: gesamtMin * PX_PER_MIN}}
         ref={bodyRef}
         onDragOver={(e)=>{
+          if (gesperrt) return;
           // Allow drop
           if (drag) return; // while resizing, ignore dnd
           e.preventDefault();
@@ -9653,7 +11709,7 @@ function PhaseTimeline({ phases, onChange, startTime = '' }){
         }}
         onDragLeave={()=>setDropIndex(null)}
         onDrop={(e)=>{
-          if (drag) return;
+          if (gesperrt || drag) return;
           e.preventDefault();
           const from = dragFrom ?? Number(e.dataTransfer.getData('text/plain'));
           const to = dropIndex ?? computeDropIndex(e.clientY);
@@ -9671,7 +11727,7 @@ function PhaseTimeline({ phases, onChange, startTime = '' }){
             className="dropLine"
             style={{
               top: dropIndex >= phaseLayout.length
-                ? TOTAL_MIN * PX_PER_MIN - 1
+                ? gesamtMin * PX_PER_MIN - 1
                 : Math.max(0, phaseLayout[dropIndex].top - 1)
             }}
           />
@@ -9684,9 +11740,9 @@ function PhaseTimeline({ phases, onChange, startTime = '' }){
               className="phaseBlock"
               style={{ top, height }}
               title="Phase"
-              draggable={!drag}
+              draggable={!drag && !gesperrt}
               onDragStart={(e)=>{
-                if (drag) return;
+                if (gesperrt || drag) return;
                 setDragFrom(idx);
                 e.dataTransfer.effectAllowed = 'move';
                 e.dataTransfer.setData('text/plain', String(idx));
@@ -9705,7 +11761,7 @@ function PhaseTimeline({ phases, onChange, startTime = '' }){
         })}
 
         {/* handles between phases */}
-        {phaseLayout.slice(0, -1).map(({idx, top, height})=>{
+        {(gesperrt ? [] : phaseLayout.slice(0, -1)).map(({idx, top, height})=>{
           const y = top + height - 5;
           return (
             <div
@@ -9865,7 +11921,10 @@ function PhaseNameInput({ value, suggestions, onChange, onCommit, onHideSuggesti
 
 // --- Rich text editor (bold / italic / underline / color) ---
 // Stores HTML in the field. Plain text is auto-converted to HTML for display.
-function RichTextEditor({ value, onChange, placeholder = '' }){
+/* `gesperrt`: contentEditable kennt kein "disabled" – ein umgebendes
+   <fieldset> hält hier nichts auf. Deshalb wird die Bearbeitbarkeit
+   direkt abgeschaltet; lesen und kopieren bleibt möglich. */
+function RichTextEditor({ value, onChange, placeholder = '', gesperrt = false }){
   const ref = useRef(null);
   const lastHtml = useRef('');
   const [focused, setFocused] = useState(false);
@@ -9948,7 +12007,7 @@ function RichTextEditor({ value, onChange, placeholder = '' }){
       <div
         ref={ref}
         className="rteBody"
-        contentEditable
+        contentEditable={!gesperrt}
         suppressContentEditableWarning
         data-placeholder={placeholder}
         onFocus={()=>setFocused(true)}
@@ -10395,7 +12454,7 @@ function PhaseScaffolds({ scaffolds, vorschlaege, onChange, onRemember, onHideSu
 
 /* Eine zusätzliche Angabe zur Phase. Welche Eingabeart es wird, steht
    in der Registry – hier wird sie nur ausgeführt. */
-function PhasenFeld({ feld, wert, onChange, ausserhalbDesProfils = false }){
+function PhasenFeld({ feld, wert, onChange, ausserhalbDesProfils = false, gesperrt = false }){
   const beschriftung = (
     <label className="small muted">
       {feld.label}
@@ -10411,7 +12470,7 @@ function PhasenFeld({ feld, wert, onChange, ausserhalbDesProfils = false }){
     return (
       <div className="phasenFeld phasenFeld--breit">
         {beschriftung}
-        <RichTextEditor value={wert || ''} onChange={onChange} placeholder={feld.platzhalter || ''} />
+        <RichTextEditor value={wert || ''} onChange={onChange} placeholder={feld.platzhalter || ''} gesperrt={gesperrt} />
       </div>
     );
   }
@@ -11186,7 +13245,7 @@ function WeekCopyDialog({ visible, onClose, onConfirm, weekTodosCount = 0, futur
   );
 }
 
-function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onBack }){
+function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onBack, readOnly = false }){
   const [text, setText] = useState('');
   const [dateISO, setDateISO] = useState('');
   const [deadlineISO, setDeadlineISO] = useState('');
@@ -11225,12 +13284,17 @@ function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onB
       <div className="row" style={{justifyContent:'space-between'}}>
         <div>
           <div style={{fontWeight:900, fontSize:18}}>To-do Checkliste</div>
-          <div className="muted small">Optionales Datum/Deadline → Hinweis im Stundenplan & beim App-Start (ohne Inhalt).</div>
+          <div className="muted small">{readOnly
+            ? 'Archiviertes Schuljahr – die To-dos werden nur angezeigt.'
+            : 'Optionales Datum/Deadline → Hinweis im Stundenplan & beim App-Start (ohne Inhalt).'}</div>
         </div>
         <button className="btn" onClick={onBack}>Zurück</button>
       </div>
 
       <div style={{height:12}} />
+
+      {/* Alles darin ist im Archiv wirkungslos – nativ, nicht nur optisch. */}
+      <fieldset className="archivFieldset" disabled={readOnly}>
 
       <div className="row wrap">
         <div className="grow">
@@ -11257,12 +13321,18 @@ function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onB
         </div>
       </div>
 
+      </fieldset>
+
       <div style={{height:10}} />
 
+      {/* Ein reiner Anzeigefilter – er ändert nichts und gilt deshalb
+          auch in der Archivansicht. */}
       <label className="row" style={{gap:10}}>
         <input type="checkbox" checked={showOnlyWeek} onChange={(e)=>setShowOnlyWeek(e.target.checked)} />
         <span>Nur To-dos dieser Woche</span>
       </label>
+
+      <fieldset className="archivFieldset" disabled={readOnly}>
 
       <div style={{height:10}} />
 
@@ -11303,6 +13373,7 @@ function TodoView({ weekStart, todos, onAddTodo, onUpdateTodo, onDeleteTodo, onB
           </div>
         ))}
       </div>
+      </fieldset>
     </div>
   );
 }
@@ -11395,7 +13466,7 @@ function verlaufsZelle(phase, spalte, zeit){
 function buildLessonPdfHtml({ title, dateISO, dayIndex, slotIndex, schoolCalendar, lesson,
                               layout = STANDARD_LAYOUT, eigenesLayout = null }){
   const l = normalizeLesson(lesson || {});
-  const phases = normalizePhases(l.phases || []);
+  const phases = normalizePhases(l.phases || [], lessonTotalMin(l));
   const lessonStart = getLessonStartTime(schoolCalendar, slotIndex);
   const times = computePhaseTimes(phases, lessonStart);
 
@@ -11563,6 +13634,7 @@ function buildWeekPdfHtml({ weekStart, week, sequences, schoolCalendar, groupCol
     const raw = lessons[`${dayIndex}-${slotIndex}`];
     if (!raw) return { html: '' };
     const l = normalizeLesson(raw);
+    const span = Math.min(blockSpanOf(l), Math.max(1, slots - slotIndex));
     const gKey = groupKey(l.classGroup, l.subject);
     const color = (groupColors?.[gKey]?.color) || defaultGroupColor(gKey);
     const bg = hexToRgba(color, 0.22);
@@ -11570,15 +13642,33 @@ function buildWeekPdfHtml({ weekStart, week, sequences, schoolCalendar, groupCol
     const comps = Array.isArray(l.competencies) ? l.competencies.filter(Boolean) : [];
     return {
       bg,
+      span,
       html: `
         <div class="cellTop">
           <div class="cellMain"><strong>${escapeHtml(l.subject || '')}</strong> · ${escapeHtml(l.classGroup || '')}${l.room ? ` · Raum ${escapeHtml(l.room)}` : ''}</div>
           ${topic ? `<div class="cellSub">${escapeHtml(topic)}</div>` : ''}
+          ${span > 1 ? `<div class="cellTiny">${escapeHtml(blockName(span))} · ${escapeHtml(stundenBereichLabel(slotIndex, span))}</div>` : ''}
           ${comps.length ? `<div class="cellTiny">Kompetenz: ${escapeHtml((l.primaryCompetency || comps[0] || ''))}</div>` : ''}
         </div>
       `
     };
   };
+
+  /* Welche Plätze eine Doppelstunde mit abdeckt. Im Export bekommt sie
+     eine Zelle über mehrere Tabellenzeilen (rowspan) – die abgedeckten
+     Plätze zeichnen dort dann keine eigene Zelle mehr. */
+  const abgedeckt = (()=>{
+    const m = new Set();
+    for (let dayIndex = 0; dayIndex < days.length; dayIndex++){
+      for (let slotIndex = 0; slotIndex < slots; slotIndex++){
+        const raw = lessons[`${dayIndex}-${slotIndex}`];
+        if (!raw) continue;
+        const span = Math.min(blockSpanOf(raw), Math.max(1, slots - slotIndex));
+        for (let i = 1; i < span; i++) m.add(`${dayIndex}-${slotIndex+i}`);
+      }
+    }
+    return m;
+  })();
 
   const dutyFor = (dayIndex, pos) => (dutyMap?.[`${dayIndex}-${pos}`] || '').trim();
 
@@ -11599,6 +13689,8 @@ function buildWeekPdfHtml({ weekStart, week, sequences, schoolCalendar, groupCol
 
   function buildDutyRow(pos){
     const tds = days.map((_, dayIndex) => {
+      // Innerhalb einer Doppelstunde läuft die Zelle durch (rowspan).
+      if (abgedeckt.has(`${dayIndex}-${pos}`)) return '';
       const title = dutyFor(dayIndex, pos);
       if (!title) return `<td class="dutyCell"></td>`;
       return `<td class="dutyCell"><div class="dutyBar">${escapeHtml(title)}</div></td>`;
@@ -11609,13 +13701,16 @@ function buildWeekPdfHtml({ weekStart, week, sequences, schoolCalendar, groupCol
 
   function buildLessonRow(slotIndex){
     const tds = days.map((_, dayIndex) => {
+      if (abgedeckt.has(`${dayIndex}-${slotIndex}`)) return '';
       const dateISO = toISODate(addDays(start, dayIndex));
       const info = getDayInfo(dateISO, schoolCalendar);
       const cell = cellFor(dayIndex, slotIndex);
       const style = [];
       if (cell.bg) style.push(`background:${cell.bg}`);
       if (info?.isOff) style.push('opacity:0.55');
-      return `<td class="lessonCell" style="${style.join(';')}">${cell.html || ''}</td>`;
+      // Eine Doppelstunde überspannt Stundenzeile + Aufsichtsstreifen + Stundenzeile.
+      const rowspan = (cell.span && cell.span > 1) ? ` rowspan="${cell.span * 2 - 1}"` : '';
+      return `<td class="lessonCell"${rowspan} style="${style.join(';')}">${cell.html || ''}</td>`;
     }).join('');
     return `<tr class="lessonRow"><td class="slotCol">${slotIndex+1}. Stunde</td>${tds}</tr>`;
   }
@@ -11720,13 +13815,13 @@ function buildSequencePdfHtml({ sequence, occurrences, schoolCalendar, groupColo
 
   const blocks = (occurrences || []).map((o, idx) => {
     const l = normalizeLesson(o.lesson);
-    const phases = normalizePhases(l.phases || []);
+    const phases = normalizePhases(l.phases || [], lessonTotalMin(l));
     const lessonStart = getLessonStartTime(schoolCalendar, o.slotIndex);
     const times = computePhaseTimes(phases, lessonStart);
 
     const dayLabel = (typeof o.dayIndex === 'number' && o.dayIndex >= 0 && o.dayIndex < DAYS.length) ? DAYS[o.dayIndex] : '';
     const dateLabel = o.dateISO ? formatDateDE(o.dateISO) : '';
-    const slotLabel = Number.isFinite(o.slotIndex) ? ` · ${String(o.slotIndex + 1)}. Std.` : '';
+    const slotLabel = Number.isFinite(o.slotIndex) ? ` · ${stundenBereichLabel(o.slotIndex, blockSpanOf(l)).replace('Stunde', 'Std.')}` : '';
     const headerRaw = `${dayLabel ? `${dayLabel} · ` : ''}${dateLabel}${slotLabel}${lessonStart ? ` · Beginn ${lessonStart}` : ''}`;
     const header = escapeHtml(headerRaw);
 

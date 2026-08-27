@@ -146,6 +146,15 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
     return saveBlob(blob, `prepybara-backup-${stamp}.json`, BACKUP_TYPE);
   };
 
+  /* Ein archiviertes Schuljahr: dieselbe Backup-Form, nur mit den
+     Daten eines Jahres. Kein zweites Dateiformat. */
+  const exportArchive = async ({ data, suggestedFileName } = {}) => {
+    if (!data || typeof data !== 'object') return null;
+    const name = String(suggestedFileName || '').trim() || 'prepybara-archiv.json';
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    return saveBlob(blob, name, BACKUP_TYPE);
+  };
+
   const importBackup = async () => {
     const text = await readTextFile({ ...BACKUP_TYPE, extensions: ['.json'] });
     if (!text) return null;
@@ -192,6 +201,7 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
       persistentStorage: true,
       // Alles Dateibezogene folgt mit dem PWA-Umbau.
       backupFiles: true,
+      archiveFiles: true,
       templateFiles: true,
       pdfExport: true,
       docxExport: true,
@@ -216,6 +226,7 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
     requestPersistence,
 
     exportBackup,
+    exportArchive,
     importBackup,
     exportTemplates,
     importTemplates,

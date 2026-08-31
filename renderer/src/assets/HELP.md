@@ -4,6 +4,42 @@ Dieses Hilfe‑Dokument erklärt die wichtigsten Funktionen von **Prép‑ybara*
 
 ---
 
+## 0) Erste Schritte
+
+Beim ersten Start – solange noch nichts geplant ist – bietet Prép‑ybara einen **Schnellstart** an:
+drei Schritte bis zur ersten fertigen Stunde. Er lässt sich jederzeit überspringen, pausieren
+(**Escape**) und über **Einführung erneut starten** (oben auf dieser Seite) oder die
+**Einstellungen** wiederholen. An deiner Planung ändert das nie etwas.
+
+Alles Weitere erklärt sich erst, wenn du es zum ersten Mal brauchst: ein kurzer Hinweis mit
+**Verstanden**, **Später** und **Nicht mehr anzeigen**. Höchstens einer je Sitzung – und keiner
+zu einer Funktion, die du längst benutzt.
+
+**Deine erste Stunde.** Klicke im **Wochenplan** auf einen Stundenplatz. Trage **Klasse/Kurs**
+und **Fach** ein – beides zusammen ist in Prép‑ybara die *Lerngruppe*, eine eigene Verwaltung
+dafür gibt es nicht. Dann **Thema**, **Lernziel** und in einer **Phase**, was passiert. Mehr
+braucht eine Stunde nicht; alles andere ist freiwillig.
+
+**Sequenzen.** Eine Sequenz fasst die Stunden zu einem Thema zusammen und zeigt dir, wo du
+darin stehst („Stunde 4 von 9"). Du legst sie in der Stunde unter *Unterrichtssequenz* an. Ihre
+Abfolge siehst du in der **Progression**, ihre Termine lassen sich später gemeinsam verschieben.
+
+**Doppelstunden.** Zwei aufeinanderfolgende Stunden derselben Lerngruppe kannst du in der Stunde
+mit **Als Doppelstunde verbinden** zusammenlegen. Es bleibt EINE Stunde mit 90 Minuten – nicht
+zwei halbe. **Doppelstunde trennen** macht es rückgängig.
+
+**Jahresplanung.** Die farbigen Balken sind zunächst nur Orientierung: Sie verschieben keine
+Stunden und erscheinen in keinem Export. Optional kannst du einen Balken mit einer Sequenz
+verknüpfen (siehe 4b).
+
+**Pocket.** Die mobile Begleit‑App plant einzelne Stunden unterwegs. Der Austausch läuft über
+Dateien – keine Verbindung, keine Cloud, kein Konto (siehe 9).
+
+**Backup.** Alle Daten liegen auf diesem Gerät. Ein Backup ist eine einzelne Datei; lege sie
+regelmässig an, am besten nach jeder Planungssitzung (siehe 8).
+
+---
+
 ## 1) Wochenplan
 
 ### Stunden anlegen

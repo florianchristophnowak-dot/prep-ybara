@@ -84,13 +84,26 @@ import {
   TYPEN as SUCH_TYPEN, baueIndex, sucheImIndex, begriffeAus, normalisiere as foldForSearch,
 } from './suche.js';
 import { GlobaleSucheView } from './suche-ansicht.jsx';
+/* Onboarding. Der Zustand liegt in appSettings.onboarding, die
+   Bedingungen im Modul – hier steht nur, was gezeigt wird. */
+import {
+  STATUS as ONB_STATUS, PFADE as ONB_PFADE, SCHRITTE as ONB_SCHRITTE, SCHRITT_TEXT as ONB_SCHRITT_TEXT,
+  SCHNELLSTART_TEXTE, PHASEN_HINWEIS,
+  normalisiereOnboarding, schritteAus, schnellstartSchritt,
+  onboardingKontext, naechsterHinweis, merkeHinweis, istHinweisErledigt,
+  starteOnboarding, pausiereOnboarding, ueberspringeOnboarding, schliesseOnboardingAb,
+  markiereSchritt, setzeCheckliste, setzeBackupZeitpunkt,
+  starteSchnellstartNeu, setzeHinweiseZurueck,
+  ersterFreierPlatz, zeigeWillkommen, zeigeCheckliste,
+} from './onboarding.js';
+import { Coachmark, WillkommenAnsicht, OnboardingCheckliste } from './onboarding-ansicht.jsx';
 import { VersionsverlaufDialog } from './verlauf-ansicht.jsx';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
   ArrowDown, ArrowLeft, ArrowRight, Ban, CalendarClock, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
   Archive, CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, Download, Eraser, Eye,
   FileClock, FileDown, FileText, Grid3x3, Library, Link2, ListTree, Maximize2, MoreHorizontal, NotebookPen, Palmtree,
-  Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
+  GraduationCap, Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
   Square, Star, Sun, Trash2, Unlink, X,
 } from 'lucide-react';
 
@@ -410,7 +423,7 @@ function EasterEggOverlay({ visible }){
 }
 
 
-function HelpView({ version }){
+function HelpView({ version, onStarteEinfuehrung }){
   return (
     <div className="card">
       <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
@@ -418,6 +431,12 @@ function HelpView({ version }){
           <div style={{fontWeight:900, fontSize:16}}>Hilfe</div>
           <div className="muted small">Prép-ybara {version || ''} – Kurzhandbuch</div>
         </div>
+        {typeof onStarteEinfuehrung === 'function' ? (
+          <button className="btn" onClick={onStarteEinfuehrung}
+                  title="Den Schnellstart noch einmal durchlaufen – an der Planung ändert sich nichts">
+            <GraduationCap {...ICON_SM} /> Einführung erneut starten
+          </button>
+        ) : null}
       </div>
 
       <div style={{height:12}} />
@@ -2305,7 +2324,8 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
                         competencyModel, benutzteKompetenzen,
                         onSetCompetencyHidden, onSetCompetencyArea, onRenameCompetency,
                         onDeleteCompetency, onAddCompetencyArea, onRenameCompetencyArea,
-                        onDeleteCompetencyArea, onLeereVerlauf }){
+                        onDeleteCompetencyArea, onLeereVerlauf,
+                        onSchnellstartNeu, onHinweiseZuruecksetzen }){
   const istBrowser = platformName === 'browser';
   return (
     <div className="card" style={{display:'flex', flexDirection:'column', gap:18}}>
@@ -2439,6 +2459,23 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
             </div>
           )
         ) : null}
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Einführung</h3>
+        <p className="settingsText">
+          Der <strong>Schnellstart</strong> führt in drei Schritten zur ersten geplanten Stunde.
+          Alles Weitere erklärt Prép-ybara erst dann, wenn du es zum ersten Mal brauchst –
+          als kurzer Hinweis, den du wegklicken kannst.
+        </p>
+        <p className="settingsText muted small">
+          Beides ändert ausschliesslich diese Einstellung. An deinen Stunden, Sequenzen und
+          Vorlagen wird dabei nichts angefasst.
+        </p>
+        <div className="row wrap" style={{gap:8, marginTop:10}}>
+          <button className="btn" onClick={onSchnellstartNeu}>Schnellstart erneut starten</button>
+          <button className="btn" onClick={onHinweiseZuruecksetzen}>Kontextbezogene Hinweise zurücksetzen</button>
+        </div>
       </section>
 
       <section>
@@ -3547,6 +3584,9 @@ function Sidebar({ aktiv, onNavigate, imArchiv = false }){
       aria-current={aktiv === id ? 'page' : undefined}
       onClick={()=>onNavigate(id)}
       title={label}
+      /* Anker für die Einführung. Ein Attribut statt eines Selektors:
+         Wird die Leiste umgebaut, wandert es mit. */
+      data-onboarding-target={`nav-${id}`}
     >
       <Icon {...ICON} />
       <span className="navLabel">{label}</span>
@@ -4210,6 +4250,13 @@ db.todos = (Array.isArray(db.todos) ? db.todos : []).map(t => {
      ihr eigenes Profil und werden davon nie berührt – das ist der ganze
      Sinn der Angabe je Stunde. */
   db.appSettings.defaultPlanningProfile = normalisiereProfilId(db.appSettings.defaultPlanningProfile);
+
+  /* Der Stand der Einführung. Rein additiv und rückwärtsverträglich:
+     Eine Datenbank aus einer früheren Fassung kennt das Feld nicht und
+     bekommt hier den Anfangszustand. Ob die Einführung tatsächlich
+     erscheint, entscheidet nicht dieses Feld, sondern die Frage, ob
+     schon geplant wurde. */
+  db.appSettings.onboarding = normalisiereOnboarding(db.appSettings.onboarding);
 
   /* Das eigene Exportlayout liegt bewusst hier und nicht in der Stunde:
      wer sich seine Spalten einmal eingerichtet hat, will sie in jeder
@@ -5366,6 +5413,188 @@ const classGroupSuggestions = useMemo(()=>{
   };
 
 
+  /* ---- Onboarding -----------------------------------------------------
+
+     Eine Einführung, die sich selbst überflüssig macht: drei Schritte
+     bis zur ersten geplanten Stunde, danach nur noch Hinweise dort, wo
+     eine Funktion zum ersten Mal gebraucht wird.
+
+     Der Zustand liegt in appSettings.onboarding und wird ausschliesslich
+     über updateAppSettings geschrieben – dieser Weg fasst nur die
+     Einstellungen an. Unterrichtsdaten kann die Einführung damit gar
+     nicht verändern, auch nicht beim Zurücksetzen.                     */
+  const onboarding = useMemo(
+    ()=> normalisiereOnboarding(liveDb?.appSettings?.onboarding),
+    [liveDb?.appSettings?.onboarding],
+  );
+  /* Geschrieben wird über updateAppSettings, das weiter unten entsteht.
+     Die Referenz überbrückt das, ohne die Reihenfolge der Abschnitte
+     umzustellen – und stellt zugleich sicher, dass die Einführung
+     denselben, einzigen Schreibweg benutzt wie jede andere Einstellung. */
+  const updateAppSettingsRef = useRef(null);
+  const setzeOnboarding = useCallback((naechster)=>{
+    updateAppSettingsRef.current?.({ onboarding: naechster });
+  }, []);
+
+  /* Was in dieser Sitzung schon gezeigt wurde. Bewusst nur im Speicher:
+     "Später" soll beim nächsten Start wiederkommen dürfen, und ein
+     Sitzungsmerker gehört nicht in die Datenbank. */
+  const onboardingSitzung = useRef({ gezeigt: false, vertagt: [] });
+  const [aktiverHinweis, setAktiverHinweis] = useState(null);
+
+  /* Der Stand der gerade geöffneten Stunde, bevor er gespeichert ist.
+     Ohne ihn hinkte die Führung dem Tippen um eine halbe Sekunde
+     hinterher. Gemeldet wird nur, was sich wirklich geändert hat –
+     sonst liefe die Anzeige bei jedem Anschlag neu. */
+  const [stundeFortschritt, setStundeFortschritt] = useState(null);
+  const stundeFortschrittRef = useRef('');
+  const meldeStundeFortschritt = useCallback((f)=>{
+    const schluessel = JSON.stringify(f || null);
+    if (stundeFortschrittRef.current === schluessel) return;
+    stundeFortschrittRef.current = schluessel;
+    setStundeFortschritt(f || null);
+  }, []);
+
+  const onboardingAktiv = !imArchiv && !isHelpOnlyWindow && !isExecutionOnlyWindow
+    && onboarding.status === ONB_STATUS.AKTIV;
+
+  const onboardingSchritte = useMemo(
+    ()=> schritteAus(liveDb, onboarding),
+    [liveDb, onboarding],
+  );
+
+  /* Beantwortet ist beantwortet – für diese Sitzung.
+
+     Ohne diesen Merker bliebe die Ansicht nach "Später" stehen: Der
+     Zustand "pausiert" heisst ausdrücklich, dass sie beim NÄCHSTEN
+     Start wiederkommen darf, nicht dass sie jetzt bleiben soll. */
+  const [willkommenBeantwortet, setWillkommenBeantwortet] = useState(false);
+
+  const willkommenOffen = !imArchiv && !isHelpOnlyWindow && !isExecutionOnlyWindow
+    && !willkommenBeantwortet
+    && zeigeWillkommen(liveDb, onboarding);
+
+  /* Solange ein Dialog offen ist, schweigt die Einführung. Ein Hinweis,
+     der hinter einem Overlay klebt, ist keine Hilfe. */
+  const dialogeOffen = Boolean(willkommenOffen || confirmState || promptState || paletteOpen
+    || verlaufDialog || verschiebenDialog || seqManagerModal.open || showWeekCopyDialog
+    || colorPalette.visible || schoolYearDialog.visible || reviewWeek);
+
+  /* Der Schritt, der gerade dran ist. '' heisst: nichts zu zeigen. */
+  const schnellstartId = (onboardingAktiv && !dialogeOffen)
+    ? schnellstartSchritt({ ansicht: view.name, entwurf: stundeFortschritt, schritte: onboardingSchritte })
+    : '';
+
+  /* Der freie Platz, an dem der erste Hinweis hängt. Nur solange die
+     erste Stunde noch aussteht – danach wäre die Hervorhebung im Weg. */
+  const onboardingPlatz = useMemo(
+    ()=> ((onboardingAktiv && schnellstartId === 'stunde')
+      ? ersterFreierPlatz(liveDb, view.weekStart)
+      : null),
+    [onboardingAktiv, schnellstartId, liveDb, view.weekStart],
+  );
+
+  /* Das Öffnen einer Stunde ist der zweite Schritt – ohne "Weiter",
+     wie versprochen. */
+  useEffect(()=>{
+    if (!onboardingAktiv || view.name !== 'lesson') return;
+    if (onboarding.schritte.stunde) return;
+    setzeOnboarding(markiereSchritt(onboarding, 'stunde'));
+  }, [onboardingAktiv, view.name, onboarding, setzeOnboarding]);
+
+  /* Der Schnellstart endet, wenn alle drei Schritte getan sind und der
+     Abschluss quittiert wurde – nicht schon beim dritten Häkchen: die
+     Abschlussmeldung gehört noch dazu. */
+  const beendeSchnellstart = useCallback((weiter)=>{
+    setzeOnboarding(schliesseOnboardingAb(onboarding));
+    weiter?.();
+  }, [onboarding, setzeOnboarding]);
+
+  /* Ein echtes Bedienelement anstossen, statt seine Wirkung ein zweites
+     Mal zu schreiben. Die Einführung soll die App bedienen, nicht sie
+     nachbauen. */
+  const zielBedienen = useCallback((name, { klicken = false } = {})=>{
+    try {
+      const el = document.querySelector(`[data-onboarding-target="${name}"]`);
+      if (!el) return;
+      el.scrollIntoView({ block: 'center', behavior: 'auto' });
+      if (klicken) el.click();
+      else (el.querySelector('input, textarea, select, button') || el).focus?.();
+    } catch {}
+  }, []);
+
+  /* Die vier Wege der Willkommensansicht. Jeder benutzt, was es schon
+     gibt: die Wochenansicht, den Schulkalender, den Backup-Import. Es
+     entsteht kein zweiter Weg in die App. */
+  const waehleOnboardingWeg = useCallback(async (weg)=>{
+    setWillkommenBeantwortet(true);
+    if (weg === ONB_PFADE.ERKUNDEN) {
+      setzeOnboarding(ueberspringeOnboarding(onboarding));
+      showToast('Alles klar. Erklärungen erscheinen später dort, wo du sie brauchst.');
+      return;
+    }
+    if (weg === ONB_PFADE.IMPORT) {
+      /* Nach einem Import ist nichts mehr zu erklären: Der Stand ist da,
+         der Schnellstart hätte nichts zu tun. */
+      setzeOnboarding(starteOnboarding(onboarding, { pfad: ONB_PFADE.IMPORT }));
+      const geladen = await importBackupRef.current?.();
+      setzeOnboarding(geladen
+        ? ueberspringeOnboarding(starteOnboarding(onboarding, { pfad: ONB_PFADE.IMPORT }))
+        : pausiereOnboarding(onboarding));
+      return;
+    }
+    setzeOnboarding(starteOnboarding(onboarding, { pfad: weg }));
+    if (weg === ONB_PFADE.STUNDENPLAN) {
+      setView(v => ({ name: 'calendar', weekStart: v.weekStart }));
+      return;
+    }
+    setView(v => ({ name: 'week', weekStart: v.weekStart }));
+  }, [onboarding, setzeOnboarding, showToast]);
+
+  /* Der Backup-Import entsteht weiter unten; die Referenz überbrückt das. */
+  const importBackupRef = useRef(null);
+
+  /* ---- Kontextbezogene Hinweise ---------------------------------------
+
+     Sie erscheinen, wenn ihre Situation zum ersten Mal entsteht – und
+     höchstens einer je Sitzung. Welche Situation das ist, entscheidet
+     das Modul; hier wird nur gefragt. */
+  const pruefeHinweis = useCallback((ereignis = '')=>{
+    if (imArchiv || isHelpOnlyWindow || isExecutionOnlyWindow) return;
+    if (onboarding.status === ONB_STATUS.AKTIV) return;   // erst den Schnellstart zu Ende
+    if (onboardingSitzung.current.gezeigt || aktiverHinweis) return;
+    const kontext = onboardingKontext(liveDb, {
+      ansicht: view.name, ereignis, heuteISO: toISODate(new Date()), zustand: onboarding,
+    });
+    const hinweis = naechsterHinweis({ zustand: onboarding, kontext, sitzung: onboardingSitzung.current });
+    if (!hinweis) return;
+    onboardingSitzung.current = { ...onboardingSitzung.current, gezeigt: true };
+    setAktiverHinweis(hinweis);
+  }, [imArchiv, onboarding, aktiverHinweis, liveDb, view.name]);
+
+  useEffect(()=>{
+    if (dialogeOffen) return undefined;
+    /* Kurz warten: Die Ansicht soll stehen, bevor sich ein Hinweis
+       daran hängt. */
+    const t = setTimeout(()=>pruefeHinweis(), 900);
+    return ()=> clearTimeout(t);
+  }, [view.name, dialogeOffen, pruefeHinweis]);
+
+  const beantworteHinweis = useCallback((wahl)=>{
+    const h = aktiverHinweis;
+    setAktiverHinweis(null);
+    if (!h) return;
+    if (wahl === 'spaeter') {
+      /* Nichts speichern: in einer späteren Sitzung darf er wiederkommen. */
+      onboardingSitzung.current = {
+        ...onboardingSitzung.current,
+        vertagt: [...onboardingSitzung.current.vertagt, h.id],
+      };
+      return;
+    }
+    setzeOnboarding(merkeHinweis(onboarding, h.id, wahl));
+  }, [aktiverHinweis, onboarding, setzeOnboarding]);
+
   // Ein fehlgeschlagenes Speichern darf nicht still bleiben. Die Meldung
   // bleibt stehen (ttl 0), bis der Nutzer sie schliesst.
   useEffect(()=>{
@@ -5458,6 +5687,8 @@ const classGroupSuggestions = useMemo(()=>{
       persistLive(nextDb);
     } catch {}
   };
+  /* Die Einführung schreibt über denselben Weg – siehe setzeOnboarding. */
+  useEffect(()=>{ updateAppSettingsRef.current = updateAppSettings; });
 
 const todos = Array.isArray(db?.todos) ? db.todos : [];
 const todayISO = toISODate(new Date());
@@ -6233,12 +6464,18 @@ const updateLessonFromEditor = (weekStart, dayIndex, slotIndex, nextLesson) => {
     }
     const path = await platform.exportBackup();
     if (path) toastSavedPath('Backup gespeichert.', path);
+    /* Vermerkt für die Einführung: Wer gesichert hat, braucht keine
+       Backup-Empfehlung mehr. Der Vermerk gehört zum Onboarding, nicht
+       zur Planung. */
+    if (path) setzeOnboarding(setzeBackupZeitpunkt(onboarding));
   };
 
+  /* Rückgabe: ob tatsächlich etwas eingelesen wurde. Die Einführung
+     entscheidet daran, ob der Schnellstart noch etwas zu tun hat. */
   const importBackup = async () => {
     if (!capabilities.backupFiles) {
       showToast('Backup-Import ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
-      return;
+      return false;
     }
     /* Ein Backup wird nicht dazugelegt, es tritt an die Stelle von
        allem. Seit sich auch einzelne archivierte Schuljahre als Backup
@@ -6251,13 +6488,17 @@ const updateLessonFromEditor = (weekStart, dayIndex, slotIndex, nextLesson) => {
       confirmLabel: 'Backup importieren',
       tone: 'danger',
     });
-    if (!ok) return;
+    if (!ok) return false;
     const imported = await platform.importBackup();
     if (imported) {
       persist(ensureDbShape(imported));
       showToast('Backup importiert.', { tone: 'success' });
+      return true;
     }
+    return false;
   };
+  /* Die Willkommensansicht benutzt denselben Import – kein zweiter Weg. */
+  importBackupRef.current = importBackup;
 
   const createSequence = (name) => {
     // If user cancelled a prompt, keep quiet.
@@ -7331,6 +7572,7 @@ const doExportDocx = async (html, suggestedName) => {
       return (
         <WeekView
           readOnly={imArchiv}
+          onboardingPlatz={onboardingPlatz}
           weekStart={view.weekStart}
           week={week}
           sequences={sequences}
@@ -7622,6 +7864,16 @@ const doExportDocx = async (html, suggestedName) => {
           onRenameCompetencyArea={renameCompetencyArea}
           onDeleteCompetencyArea={deleteCompetencyArea}
           onLeereVerlauf={verlaufSpeicher.verfuegbar ? leereVerlauf : null}
+          onSchnellstartNeu={()=>{
+            setzeOnboarding(starteSchnellstartNeu(onboarding));
+            setView(v => ({ name: 'week', weekStart: v.weekStart }));
+            showToast('Schnellstart neu gestartet. Deine Planung bleibt unverändert.');
+          }}
+          onHinweiseZuruecksetzen={()=>{
+            setzeOnboarding(setzeHinweiseZurueck(onboarding));
+            onboardingSitzung.current = { gezeigt: false, vertagt: [] };
+            showToast('Hinweise zurückgesetzt. Sie erscheinen wieder, wenn ihre Situation entsteht.');
+          }}
         />
       );
     }
@@ -7650,7 +7902,16 @@ const doExportDocx = async (html, suggestedName) => {
       );
     }
     if (view.name === 'help') {
-      return <HelpView version={APP_VERSION} />;
+      return (
+        <HelpView
+          version={APP_VERSION}
+          onStarteEinfuehrung={imArchiv ? null : (()=>{
+            setzeOnboarding(starteSchnellstartNeu(onboarding));
+            setView(v => ({ name: 'week', weekStart: v.weekStart }));
+            showToast('Schnellstart neu gestartet. Deine Planung bleibt unverändert.');
+          })}
+        />
+      );
     }
     if (view.name === 'execution') {
       return <ExecutionWindow />;
@@ -7768,11 +8029,19 @@ const doExportDocx = async (html, suggestedName) => {
         onOpenExecution={(snapshot)=>{
           if (capabilities.executionWindow) {
             platform.openExecutionWindow(snapshot);
+            /* Die Durchführung ist eine Funktion, die man beim ersten
+               Mal erklärt bekommen sollte – aber erst, nachdem sie
+               offen ist. */
+            setTimeout(()=>pruefeHinweis('durchfuehrung'), 600);
           } else {
             showToast('Durchführungsansicht ist nur in der Desktop-App verfügbar.', { tone: 'warning' });
           }
         }}
         onDraftTopicChange={(t)=>{ lessonDraftTopicRef.current = String(t || ''); }}
+        /* Nur während der Einführung: Woran der Coachmark erkennt, was
+           schon eingetragen ist – am Entwurf, nicht am gespeicherten
+           Stand. */
+        onDraftFortschritt={onboardingAktiv ? meldeStundeFortschritt : null}
         yearBars={db.yearBars || []}
         onOpenYearPlan={(focusISO)=>{
           setView({ name:'year', weekStart: view.weekStart, focusISO: String(focusISO || view.weekStart) });
@@ -7908,6 +8177,92 @@ const doExportDocx = async (html, suggestedName) => {
         onAlleTreffer={(q)=>oeffneSuche(q)}
         onClose={()=>setPaletteOpen(false)}
       />
+      {/* ---- Einführung ------------------------------------------------
+
+          Drei Teile: die einmalige Willkommensansicht, der Coachmark am
+          jeweils nächsten Schritt und die Checkliste am Rand. Alles
+          andere erklärt sich später von selbst – und nur dann. */}
+      <WillkommenAnsicht
+        offen={willkommenOffen}
+        importMoeglich={capabilities.backupFiles}
+        onWaehlen={(weg)=>waehleOnboardingWeg(weg)}
+        onSpaeter={()=>{
+          setWillkommenBeantwortet(true);
+          setzeOnboarding(pausiereOnboarding(onboarding));
+        }}
+      />
+
+      {/* Der Schnellstart. Der Hinweis nach der ersten Phase kommt
+          dazwischen: Er verlangt nichts und wird deshalb kein Schritt. */}
+      {(schnellstartId === 'abschluss' && !istHinweisErledigt(onboarding, PHASEN_HINWEIS.id)) ? (
+        <Coachmark
+          offen
+          titel={PHASEN_HINWEIS.titel}
+          text={PHASEN_HINWEIS.text}
+          ziel={SCHNELLSTART_TEXTE.phase.ziel}
+          aktionen={[
+            { id: 'ok', label: 'Verstanden', tone: 'primary',
+              onSelect: ()=>setzeOnboarding(merkeHinweis(onboarding, PHASEN_HINWEIS.id, 'verstanden')) },
+          ]}
+          onSchliessen={()=>setzeOnboarding(pausiereOnboarding(onboarding))}
+        />
+      ) : schnellstartId === 'abschluss' ? (
+        <Coachmark
+          offen
+          titel={SCHNELLSTART_TEXTE.abschluss.titel}
+          text={SCHNELLSTART_TEXTE.abschluss.text}
+          ziel={SCHNELLSTART_TEXTE.abschluss.ziel}
+          aktionen={[
+            { id: 'phase', label: 'Weitere Phase hinzufügen',
+              onSelect: ()=>beendeSchnellstart(()=>zielBedienen('stunde-phase-hinzu', { klicken: true })) },
+            { id: 'sequenz', label: 'Stunde einer Sequenz zuordnen',
+              onSelect: ()=>beendeSchnellstart(()=>zielBedienen('stunde-sequenz')) },
+            { id: 'woche', label: 'Zur Wochenübersicht', tone: 'primary',
+              onSelect: ()=>beendeSchnellstart(()=>setView(v => ({ name: 'week', weekStart: v.weekStart }))) },
+          ]}
+          onSchliessen={()=>beendeSchnellstart()}
+        />
+      ) : schnellstartId ? (
+        <Coachmark
+          offen
+          titel={SCHNELLSTART_TEXTE[schnellstartId]?.titel || ''}
+          text={SCHNELLSTART_TEXTE[schnellstartId]?.text || ''}
+          ziel={SCHNELLSTART_TEXTE[schnellstartId]?.ziel || ''}
+          fortschritt={`${ONB_SCHRITTE.filter(id => onboardingSchritte[id]).length} von ${ONB_SCHRITTE.length}`}
+          onSchliessen={()=>{
+            setzeOnboarding(pausiereOnboarding(onboarding));
+            showToast('Einführung pausiert. In den Einstellungen kannst du sie fortsetzen.');
+          }}
+        />
+      ) : null}
+
+      {/* Kontextbezogene Hinweise: höchstens einer je Sitzung. */}
+      <Coachmark
+        offen={Boolean(aktiverHinweis && !dialogeOffen)}
+        titel={aktiverHinweis?.titel || ''}
+        text={aktiverHinweis?.text || ''}
+        ziel={aktiverHinweis?.ziel || ''}
+        aktionen={[
+          { id: 'ok', label: 'Verstanden', tone: 'primary', onSelect: ()=>beantworteHinweis('verstanden') },
+          { id: 'spaeter', label: 'Später', onSelect: ()=>beantworteHinweis('spaeter') },
+          { id: 'nie', label: 'Nicht mehr anzeigen', onSelect: ()=>beantworteHinweis('nie') },
+        ]}
+        onSchliessen={()=>beantworteHinweis('spaeter')}
+      />
+
+      <OnboardingCheckliste
+        offen={!dialogeOffen && zeigeCheckliste(liveDb, onboarding)}
+        schritte={onboardingSchritte}
+        reihenfolge={ONB_SCHRITTE}
+        texte={ONB_SCHRITT_TEXT}
+        eingeklappt={onboarding.checkliste.eingeklappt}
+        onEinklappen={(wert)=>setzeOnboarding(setzeCheckliste(onboarding, { eingeklappt: wert }))}
+        onAusblenden={()=>{
+          setzeOnboarding(setzeCheckliste(onboarding, { sichtbar: false }));
+          showToast('Checkliste ausgeblendet. Über die Einstellungen kommt sie zurück.');
+        }}
+      />
+
       <VerschiebenDialog
         offen={!!verschiebenDialog}
         db={liveDb}
@@ -8065,6 +8420,7 @@ const doExportDocx = async (html, suggestedName) => {
 }
 
 function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO, groupColors, duties, supervisionSuggestions, onHideSupervisionSuggestion = ()=>{},
+  onboardingPlatz = null,
   readOnly = false,
   lessonClipboard, onCopyLesson, onCutLesson, onPasteLesson, onLessonDnd, onReviewLesson,
   onJoinBlock, onSplitBlock,
@@ -8287,11 +8643,17 @@ const exportWeekDocx = () => {
                   borderLeft: `7px solid ${lineColor(gColor)}`,
                   background: hexToRgba(surfaceColor(gColor), info.isOff ? 0.07 : 0.12),
                 } : undefined;
+                /* Der Platz, an dem die Einführung ansetzt. Sie hebt ihn
+                   dezent hervor und hängt ihren Hinweis daran – ohne
+                   Bildschirmkoordinaten und ohne eigene Zellenlogik. */
+                const istOnboardingPlatz = !l && onboardingPlatz
+                  && onboardingPlatz.dayIndex === dayIndex && onboardingPlatz.slotIndex === slotIndex;
                 return (
                   <div
                     key={k}
                     style={{...(cellStyle || {}), gridColumn: spalteNr(dayIndex), gridRow: `${stundenZeileNr(slotIndex)} / span ${zeilenSpan}`}}
-                    className={`lessonCell ${info.isOff ? 'dayOffCell' : ''} ${gKey ? 'hasGroupColor' : ''} ${istBlock ? 'lessonCell--block' : ''} ${dropKey === k ? 'dropTarget' : ''} ${(readOnly && !l) ? 'lessonCell--leer' : ''}`}
+                    data-onboarding-target={istOnboardingPlatz ? 'wochen-freier-platz' : undefined}
+                    className={`lessonCell ${info.isOff ? 'dayOffCell' : ''} ${gKey ? 'hasGroupColor' : ''} ${istBlock ? 'lessonCell--block' : ''} ${dropKey === k ? 'dropTarget' : ''} ${(readOnly && !l) ? 'lessonCell--leer' : ''}${istOnboardingPlatz ? ' lessonCell--onboarding' : ''}`}
                     tabIndex={(readOnly && !l) ? -1 : 0}
                     onClick={()=>{
                       // Im Archiv gibt es an einem leeren Platz nichts anzusehen.
@@ -9068,6 +9430,7 @@ function LessonView({
   groupColors,
   onOpenGroupColorPalette,
   onDraftTopicChange,
+  onDraftFortschritt,
   yearBars,
   onOpenYearPlan,
 }){
@@ -9192,6 +9555,22 @@ function LessonView({
   useEffect(()=>{
     if (onDraftTopicChange) onDraftTopicChange(local.topic || '');
   }, [local.topic, onDraftTopicChange]);
+
+  /* Was die Einführung wissen muss, während getippt wird: welcher
+     Schritt schon erledigt ist. Bewusst nur diese vier Ja/Nein-Werte –
+     der Entwurf selbst bleibt hier. Ohne Einführung wird die Funktion
+     nicht übergeben, dann kostet das hier nichts. */
+  useEffect(()=>{
+    if (typeof onDraftFortschritt !== 'function') return;
+    const t = (v)=> String(v ?? '').trim().length > 0;
+    onDraftFortschritt({
+      lerngruppe: t(local.classGroup) && t(local.subject),
+      thema: t(local.topic),
+      lernziel: t(local.objectives),
+      phase: (Array.isArray(local.phases) ? local.phases : [])
+        .some(p => t(p?.socialForm) || t(p?.content) || t(p?.materialsMedia) || t(p?.remarks)),
+    });
+  }, [local, onDraftFortschritt]);
 
   useEffect(()=>{
     // Ignore the very first effect run after (re)initialization.
@@ -9737,7 +10116,7 @@ const exportDocx = () => {
           jede einzelne Stelle daran zu erinnern. Die Ausgabe (PDF,
           Word) liegt bewusst ausserhalb: sie ändert nichts. */}
       <fieldset className="archivFieldset" disabled={readOnly}>
-      <div className="row wrap">
+      <div className="row wrap" data-onboarding-target="stunde-lerngruppe">
         <div className="grow">
           <label className="small muted">Fach</label>
           <SubjectInput
@@ -9818,7 +10197,7 @@ const exportDocx = () => {
       ) : null}
 
       <fieldset className="archivFieldset" disabled={readOnly}>
-      <div className="row wrap">
+      <div className="row wrap" data-onboarding-target="stunde-thema">
         <div className="grow">
           <label className="small muted">Stundenthema</label>
           <input className="input" value={local.topic} onChange={(e)=>setField('topic', e.target.value)} placeholder="z. B. Bruchrechnung: Addition" />
@@ -9830,7 +10209,7 @@ const exportDocx = () => {
 
       <div style={{height:10}} />
 
-      <div className="row wrap">
+      <div className="row wrap" data-onboarding-target="stunde-sequenz">
         <div className="grow">
           <label className="small muted">Unterrichtssequenz</label>
           <SequenceSelect
@@ -9906,7 +10285,7 @@ const exportDocx = () => {
 
       <div style={{height:10}} />
 
-      <div>
+      <div data-onboarding-target="stunde-lernziele">
         <label className="small muted">Lernziele (Stichpunkte oder Sätze)</label>
         <textarea value={local.objectives} onChange={(e)=>setField('objectives', e.target.value)} placeholder="- Die Lernenden können ..." />
       </div>
@@ -9975,13 +10354,13 @@ const exportDocx = () => {
                   <CircleHelp {...ICON_SM} /> Didaktik-Check
                 </button>
               ) : null}
-              <button className="btn" onClick={addPhase}>+ Phase</button>
+              <button className="btn" onClick={addPhase} data-onboarding-target="stunde-phase-hinzu">+ Phase</button>
             </div>
           </div>
 
           <div style={{height:10}} />
 
-          <div className="phaseEditorList">
+          <div className="phaseEditorList" data-onboarding-target="stunde-phasen">
             {local.phases.map((ph, idx)=>{
               /* Welche Angaben diese Phase zeigt, entscheidet das
                  Planungsprofil – mit einer Ausnahme: was bereits

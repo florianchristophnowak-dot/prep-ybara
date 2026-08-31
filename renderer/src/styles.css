@@ -2191,3 +2191,118 @@ a.btn.is-disabled { opacity: 0.5; pointer-events: none; }
   white-space: nowrap;
   max-width: 46ch;
 }
+
+/* ============================================================
+   Einführung (Onboarding)
+
+   Dieselben Flächen, Linien und Knöpfe wie überall – ein Hinweis ist
+   eine kleine Karte, kein eigenes Bedienkonzept. Nur die
+   Willkommensansicht ist grossflächig, und sie kommt genau einmal.
+   ============================================================ */
+
+/* Für Screenreader gedacht, für das Auge nicht. */
+.visuallyHidden {
+  position: absolute; width: 1px; height: 1px;
+  margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* Der Ring um das Element, um das es gerade geht. Er liegt darüber und
+   nimmt nichts entgegen – darunter lässt sich normal weiterarbeiten. */
+.onboardingRing {
+  position: fixed;
+  z-index: 70;
+  pointer-events: none;
+  border: 2px solid var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.onboardingKarte {
+  position: fixed;
+  z-index: 71;
+  width: min(340px, calc(100vw - 24px));
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-lg);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fadeIn 140ms ease-out;
+}
+/* Ohne Ziel legt sich der Hinweis an den unteren Rand, statt zu
+   verschwinden. */
+.onboardingKarte--angedockt { top: auto; bottom: 56px; left: 20px; }
+.onboardingKopf { display: flex; align-items: baseline; gap: 8px; }
+.onboardingTitel { font-weight: var(--fw-bold); font-size: var(--fs-md); flex: 1; }
+.onboardingText { margin: 0; font-size: var(--fs-md); line-height: 1.5; color: var(--text-secondary); }
+.onboardingAktionen { display: flex; flex-wrap: wrap; gap: 6px; }
+.onboardingSchliessen {
+  border: none; background: none; padding: 2px; cursor: pointer;
+  color: var(--muted); display: inline-flex; align-items: center;
+}
+.onboardingSchliessen:hover { color: var(--danger); }
+
+/* Der Platz im Wochenraster, an dem die Einführung ansetzt. Dezent:
+   dieselbe Zelle, nur mit Kante. */
+.lessonCell--onboarding {
+  border-color: var(--primary);
+  border-style: solid;
+  box-shadow: inset 0 0 0 1px var(--primary-soft);
+}
+
+/* ---- Willkommen ------------------------------------------------------- */
+.onboardingOverlay { z-index: 90; }
+.onboardingWillkommen { width: min(560px, 100%); }
+.onboardingWege { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.onboardingWeg {
+  width: 100%;
+  display: flex; flex-direction: column; gap: 2px;
+  text-align: left; cursor: pointer;
+  padding: 10px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  font: inherit; color: inherit;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+.onboardingWeg:hover:not(:disabled) { border-color: var(--primary); background: var(--bg-subtle); }
+.onboardingWeg:disabled { opacity: 0.5; cursor: not-allowed; }
+.onboardingWeg--primaer { border-color: var(--primary); background: var(--primary-soft); }
+.onboardingWegLabel { display: flex; align-items: center; gap: 8px; font-weight: var(--fw-bold); font-size: var(--fs-lg); }
+.onboardingSpaeter { display: flex; justify-content: flex-end; margin-top: 14px; }
+
+/* ---- Checkliste -------------------------------------------------------- */
+.onboardingCheckliste {
+  position: fixed;
+  left: 20px;
+  bottom: 56px;
+  z-index: 60;
+  width: min(260px, calc(100vw - 40px));
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-md);
+  padding: 8px 10px;
+}
+.onboardingChecklisteKopf { display: flex; align-items: center; gap: 6px; }
+.onboardingChecklisteTitel {
+  flex: 1; display: flex; align-items: center; gap: 6px;
+  border: none; background: none; padding: 0; cursor: pointer;
+  font: inherit; font-weight: var(--fw-bold); color: var(--text); text-align: left;
+}
+.onboardingChecklisteListe { list-style: none; margin: 8px 0 2px; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.onboardingChecklisteListe li { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text-secondary); }
+.onboardingChecklisteListe li.is-erledigt { color: var(--muted); text-decoration: line-through; }
+.onboardingHaken {
+  width: 16px; height: 16px; flex: 0 0 16px;
+  border: 1px solid var(--border-strong);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--success);
+}
+.onboardingChecklisteListe li.is-erledigt .onboardingHaken { border-color: var(--success); }
+
+@media (max-width: 720px) {
+  .onboardingCheckliste, .onboardingKarte--angedockt { left: 12px; right: 12px; width: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboardingKarte { animation: none !important; }
+}

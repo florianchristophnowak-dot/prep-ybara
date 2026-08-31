@@ -43,6 +43,18 @@ npm run dist:portable
   - **Backup exportieren** → JSON-Datei speichern
   - **Backup importieren** → JSON-Datei wiederherstellen
 
+## Einführung (Onboarding)
+- Bei einer **leeren** Datenbank bietet die App einen Schnellstart an: drei Schritte bis zur
+  ersten geplanten Stunde. Sind bereits Stunden, Sequenzen, Vorlagen, Balken, To-dos oder ein
+  eingerichteter Schulkalender vorhanden, erscheint sie nicht.
+- Weitere Funktionen erklären sich erst bei ihrer ersten Nutzung – höchstens ein Hinweis je
+  Sitzung, und keiner zu einer Funktion, die schon benutzt wird.
+- Der Zustand liegt lokal unter `appSettings.onboarding` (Fassung, Status, Pfad, erledigte
+  Schritte, verstandene Hinweise, Checkliste). Ältere Datenbanken und Backups ohne dieses Feld
+  bekommen beim Laden sinnvolle Standardwerte.
+- Erneut starten: **Hilfe → Einführung erneut starten** oder **Einstellungen → Einführung**.
+  Zurücksetzen ändert ausschliesslich diese Einstellung, nie Unterrichtsdaten.
+
 ## Versionsverlauf
 - Neben dem Rückgängigmachen führt die App einen lokalen **Versionsverlauf**: frühere Fassungen
   einzelner Stunden, Sequenzen und Sammelaktionen (z. B. eine verschobene Sequenz).
@@ -85,6 +97,8 @@ renderer/          Desktop-App (Electron + Browser-Fassung)   – unverändert
   src/verschieben-dialog.jsx  Vorschau und Ausführung des Verschiebens
   src/suche.js              Suchindex, Normalisierung, Treffer, sichere Hervorhebung
   src/suche-ansicht.jsx     Suchansicht mit Filtern und Treffergruppen
+  src/onboarding.js         Einführung: Zustand, leere Datenbank, Schritte, Hinweis-Registry
+  src/onboarding-ansicht.jsx  Willkommensansicht, Coachmark, Checkliste
 electron/          Hauptprozess, Preload, Menü
 pocket/            Prép-ybara Pocket (PWA)
   src/views/       mobile Ansichten
@@ -94,7 +108,7 @@ shared/            von beiden benutzt
   types/           Typbeschreibung des Formats (.d.ts)
   datum.js         Datumsrechnung
 tests/             node:test – Format, Import, Pocket-Modell, Doppelstunden,
-                   Versionsverlauf, Jahresbalken, Verschieben, Suche
+                   Versionsverlauf, Jahresbalken, Verschieben, Suche, Onboarding
 ```
 
 Geteilt werden **Format, Kennungen und Prüfung** – keine Oberflächenbausteine.

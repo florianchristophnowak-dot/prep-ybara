@@ -38,10 +38,21 @@ npm run dist:portable
 ```
 
 ## Daten speichern / Backup
-- Die App speichert lokal in deinem Benutzerprofil (Electron Store).
+- Die App speichert lokal in deinem Benutzerprofil (Electron Store, Datei `prepybara`).
 - In der Wochenansicht:
   - **Backup exportieren** → JSON-Datei speichern
   - **Backup importieren** → JSON-Datei wiederherstellen
+
+## Versionsverlauf
+- Neben dem Rückgängigmachen führt die App einen lokalen **Versionsverlauf**: frühere Fassungen
+  einzelner Stunden, Sequenzen und Sammelaktionen (z. B. eine verschobene Sequenz).
+- Er liegt **getrennt** von der Planung – Desktop: eigene Store-Datei `prepybara-verlauf`;
+  Browser: eigene IndexedDB-Datenbank `prepybara-verlauf`. Er ist deshalb **nicht** Teil eines
+  Backups, wandert nicht nach Pocket und nicht in exportierte Vorlagen.
+- Aufbewahrt werden höchstens 30 Tage, 20 Fassungen je Stunde bzw. Sequenz und 400 Einträge
+  insgesamt. Binärkopien angehängter Dateien werden nie gespeichert, nur Verweise.
+- Zu finden über **Versionsverlauf** in der Stunde und im ⋯-Menü einer Sequenz;
+  leeren lässt er sich in den **Einstellungen**.
 
 ## PDF
 - In der Einzelstundenansicht: **PDF speichern** (wird als A4-PDF erzeugt)
@@ -65,7 +76,15 @@ Dateien**.
 
 ```
 renderer/          Desktop-App (Electron + Browser-Fassung)   – unverändert
-  src/doppelstunde.js  Doppelstunden: welche Stundenplätze eine Stunde belegt
+  src/doppelstunde.js       Doppelstunden: welche Stundenplätze eine Stunde belegt
+  src/versionsverlauf.js    Versionsverlauf: Einträge, Bündelung, Aufbewahrung, Wiederherstellung
+  src/verlauf-speicher.js   dessen Ablage (lädt erst bei Bedarf, schreibt der Reihe nach)
+  src/verlauf-ansicht.jsx   Dialog: Fassungen ansehen und zurückholen
+  src/jahresbalken.js       optionale Verbindung von Jahresbalken und Sequenzen
+  src/verschieben.js        Verschiebevorschläge: Ferien, Doppelstunden, Konflikte, Atomarität
+  src/verschieben-dialog.jsx  Vorschau und Ausführung des Verschiebens
+  src/suche.js              Suchindex, Normalisierung, Treffer, sichere Hervorhebung
+  src/suche-ansicht.jsx     Suchansicht mit Filtern und Treffergruppen
 electron/          Hauptprozess, Preload, Menü
 pocket/            Prép-ybara Pocket (PWA)
   src/views/       mobile Ansichten
@@ -74,7 +93,8 @@ shared/            von beiden benutzt
   exchange/        Austauschformat, stabile Kennungen, Prüfung
   types/           Typbeschreibung des Formats (.d.ts)
   datum.js         Datumsrechnung
-tests/             node:test – Format, Import, Pocket-Modell, Doppelstunden
+tests/             node:test – Format, Import, Pocket-Modell, Doppelstunden,
+                   Versionsverlauf, Jahresbalken, Verschieben, Suche
 ```
 
 Geteilt werden **Format, Kennungen und Prüfung** – keine Oberflächenbausteine.

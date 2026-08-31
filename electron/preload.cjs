@@ -12,6 +12,12 @@ contextBridge.exposeInMainWorld('api', {
   exportTemplates: () => ipcRenderer.invoke('templates:export'),
   importTemplates: () => ipcRenderer.invoke('templates:import'),
 
+  /* Versionsverlauf. Eigene Ablage, eigene Kanäle: er gehört nicht in
+     die Unterrichtsdatenbank und wandert deshalb auch nicht durch
+     db:get / db:set. */
+  getHistory: () => ipcRenderer.invoke('history:get'),
+  setHistory: (daten) => ipcRenderer.invoke('history:set', daten),
+
   // Austausch mit Prép-ybara Pocket (dateibasiert, keine Verbindung)
   exportPocketProfile: (payload) => ipcRenderer.invoke('pocket:export-profile', payload),
   importPocketFile: () => ipcRenderer.invoke('pocket:import-file'),

@@ -52,11 +52,44 @@ import {
   blockOwnerAt, istAbgedeckt, stundenBereichLabel, blockName, passenZusammen,
   verteilePhasenAufPlaetze,
 } from './doppelstunde.js';
+/* Versionsverlauf: längerfristige Wiederherstellungspunkte neben dem
+   Rückgängig. Die Logik steht im Modul, die Ablage im Plattformadapter –
+   hier werden nur die Sicherungspunkte gesetzt. */
+import {
+  MAX_TAGE as MAX_VERLAUF_TAGE, MAX_JE_ZIEL as MAX_VERLAUF_JE_ZIEL, MAX_GESAMT as MAX_VERLAUF_GESAMT,
+  erstelleEintrag as erstelleVerlaufEintrag,
+  stundenTeil, sequenzTeil, vorlagenTeil, balkenTeil,
+  stundenZiel, sequenzZiel, vorlagenZiel, balkenZiel,
+  geaenderteFelder, eintraegeFuer, aktuellerStand, wendeAn as wendeVerlaufAn,
+} from './versionsverlauf.js';
+import { erstelleVerlaufSpeicher } from './verlauf-speicher.js';
+/* Die optionale Verbindung von Jahresbalken und Sequenzen. Der Balken
+   speichert nur die Kennung – alles Weitere wird hieraus gerechnet. */
+import {
+  auswahlSequenzen, balkenBeschriftung, balkenSequenzId,
+  entferneSequenzAusBalken, istVerwaist, zeitraumAusSequenz,
+} from './jahresbalken.js';
+/* Sequenzen verschieben: erst rechnen, dann zeigen, dann ausführen.
+   Die Berechnung ist rein und liegt im Modul; hier steht, was danach
+   mit den Daten geschieht. */
+import {
+  UMFANG as VERSCHIEBE_UMFANG,
+  wendeVerschiebungAn, betroffeneOrte, balkenNachVerschiebung,
+} from './verschieben.js';
+import { VerschiebenDialog } from './verschieben-dialog.jsx';
+/* Globale Suche. Der Index entsteht im Arbeitsspeicher aus den Daten
+   und wird nirgends gespeichert – er kann deshalb weder veralten noch
+   in einem Backup landen. */
+import {
+  TYPEN as SUCH_TYPEN, baueIndex, sucheImIndex, begriffeAus, normalisiere as foldForSearch,
+} from './suche.js';
+import { GlobaleSucheView } from './suche-ansicht.jsx';
+import { VersionsverlaufDialog } from './verlauf-ansicht.jsx';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
-  ArrowDown, ArrowLeft, ArrowRight, Ban, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
+  ArrowDown, ArrowLeft, ArrowRight, Ban, CalendarClock, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
   Archive, CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, Download, Eraser, Eye,
-  FileDown, FileText, Grid3x3, Library, Link2, ListTree, Maximize2, MoreHorizontal, NotebookPen, Palmtree,
+  FileClock, FileDown, FileText, Grid3x3, Library, Link2, ListTree, Maximize2, MoreHorizontal, NotebookPen, Palmtree,
   Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
   Square, Star, Sun, Trash2, Unlink, X,
 } from 'lucide-react';
@@ -1656,7 +1689,7 @@ function deepClone(obj){
 
 // Einzige Quelle für die Schema-Kennzeichnung im Renderer. Muss mit
 // SCHEMA_VERSION in electron/main.cjs übereinstimmen.
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 /* ============================================================
    Interaktionsschicht: Meldungen, Bestätigung, Eingabe
@@ -1892,14 +1925,15 @@ function KebabMenu({ eintraege, titel = 'Weitere Aktionen', ausrichtung = 'recht
   );
 }
 
-function foldForSearch(str){
-  return String(str || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/ß/g, 'ss')
-    .toLowerCase()
-    .trim();
-}
+/* Wie die Trefferarten in der Palette heissen. Einzahl, weil dort
+   einzelne Treffer stehen – die Suchansicht gruppiert in der Mehrzahl. */
+const SUCH_GRUPPEN = {
+  [SUCH_TYPEN.STUNDE]: 'Stunde',
+  [SUCH_TYPEN.SEQUENZ]: 'Sequenz',
+  [SUCH_TYPEN.VORLAGE]: 'Vorlage',
+  [SUCH_TYPEN.JAHRESPLANUNG]: 'Jahresplanung',
+  [SUCH_TYPEN.TODO]: 'To-do',
+};
 
 /* ============================================================
    Befehlspalette (Strg+K)
@@ -1908,7 +1942,7 @@ function foldForSearch(str){
    wählen, Eingabe führt aus, Escape schliesst. Die Liste bekommt sie
    von aussen, damit sie nichts über den Aufbau der App wissen muss.
    ============================================================ */
-function CommandPalette({ open, commands, onClose }){
+function CommandPalette({ open, commands, suchIndex = null, onOeffneTreffer = null, onAlleTreffer = null, onClose }){
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const inputRef = useRef(null);
@@ -1939,12 +1973,43 @@ function CommandPalette({ open, commands, onClose }){
       .slice(0, 60);
   }, [commands, query]);
 
+  /* Die Befehlspalette ist zugleich der schnelle Weg in die Inhalte.
+
+     Sie bekommt deshalb keine zweite Suchoberfläche daneben, sondern
+     zeigt unter den Befehlen die besten Treffer aus der globalen Suche
+     – und einen Eintrag, der die vollständige Suchansicht öffnet. */
+  const inhalte = useMemo(()=>{
+    const q = String(query || '').trim();
+    if (!open || !suchIndex || q.length < 2 || typeof onOeffneTreffer !== 'function') return [];
+    return sucheImIndex(suchIndex, q).slice(0, 8).map(({ dokument, fundstelle })=>({
+      id: `treffer-${dokument.id}`,
+      label: dokument.titel,
+      group: `${SUCH_GRUPPEN[dokument.typ] || 'Treffer'}${dokument.quelle?.archiviert ? ' · Archiv' : ''}`,
+      hint: fundstelle?.text || '',
+      run: ()=> onOeffneTreffer(dokument),
+    }));
+  }, [open, suchIndex, query, onOeffneTreffer]);
+
+  const eintraege = useMemo(()=>{
+    const q = String(query || '').trim();
+    const alles = [...filtered, ...inhalte];
+    if (q.length >= 2 && typeof onAlleTreffer === 'function') {
+      alles.push({
+        id: 'suche-alle',
+        label: `Alle Treffer für „${q}“ anzeigen`,
+        group: 'Suche',
+        run: ()=> onAlleTreffer(q),
+      });
+    }
+    return alles;
+  }, [filtered, inhalte, query, onAlleTreffer]);
+
   useEffect(()=>{ setActive(0); }, [query]);
   useEffect(()=>{
     if (!open) return;
     const el = listRef.current?.querySelector('[data-active="true"]');
     el?.scrollIntoView({ block: 'nearest' });
-  }, [active, open, filtered.length]);
+  }, [active, open, eintraege.length]);
 
   if (!open) return null;
 
@@ -1952,11 +2017,11 @@ function CommandPalette({ open, commands, onClose }){
 
   const onKeyDown = (e)=>{
     if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
-    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(i => Math.min(i + 1, filtered.length - 1)); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(i => Math.min(i + 1, eintraege.length - 1)); return; }
     if (e.key === 'ArrowUp') { e.preventDefault(); setActive(i => Math.max(i - 1, 0)); return; }
     if (e.key === 'Home') { e.preventDefault(); setActive(0); return; }
-    if (e.key === 'End') { e.preventDefault(); setActive(Math.max(0, filtered.length - 1)); return; }
-    if (e.key === 'Enter') { e.preventDefault(); run(filtered[active]); return; }
+    if (e.key === 'End') { e.preventDefault(); setActive(Math.max(0, eintraege.length - 1)); return; }
+    if (e.key === 'Enter') { e.preventDefault(); run(eintraege[active]); return; }
   };
 
   return (
@@ -1970,10 +2035,10 @@ function CommandPalette({ open, commands, onClose }){
             value={query}
             onChange={(e)=>setQuery(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Springen oder ausführen…"
-            aria-label="Befehl suchen"
+            placeholder="Springen, ausführen oder suchen…"
+            aria-label="Befehl oder Inhalt suchen"
             aria-controls="paletteList"
-            aria-activedescendant={filtered[active] ? `paletteItem-${active}` : undefined}
+            aria-activedescendant={eintraege[active] ? `paletteItem-${active}` : undefined}
             role="combobox"
             aria-expanded="true"
             autoComplete="off"
@@ -1981,9 +2046,9 @@ function CommandPalette({ open, commands, onClose }){
           <kbd className="paletteHint">Esc</kbd>
         </div>
         <ul className="paletteList" id="paletteList" role="listbox" ref={listRef}>
-          {filtered.length === 0 ? (
+          {eintraege.length === 0 ? (
             <li className="paletteEmpty">Kein Treffer für „{query}“.</li>
-          ) : filtered.map((c, i)=>(
+          ) : eintraege.map((c, i)=>(
             <li
               key={c.id}
               id={`paletteItem-${i}`}
@@ -1994,7 +2059,10 @@ function CommandPalette({ open, commands, onClose }){
               onMouseEnter={()=>setActive(i)}
               onMouseDown={(e)=>{ e.preventDefault(); run(c); }}
             >
-              <span className="paletteLabel">{c.label}</span>
+              <span className="paletteLabel">
+                {c.label}
+                {c.hint ? <span className="paletteHinweis">{c.hint}</span> : null}
+              </span>
               {c.group ? <span className="paletteGroup">{c.group}</span> : null}
             </li>
           ))}
@@ -2237,7 +2305,7 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
                         competencyModel, benutzteKompetenzen,
                         onSetCompetencyHidden, onSetCompetencyArea, onRenameCompetency,
                         onDeleteCompetency, onAddCompetencyArea, onRenameCompetencyArea,
-                        onDeleteCompetencyArea }){
+                        onDeleteCompetencyArea, onLeereVerlauf }){
   const istBrowser = platformName === 'browser';
   return (
     <div className="card" style={{display:'flex', flexDirection:'column', gap:18}}>
@@ -2370,6 +2438,33 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
               Planungssitzung.
             </div>
           )
+        ) : null}
+      </section>
+
+      <section>
+        <h3 className="settingsHeading">Versionsverlauf</h3>
+        <p className="settingsText">
+          Neben dem Rückgängigmachen führt Prép-ybara einen <strong>lokalen
+          Versionsverlauf</strong>: frühere Fassungen einzelner Stunden, Sequenzen
+          und Sammelaktionen. Er entsteht an wenigen, festen Punkten – beim
+          Verlassen einer geänderten Stunde sowie vor dem Löschen, Verschieben,
+          Ersetzen und Wiederherstellen.
+        </p>
+        <p className="settingsText">
+          Er liegt {istBrowser ? 'in einer eigenen Browser-Datenbank' : 'in einer eigenen Datei'} neben
+          der Planung – nicht in ihr. Deshalb gehört er <b>nicht</b> zum Backup, wandert
+          nicht nach Pocket und nicht in exportierte Vorlagen. Angehängte Dateien
+          werden nie hineinkopiert; gespeichert werden nur Verweise.
+        </p>
+        <p className="settingsText muted small">
+          Aufbewahrt werden höchstens {MAX_VERLAUF_TAGE} Tage, höchstens {MAX_VERLAUF_JE_ZIEL} Fassungen
+          je Stunde oder Sequenz und insgesamt {MAX_VERLAUF_GESAMT} Einträge. Ältere fallen
+          von selbst weg; die Unterrichtsdaten bleiben davon unberührt.
+        </p>
+        {typeof onLeereVerlauf === 'function' ? (
+          <div className="row" style={{gap:8, marginTop:10}}>
+            <button className="btn" onClick={onLeereVerlauf}>Versionsverlauf leeren</button>
+          </div>
         ) : null}
       </section>
 
@@ -3061,7 +3156,7 @@ function LessonReviewView({
    konkreten Sequenz: ein dezentes "Exportieren ▾" oben rechts, in
    derselben Zeile wie die übrigen Aktionen. */
 function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, onOpenLessons,
-                                   onExportDocx, onExportPdf }){
+                                   onExportDocx, onExportPdf, onVerschieben, onVerschiebenAb }){
   const [exportOffen, setExportOffen] = useState(false);
   const exportRef = useRef(null);
   useEffect(()=>{
@@ -3097,6 +3192,12 @@ function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, 
         </div>
         <div className="row wrap" style={{gap:8}}>
           <button className="btn" onClick={onOpenLessons}>Stunden im Makroplan</button>
+          {typeof onVerschieben === 'function' ? (
+            <button className="btn" onClick={()=>onVerschieben()}
+                    title="Die Termine dieser Sequenz auf andere Stundenplanplätze legen – mit Vorschau">
+              <CalendarClock {...ICON_SM} /> Termine verschieben…
+            </button>
+          ) : null}
           {exportMoeglich ? (
             <div className="kebabWrap" ref={exportRef}>
               <button
@@ -3166,6 +3267,14 @@ function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, 
                     <button className="linkBtn" onClick={()=>onOpenLesson(z)}
                             title="Stunde öffnen">{z.nummer}</button>
                     {z.dateISO ? <div className="muted small">{formatDateDE(z.dateISO)}</div> : null}
+                    {typeof onVerschiebenAb === 'function' ? (
+                      <button
+                        className="iconBtn"
+                        title="Ab dieser Stunde verschieben"
+                        aria-label={`Ab Stunde ${z.nummer} verschieben`}
+                        onClick={()=>onVerschiebenAb(z)}
+                      ><CalendarClock {...ICON_SM} /></button>
+                    ) : null}
                   </th>
                   <td>
                     <div>{z.sprachhandlung || <span className="muted">—</span>}</div>
@@ -3406,6 +3515,10 @@ function WeekReview({ offen, zusammenfassung, weekLabel, onClose, onDisable }){
 const NAV_EBENEN = [
   { id: 'today',        label: 'Heute',       Icon: Sun },
   { id: 'week',         label: 'Woche',       Icon: CalendarDays },
+  /* Die Suche steht bei den Ebenen und nicht im Fuss: sie ist ein Weg
+     in die Inhalte, keine Einstellung. Das Lupensymbol ist dasselbe wie
+     in der Befehlspalette – es ist derselbe Vorgang. */
+  { id: 'search',       label: 'Suche',       Icon: Search },
   { id: 'macro',        label: 'Makro',       Icon: Rows3 },
   { id: 'year',         label: 'Jahr',        Icon: CalendarRange },
   { id: 'competencies', label: 'Kompetenzen', Icon: Grid3x3 },
@@ -3421,7 +3534,9 @@ const NAV_FUSS = [
    überhaupt hat. "Heute" gehört zum laufenden Jahr, die Bibliothek und
    die Einstellungen gehören der App – beides wäre im Archiv nur
    verwirrend. */
-const NAV_ARCHIV = ['week', 'macro', 'year', 'competencies', 'calendar'];
+/* Die Suche gehört dazu: sie findet auch im Archiv, und ihre Treffer
+   führen von dort aus zurück ins laufende Schuljahr. */
+const NAV_ARCHIV = ['week', 'macro', 'year', 'competencies', 'calendar', 'search'];
 
 function Sidebar({ aktiv, onNavigate, imArchiv = false }){
   const eintrag = ({ id, label, Icon })=>(
@@ -3971,6 +4086,13 @@ function ensureDbShape(raw){
       startISO,
       endISO,
       color,
+      /* Schema 10: die optionale Verknüpfung mit einer Sequenz.
+
+         Gespeichert wird ausschliesslich die Kennung – nie eine Kopie
+         der Sequenz. Fehlt die Angabe (jeder Balken aus einer früheren
+         Fassung), entsteht der leere Text: der Balken ist dann
+         unverknüpft und verhält sich exakt wie bisher. */
+      sequenceId: (o.sequenceId || '').toString().trim(),
       createdAt: o.createdAt || new Date().toISOString(),
       updatedAt: o.updatedAt || o.createdAt || new Date().toISOString()
     };
@@ -4386,7 +4508,11 @@ export default function App(){
 
   /* --- Archivansicht: hinein und wieder heraus ---------------------- */
 
-  const oeffneArchiv = (archivId) => {
+  /* `ziel`: wohin es im Archiv gehen soll. Ohne Angabe beginnt der Blick
+     dort, wo es etwas zu sehen gibt – mit Angabe (etwa aus der Suche)
+     direkt bei dem gefundenen Inhalt. Geschrieben wird im Archiv in
+     keinem Fall. */
+  const oeffneArchiv = (archivId, ziel = null) => {
     const liste = Array.isArray(liveDb?.schoolYearArchives) ? liveDb.schoolYearArchives : [];
     const gewaehlt = liste.find(a => a?.id === archivId);
     if (!gewaehlt) { showToast('Dieses archivierte Schuljahr wurde nicht gefunden.', { tone: 'warning' }); return; }
@@ -4406,8 +4532,8 @@ export default function App(){
     const ws = (()=>{
       try { return toISODate(startOfWeekMonday(fromISODate(start))); } catch { return toISODate(startOfWeekMonday(new Date())); }
     })();
-    setSelectedDate(start);
-    setView(hatWochen ? { name:'week', weekStart: ws } : { name:'calendar', weekStart: ws });
+    setSelectedDate(ziel?.weekStart || start);
+    setView(ziel || (hatWochen ? { name:'week', weekStart: ws } : { name:'calendar', weekStart: ws }));
     showToast(`Archivansicht: ${gewaehlt.label || 'Schuljahr'}. Änderungen sind hier nicht möglich.`, { ttl: 7000 });
   };
 
@@ -4739,6 +4865,283 @@ const classGroupSuggestions = useMemo(()=>{
     showToast(label, { action: { label: 'Rückgängig', onAct: undoLast } });
   }, [captureUndo, showToast, undoLast, imArchiv]);
 
+  /* ---- Versionsverlauf ------------------------------------------------
+
+     Das Rückgängig oben deckt den Augenblick ab. Der Versionsverlauf
+     deckt die Woche davor ab: wenige, bewusst gesetzte
+     Wiederherstellungspunkte, die einen Neustart überleben.
+
+     Er liegt in einer EIGENEN Ablage (siehe verlauf-speicher.js und die
+     Plattformadapter) und wird erst gelesen, wenn er gebraucht wird –
+     der Start der App fasst ihn nicht an. In die Unterrichtsdatenbank,
+     in ein Backup, in eine Vorlage oder nach Pocket gerät er nie.       */
+  const verlaufSpeicher = useMemo(()=> erstelleVerlaufSpeicher(platform, {
+    beiFehler: (err)=> { try { console.warn('[Versionsverlauf]', err); } catch {} },
+  }), []);
+  const [verlaufDialog, setVerlaufDialog] = useState(null);   // { bereich, zielId, titel, untertitel }
+  const [verlaufEintraege, setVerlaufEintraege] = useState([]);
+  const [verlaufLaedt, setVerlaufLaedt] = useState(false);
+
+  const stundenLabel = useCallback((weekStart, dayIndex, slotIndex, span = 1)=>{
+    const iso = addDaysISO(weekStart, Number(dayIndex) || 0);
+    return `${DAYS[Number(dayIndex) || 0] || ''} · ${formatDateDE(iso)} · ${stundenBereichLabel(slotIndex, span)}`;
+  }, []);
+
+  /* Ein Sicherungspunkt für eine Stunde.
+
+     `stunde` ist der Stand VOR der Änderung. Ohne Angabe wird er aus den
+     echten Daten gelesen – das ist der Normalfall, weil ein
+     Sicherungspunkt immer vor dem Schreiben gesetzt wird. */
+  const sichereStunde = useCallback((ort, ausloeser, { felder = [], stunde } = {})=>{
+    if (!verlaufSpeicher.verfuegbar || imArchiv) return;
+    const weekStart = String(ort?.weekStart || '');
+    if (!weekStart) return;
+    const dayIndex = Number(ort?.dayIndex) || 0;
+    const slotIndex = Number(ort?.slotIndex) || 0;
+    const vorher = (stunde !== undefined)
+      ? stunde
+      : (liveDb?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, slotIndex)] || null);
+    /* Ein leerer Platz, der gerade erst gefüllt wird, ist keine frühere
+       Fassung – dafür gibt es das Rückgängig. */
+    if (!vorher && ausloeser === 'bearbeitet') return;
+    verlaufSpeicher.anhaengen(erstelleVerlaufEintrag({
+      ausloeser,
+      bereich: 'lesson',
+      zielId: stundenZiel({ weekStart, dayIndex, slotIndex }),
+      zielLabel: stundenLabel(weekStart, dayIndex, slotIndex, blockSpanOf(vorher)),
+      felder,
+      teile: [stundenTeil({ weekStart, dayIndex, slotIndex, stunde: vorher })],
+    })).catch(()=>{});
+  }, [verlaufSpeicher, imArchiv, liveDb, stundenLabel]);
+
+  const sichereSequenz = useCallback((sequenceId, ausloeser, { felder = [] } = {})=>{
+    if (!verlaufSpeicher.verfuegbar || imArchiv) return;
+    const id = String(sequenceId || '');
+    const seq = liveDb?.sequences?.[id] || null;
+    if (!id) return;
+    verlaufSpeicher.anhaengen(erstelleVerlaufEintrag({
+      ausloeser,
+      bereich: 'sequence',
+      zielId: sequenzZiel(id),
+      zielLabel: seq?.name || 'Sequenz',
+      felder,
+      teile: [sequenzTeil(id, seq)],
+    })).catch(()=>{});
+  }, [verlaufSpeicher, imArchiv, liveDb]);
+
+  const sichereVorlage = useCallback((templateId, ausloeser)=>{
+    if (!verlaufSpeicher.verfuegbar || imArchiv) return;
+    const id = String(templateId || '');
+    const tpl = liveDb?.sequenceTemplates?.[id] || null;
+    if (!id) return;
+    verlaufSpeicher.anhaengen(erstelleVerlaufEintrag({
+      ausloeser,
+      bereich: 'template',
+      zielId: vorlagenZiel(id),
+      zielLabel: tpl?.name || 'Vorlage',
+      teile: [vorlagenTeil(id, tpl)],
+    })).catch(()=>{});
+  }, [verlaufSpeicher, imArchiv, liveDb]);
+
+  const sichereBalken = useCallback((barId, ausloeser)=>{
+    if (!verlaufSpeicher.verfuegbar || imArchiv) return;
+    const id = String(barId || '');
+    const bar = (Array.isArray(liveDb?.yearBars) ? liveDb.yearBars : []).find(b => b?.id === id) || null;
+    if (!id) return;
+    verlaufSpeicher.anhaengen(erstelleVerlaufEintrag({
+      ausloeser,
+      bereich: 'yearBar',
+      zielId: balkenZiel(id),
+      zielLabel: bar?.title || 'Jahresbalken',
+      teile: [balkenTeil(id, bar)],
+    })).catch(()=>{});
+  }, [verlaufSpeicher, imArchiv, liveDb]);
+
+  /* Eine Sammelaktion: viele Orte, ein Vorgang.
+
+     Die Teile tragen dieselbe Transaktionskennung; wiederhergestellt
+     wird deshalb entweder alles oder nichts. Genau das braucht das
+     Verschieben mehrerer Sequenzstunden. */
+  const sichereSammlung = useCallback((teile, ausloeser, { bereich = 'bulk', zielId = '', zielLabel = '', felder = [] } = {})=>{
+    if (!verlaufSpeicher.verfuegbar || imArchiv) return null;
+    const liste = (Array.isArray(teile) ? teile : []).filter(Boolean);
+    if (!liste.length) return null;
+    const transaktion = uid();
+    verlaufSpeicher.anhaengen(erstelleVerlaufEintrag({
+      ausloeser, bereich, zielId, zielLabel, felder, teile: liste, transaktion,
+    })).catch(()=>{});
+    return transaktion;
+  }, [verlaufSpeicher, imArchiv]);
+
+  /* Den Verlauf von Hand leeren. Bewusst mit Nachfrage: er ist die
+     einzige Stelle, an der frühere Fassungen liegen. Die Planung selbst
+     bleibt in jedem Fall unberührt. */
+  const leereVerlauf = useCallback(async ()=>{
+    const ok = await askConfirmRef.current?.({
+      title: 'Versionsverlauf leeren',
+      body: 'Alle gespeicherten früheren Fassungen werden entfernt. Die aktuelle Planung bleibt vollständig erhalten – nur der Weg zurück zu älteren Ständen entfällt.',
+      confirmLabel: 'Verlauf leeren',
+      tone: 'danger',
+    });
+    if (!ok) return;
+    await verlaufSpeicher.leeren();
+    setVerlaufEintraege([]);
+    showToast('Versionsverlauf geleert. Die Planung ist unverändert.');
+  }, [verlaufSpeicher, showToast]);
+
+  const ladeVerlauf = useCallback(async (ziel)=>{
+    if (!ziel) return;
+    setVerlaufLaedt(true);
+    try {
+      const liste = await verlaufSpeicher.liste();
+      setVerlaufEintraege(eintraegeFuer(liste, ziel));
+    } catch {
+      setVerlaufEintraege([]);
+    }
+    setVerlaufLaedt(false);
+  }, [verlaufSpeicher]);
+
+  const oeffneVerlauf = useCallback((ziel)=>{
+    if (!verlaufSpeicher.verfuegbar) {
+      showToast('Der Versionsverlauf ist in dieser Fassung nicht verfügbar.', { tone: 'warning' });
+      return;
+    }
+    setVerlaufDialog(ziel);
+    setVerlaufEintraege([]);
+    ladeVerlauf(ziel);
+  }, [verlaufSpeicher, ladeVerlauf, showToast]);
+
+  /* Eine frühere Fassung zurückholen.
+
+     Zuerst wird der Stand gesichert, der gerade gilt – erst dann wird
+     geschrieben. Damit ist auch die Wiederherstellung selbst umkehrbar,
+     über den Verlauf wie über das Rückgängig. */
+  const stelleVersionHer = useCallback(async (eintrag)=>{
+    if (!eintrag) return;
+    if (imArchiv) { archivHinweisRef.current?.(); return; }
+    const gegenTeile = aktuellerStand(liveDb, eintrag);
+    try {
+      await verlaufSpeicher.anhaengen(erstelleVerlaufEintrag({
+        ausloeser: 'vorWiederherstellen',
+        bereich: eintrag.bereich,
+        zielId: eintrag.zielId,
+        zielLabel: eintrag.zielLabel,
+        teile: gegenTeile,
+        transaktion: eintrag.transaktion ? uid() : '',
+      }));
+    } catch {}
+    const next = ensureDbShape(wendeVerlaufAn(liveDb, eintrag));
+    /* Entwürfe der betroffenen Plätze verwerfen: sonst zeigte die
+       Stundenansicht weiter den Stand von vorhin. */
+    for (const teil of (eintrag.teile || [])) {
+      if (teil?.art !== 'stunde') continue;
+      try { draftLessonCacheRef.current.delete(`${teil.weekStart}|${teil.dayIndex}|${teil.slotIndex}`); } catch {}
+    }
+    runUndoable('Frühere Fassung wiederhergestellt', liveDb, ()=>persistLive(next), { liveAktion: true });
+    if (verlaufDialog) ladeVerlauf(verlaufDialog);
+  }, [imArchiv, liveDb, verlaufSpeicher, runUndoable, persistLive, verlaufDialog, ladeVerlauf]);
+
+  /* ---- Sequenzen verschieben -----------------------------------------
+
+     Der Einstieg ist überall derselbe: eine Sequenz, wahlweise eine
+     Stunde darin, und – wenn die Frage von einem Jahresbalken kommt –
+     eine Verschiebung um n Wochen als Vorschlag.
+
+     Gerechnet wird im Modul, gezeigt im Dialog, ausgeführt erst nach
+     dem Klick. Diese Reihenfolge ist der ganze Sicherheitsgewinn
+     gegenüber dem Verschieben von Hand.                                */
+  const [verschiebenDialog, setVerschiebenDialog] = useState(null);
+
+  const oeffneVerschieben = useCallback((cfg)=>{
+    if (imArchiv) { archivHinweisRef.current?.(); return; }
+    const sequenceId = String(cfg?.sequenceId || '');
+    if (!sequenceId || !liveDb?.sequences?.[sequenceId]) {
+      showToast('Diese Sequenz gibt es nicht mehr.', { tone: 'warning' });
+      return;
+    }
+    setVerschiebenDialog({
+      sequenceId,
+      ab: cfg?.ab || null,
+      umfang: cfg?.umfang || (cfg?.ab ? VERSCHIEBE_UMFANG.AB_FOLGENDE : VERSCHIEBE_UMFANG.GESAMT),
+      /* Ohne Umwandlung: `Number(null)` wäre 0 – aus "keine Angabe"
+         würde sonst "um 0 Wochen verschieben". */
+      wochen: Number.isFinite(cfg?.wochen) ? Number(cfg.wochen) : null,
+      barId: cfg?.barId || '',
+    });
+  }, [imArchiv, liveDb, showToast]);
+
+  /* Die Ausführung. Sie ist der einzige Ort, an dem beim Verschieben
+     geschrieben wird – und sie schreibt genau einmal:
+
+       - ein Undo-Eintrag,
+       - ein zusammengehöriger Eintrag im Versionsverlauf,
+       - eine Zusammenfassung als Meldung.                              */
+  const fuehreVerschiebungAus = useCallback(({ plan, balkenAnpassen })=>{
+    if (imArchiv) { archivHinweisRef.current?.(); return; }
+    if (!plan?.ok) return;
+    const naechste = wendeVerschiebungAn(liveDb, plan);
+    if (!naechste) {
+      showToast('Die Verschiebung wurde nicht ausgeführt: die Planung hat sich zwischenzeitlich geändert.', { tone: 'warning' });
+      setVerschiebenDialog(null);
+      return;
+    }
+
+    const sequenceId = String(plan.sequenz?.id || verschiebenDialog?.sequenceId || '');
+
+    /* Optional: die verknüpften Jahresbalken auf den neuen Zeitraum
+       legen. Mehrere Balken auf derselben Sequenz bekommen jeder
+       denselben Zeitraum – daraus wird keine zweite Verschiebung. */
+    const balkenAenderungen = balkenAnpassen
+      ? balkenNachVerschiebung(liveDb.yearBars, sequenceId, plan, {
+          aufWoche: (iso)=> { try { return toISODate(startOfWeekMonday(fromISODate(iso))); } catch { return iso; } },
+        })
+      : [];
+    if (balkenAenderungen.length) {
+      naechste.yearBars = (Array.isArray(naechste.yearBars) ? naechste.yearBars : []).map(b => {
+        const treffer = balkenAenderungen.find(a => a.id === b?.id);
+        return treffer ? { ...b, startISO: treffer.startISO, endISO: treffer.endISO, updatedAt: new Date().toISOString() } : b;
+      });
+    }
+
+    /* Ein Vorgang, ein Eintrag: alle berührten Plätze mit dem Stand,
+       den sie VOR der Verschiebung trugen – Quelle wie Ziel. Nur so
+       lässt sich die Sammelaktion später als Ganzes zurückholen. */
+    const teile = betroffeneOrte(plan).map(o => stundenTeil({
+      weekStart: o.weekStart, dayIndex: o.dayIndex, slotIndex: o.slotIndex,
+      stunde: liveDb?.weeks?.[o.weekStart]?.lessons?.[keyOf(o.dayIndex, o.slotIndex)] || null,
+    }));
+    for (const a of balkenAenderungen) {
+      const bar = (Array.isArray(liveDb.yearBars) ? liveDb.yearBars : []).find(b => b?.id === a.id) || null;
+      teile.push(balkenTeil(a.id, bar));
+    }
+    sichereSammlung(teile, 'vorVerschieben', {
+      bereich: 'bulk',
+      zielId: sequenzZiel(sequenceId),
+      zielLabel: `${plan.sequenz?.name || 'Sequenz'} verschoben`,
+    });
+
+    for (const o of betroffeneOrte(plan)) {
+      try { draftLessonCacheRef.current.delete(`${o.weekStart}|${o.dayIndex}|${o.slotIndex}`); } catch {}
+    }
+
+    const anzahl = plan.bewegungen.length;
+    runUndoable(
+      `${anzahl} ${anzahl === 1 ? 'Stunde' : 'Stunden'} verschoben`,
+      liveDb,
+      ()=>persistLive(ensureDbShape(naechste)),
+    );
+    setVerschiebenDialog(null);
+
+    const teileText = [
+      `${anzahl} ${anzahl === 1 ? 'Stunde' : 'Stunden'} verschoben`,
+      plan.vonISO ? `neuer Zeitraum ${formatDateDE(plan.vonISO)} – ${formatDateDE(plan.bisISO)}` : '',
+      plan.uebersprungeneFerien ? `${plan.uebersprungeneFerien} freie Tage übersprungen` : '',
+      plan.uebersprungeneBelegt ? `${plan.uebersprungeneBelegt} belegte Termine übersprungen` : '',
+      balkenAenderungen.length ? `${balkenAenderungen.length} ${balkenAenderungen.length === 1 ? 'Jahresbalken angepasst' : 'Jahresbalken angepasst'}` : '',
+    ].filter(Boolean);
+    showToast(teileText.join(' · '), { ttl: 9000 });
+  }, [imArchiv, liveDb, showToast, runUndoable, persistLive, sichereSammlung, verschiebenDialog]);
+
   /* ---- Dialoge -------------------------------------------------------- */
   const [confirmState, setConfirmState] = useState(null);
   // Versprechensbasiert, damit die Aufrufstellen so knapp bleiben wie mit
@@ -4746,6 +5149,11 @@ const classGroupSuggestions = useMemo(()=>{
   const askConfirm = useCallback((cfg)=> new Promise((resolve)=>{
     setConfirmState({ ...cfg, onConfirm: ()=>resolve(true), onCancel: ()=>resolve(false) });
   }), []);
+  /* Der Versionsverlauf weiter oben braucht die Bestätigung, entsteht
+     aber vor ihr. Die Referenz überbrückt das, ohne die Reihenfolge der
+     Abschnitte umzustellen. */
+  const askConfirmRef = useRef(null);
+  useEffect(()=>{ askConfirmRef.current = askConfirm; }, [askConfirm]);
   const [promptState, setPromptState] = useState(null);
   const askPrompt = useCallback((cfg)=> new Promise((resolve)=>{
     setPromptState({ ...cfg, onConfirm: (v)=>resolve(v), onCancel: ()=>resolve(null) });
@@ -4821,6 +5229,7 @@ const classGroupSuggestions = useMemo(()=>{
       { id:'v-library',  group:'Ansicht', label:'Bibliothek',          run: go({ name:'library', weekStart: ws }) },
       { id:'v-calendar', group:'Ansicht', label:'Schulkalender',       run: go({ name:'calendar', weekStart: ws }) },
       { id:'v-archives', group:'Ansicht', label:'Archivierte Schuljahre', run: go({ name:'archives', weekStart: ws }) },
+      { id:'v-search',   group:'Ansicht', label:'Suche',               hint:'Strg+K', run: ()=>oeffneSuche('') },
       { id:'v-todos',    group:'Ansicht', label:'To-dos',              run: go({ name:'todos', weekStart: ws }) },
       { id:'v-settings', group:'Ansicht', label:'Einstellungen',       run: go({ name:'settings', weekStart: ws }) },
       { id:'v-help',     group:'Ansicht', label:'Hilfe',               run: go({ name:'help', weekStart: ws }) },
@@ -4852,6 +5261,9 @@ const classGroupSuggestions = useMemo(()=>{
       'a-undo', 'a-seq', 'a-copy', 'a-expback', 'a-impback', 'a-pocketexp', 'v-pocket',
       'v-settings', 'v-library', 'v-today', 'w-today',
     ]);
+    /* Die Suche bleibt: sie ändert nichts und führt aus dem Archiv
+       wieder heraus. */
+    nurAnsehen.delete('v-search');
     if (imArchiv) {
       /* Nicht an Ort und Stelle leeren: `cmds` ist dieselbe Liste, die
          unten weiter gefüllt wird. */
@@ -4887,6 +5299,72 @@ const classGroupSuggestions = useMemo(()=>{
        zusammen mit `imArchiv` ändert. */
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.weekStart, sequences, db?.groupColors, undoLast, imArchiv]);
+
+  /* ---- Globale Suche --------------------------------------------------
+
+     Der Index entsteht im Arbeitsspeicher aus den Daten – und zwar
+     erst dann, wenn tatsächlich gesucht wird. Beim Tippen in einer
+     Stunde ändert sich die Datenbank bei jedem Anschlag; ihn dabei
+     ständig neu zu bauen wäre Arbeit für nichts.
+
+     Sobald die Suche offen ist, hängt er an `liveDb` und ist damit
+     immer auf dem Stand der Daten. Gespeichert wird er nirgends: er
+     kann deshalb weder veralten noch in einem Backup landen.          */
+  const [suchQuery, setSuchQuery] = useState('');
+  const suchAnsichtOffen = view.name === 'search';
+  const brauchtIndex = suchAnsichtOffen || paletteOpen;
+  const LEERER_INDEX = useMemo(()=> ({ dokumente: [], gebautAm: 0 }), []);
+  const suchIndex = useMemo(
+    ()=> (brauchtIndex ? baueIndex(liveDb, { archive: liveDb?.schoolYearArchives }) : LEERER_INDEX),
+    [brauchtIndex, liveDb, LEERER_INDEX],
+  );
+
+  const oeffneSuche = useCallback((query = '')=>{
+    setSuchQuery(String(query || ''));
+    setView(v => ({ name: 'search', weekStart: v.weekStart }));
+  }, []);
+
+  /* Einen Treffer öffnen.
+
+     Aus dem laufenden Schuljahr führt der Weg direkt dorthin; aus einem
+     Archiv über die Archivansicht, die schreibgeschützt ist. Kopiert
+     oder eingefügt wird hier nichts – dafür gibt es die vorhandenen
+     Wege. */
+  const oeffneTreffer = (dokument)=>{
+    const ziel = dokument?.ziel;
+    if (!ziel) return;
+    const ws = view.weekStart;
+    const ansicht = (()=>{
+      if (ziel.art === 'stunde') {
+        return { name: 'lesson', weekStart: ziel.weekStart, dayIndex: ziel.dayIndex, slotIndex: ziel.slotIndex };
+      }
+      if (ziel.art === 'sequenz') return { name: 'progression', sequenceId: ziel.sequenceId, weekStart: ws };
+      if (ziel.art === 'vorlage') return { name: 'library', weekStart: ws, vorschauId: ziel.templateId };
+      if (ziel.art === 'jahresplanung') return { name: 'year', weekStart: ws, focusISO: ziel.focusISO || ws };
+      if (ziel.art === 'todo') return { name: 'todos', weekStart: ziel.weekStartISO || ws };
+      return null;
+    })();
+    if (!ansicht) return;
+
+    if (ziel.archivId) {
+      /* Archivierte Treffer werden im Archiv geöffnet: dieselbe
+         Ansicht, nur schreibgeschützt. */
+      oeffneArchiv(ziel.archivId, ansicht);
+      return;
+    }
+    if (imArchiv) verlasseArchiv();
+    setView(ansicht);
+  };
+
+  /* Eine gefundene Stunde übernehmen: über die vorhandene
+     Kopierfunktion, nicht über einen zweiten Weg. */
+  const kopiereTreffer = (dokument)=>{
+    const ziel = dokument?.ziel;
+    if (!ziel || ziel.art !== 'stunde' || ziel.archivId) return;
+    copyLessonToClipboard(ziel.weekStart, ziel.dayIndex, ziel.slotIndex);
+    showToast('Stunde kopiert. Sie lässt sich jetzt in einen freien Stundenplatz einfügen.');
+  };
+
 
   // Ein fehlgeschlagenes Speichern darf nicht still bleiben. Die Meldung
   // bleibt stehen (ttl 0), bis der Nutzer sie schliesst.
@@ -4935,6 +5413,7 @@ const classGroupSuggestions = useMemo(()=>{
       case 'competencies': return 'Kompetenzen';
       case 'progression':  return 'Progression';
       case 'review':       return 'Nachbereitung';
+      case 'search':   return 'Suche';
       case 'settings': return 'Einstellungen';
       case 'help':     return 'Hilfe';
       case 'week':     return '';
@@ -5125,6 +5604,10 @@ useEffect(()=>{
     const w = nextDb.weeks?.[weekStart];
     if (!w || !w.lessons) return;
     if (!(k in w.lessons)) return;
+    /* Vor dem Löschen eine Fassung sichern. Beim Ausschneiden ist es
+       kein Löschen, sondern der erste Halbschritt eines Verschiebens –
+       der Anlass heisst dann auch so. */
+    sichereStunde({ weekStart, dayIndex, slotIndex }, opts.silent ? 'vorVerschieben' : 'vorLoeschen');
     delete w.lessons[k];
     if (opts.silent) { persist(nextDb); return; }
     runUndoable('Stunde gelöscht', before, ()=>persist(nextDb));
@@ -5200,6 +5683,14 @@ useEffect(()=>{
     const innereAufsicht = w.duties?.[`${dayIndex}-${folgeSlot}`];
 
     const verbunden = verbindeStunden(erste, zweite);
+    sichereSammlung(
+      [
+        stundenTeil({ weekStart, dayIndex, slotIndex, stunde: gespeichert }),
+        stundenTeil({ weekStart, dayIndex, slotIndex: folgeSlot, stunde: zweite }),
+      ],
+      'vorStruktur',
+      { zielLabel: `${blockName(blockSpanOf(verbunden))} verbunden` },
+    );
     const nextDb = deepClone(db);
     const nw = nextDb.weeks[weekStart];
     nw.lessons[keyOf(dayIndex, slotIndex)] = verbunden;
@@ -5225,6 +5716,14 @@ useEffect(()=>{
     if (span <= 1) return;
 
     const teile = trenneStunde(l);
+    sichereSammlung(
+      belegteSlots(slotIndex, span).map(si => stundenTeil({
+        weekStart, dayIndex, slotIndex: si,
+        stunde: db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, si)] || null,
+      })),
+      'vorStruktur',
+      { zielLabel: `${blockName(span)} getrennt` },
+    );
     const nextDb = deepClone(db);
     const nw = nextDb.weeks[weekStart];
     teile.forEach((teil, i)=>{
@@ -5290,6 +5789,7 @@ useEffect(()=>{
     }
     const l = normalizeLesson(deepClone(lessonClipboard.lesson));
     l.updatedAt = new Date().toISOString();
+    if (targetHas) sichereStunde({ weekStart, dayIndex, slotIndex }, 'vorImport');
     updateLessonAt(weekStart, dayIndex, slotIndex, l);
     if (lessonClipboard.cut) setLessonClipboard(null);
   };
@@ -5344,6 +5844,14 @@ useEffect(()=>{
       }
     }
 
+    /* Die Stände VOR der Bewegung – gelesen aus `db`, nicht aus der
+       bereits veränderten Kopie. Sie bilden einen Vorgang: wer ihn
+       wiederherstellt, bekommt Quelle und Ziel gemeinsam zurück. */
+    const teilVon = (ws, di, si)=> stundenTeil({
+      weekStart: ws, dayIndex: di, slotIndex: si,
+      stunde: db?.weeks?.[ws]?.lessons?.[keyOf(di, si)] || null,
+    });
+
     const upsertIn = (w, key, lesson) => {
       const l = normalizeLesson(lesson);
       w.lessons[key] = { ...l, updatedAt: now };
@@ -5371,6 +5879,9 @@ useEffect(()=>{
       }
       const cloned = nurPlanung(deepClone(src));
       cloned.phases = normalizePhases((cloned.phases || []).map(p => neuePhasenIds(p)), lessonTotalMin(cloned));
+      if (toW.lessons?.[toKey]) {
+        sichereStunde({ weekStart: t.weekStart, dayIndex: t.dayIndex, slotIndex: t.slotIndex }, 'vorImport');
+      }
       upsertIn(toW, toKey, cloned);
       persist(nextDb);
       return;
@@ -5391,6 +5902,11 @@ useEffect(()=>{
         showToast(`Eine ${blockName(welche)} lässt sich nicht mit einer belegten Stunde tauschen. Wähle einen freien Platz oder trenne sie zuerst.`, { tone: 'warning' });
         return;
       }
+      sichereSammlung(
+        [teilVon(f.weekStart, f.dayIndex, f.slotIndex), teilVon(t.weekStart, t.dayIndex, t.slotIndex)],
+        'vorVerschieben',
+        { zielLabel: 'Zwei Stunden getauscht' },
+      );
       upsertIn(toW, toKey, src);
       upsertIn(fromW, fromKey, dst);
       persist(nextDb);
@@ -5398,6 +5914,11 @@ useEffect(()=>{
     }
 
     // Ziel leer: verschieben
+    sichereSammlung(
+      [teilVon(f.weekStart, f.dayIndex, f.slotIndex), teilVon(t.weekStart, t.dayIndex, t.slotIndex)],
+      'vorVerschieben',
+      { zielLabel: 'Stunde verschoben' },
+    );
     upsertIn(toW, toKey, src);
     if (fromKey in fromW.lessons) delete fromW.lessons[fromKey];
     try { draftLessonCacheRef.current.delete(`${f.weekStart}|${f.dayIndex}|${f.slotIndex}`); } catch {}
@@ -5480,6 +6001,26 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
   // This slot now has a persisted lesson; drop any cached draft.
   try { draftLessonCacheRef.current.delete(`${weekStart}|${dayIndex}|${slotIndex}`); } catch {}
   persist(nextDb);
+};
+
+/* Der Weg, den der Stundeneditor nimmt.
+
+   Er unterscheidet sich von updateLessonAt in genau einem Punkt: bevor
+   eine Bearbeitung geschrieben wird, wandert der bisherige Stand in den
+   Versionsverlauf. Die Bündelung dort macht daraus EINE Fassung je
+   Bearbeitung – nicht eine je Tastendruck.
+
+   Bewusst nicht in updateLessonAt selbst: dort kommen auch Vorgänge
+   vorbei, die ihre Fassung schon mit dem passenden Anlass gesichert
+   haben (Import, Verschieben, Einfügen). Sonst entstünden zwei
+   Einträge für dieselbe Änderung. */
+const updateLessonFromEditor = (weekStart, dayIndex, slotIndex, nextLesson) => {
+  const vorher = db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, slotIndex)] || null;
+  if (vorher) {
+    const felder = geaenderteFelder(vorher, normalizeLesson(nextLesson));
+    if (felder.length) sichereStunde({ weekStart, dayIndex, slotIndex }, 'bearbeitet', { felder, stunde: vorher });
+  }
+  updateLessonAt(weekStart, dayIndex, slotIndex, nextLesson);
 };
 
   // Read a lesson without creating/persisting anything (important: no side effects during render).
@@ -5644,6 +6185,9 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     }
     try {
       const vorher = db;
+      /* Was am Zielplatz steht, wird ersetzt oder ergänzt – in beiden
+         Fällen gehört der bisherige Stand in den Versionsverlauf. */
+      sichereStunde(ziel, 'vorImport');
       const nextDb = deepClone(db);
       const ergebnis = fuehrePocketImportAus(nextDb, {
         stunde: analyse.stunde,
@@ -5767,6 +6311,7 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     const before = db;
     const nextDb = deepClone(db);
     if (!nextDb.sequences?.[id]) return;
+    sichereSequenz(id, 'vorLoeschen');
     delete nextDb.sequences[id];
     // Remove references in lessons
     for (const ws of Object.keys(nextDb.weeks || {})) {
@@ -5777,7 +6322,17 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
         if (l?.sequenceId === id) w.lessons[k] = { ...l, sequenceId: '' };
       }
     }
+    /* Jahresbalken, die auf diese Sequenz zeigten, BLEIBEN – sie
+       verlieren nur ihre Verknüpfung. Ein Balken ist eine eigene
+       Planung; ihn mit der Sequenz zu löschen wäre eine stille
+       Datenvernichtung. */
+    const balkenVorher = (Array.isArray(db?.yearBars) ? db.yearBars : [])
+      .filter(b => balkenSequenzId(b) === id);
+    nextDb.yearBars = entferneSequenzAusBalken(nextDb.yearBars, id);
     runUndoable('Sequenz gelöscht', before, ()=>persist(nextDb));
+    if (balkenVorher.length) {
+      showToast(`${balkenVorher.length === 1 ? 'Ein Jahresbalken bleibt' : `${balkenVorher.length} Jahresbalken bleiben`} erhalten – ohne Verknüpfung.`);
+    }
   };
 
   // --- Jahresgrobplanung (Orientierungs-Balken) ---
@@ -5812,6 +6367,9 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
       startISO,
       endISO,
       color,
+      /* Optional und leer voreingestellt: der Balken zeigt auf keine
+         Sequenz, solange niemand eine wählt. */
+      sequenceId: String(p.sequenceId || '').trim(),
       createdAt: now,
       updatedAt: now
     });
@@ -5819,7 +6377,13 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     return id;
   };
 
-  const updateYearBar = (id, patch) => {
+  /* Einen Balken ändern.
+
+     `live`: während des Ziehens läuft diese Funktion viele Male je
+     Sekunde. Dann entsteht KEIN Sicherungspunkt – sonst schriebe jedes
+     Einzelbild in den Versionsverlauf. Gesichert wird beim Abschluss
+     der Bewegung und bei jeder Änderung aus dem Dialog. */
+  const updateYearBar = (id, patch, { live = false } = {}) => {
     const nextDb = deepClone(db);
     const arr = Array.isArray(nextDb.yearBars) ? nextDb.yearBars : [];
     const idx = arr.findIndex(b => b?.id === id);
@@ -5829,6 +6393,11 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
     const next = { ...curr, ...p, id, updatedAt: new Date().toISOString() };
     // minimal validation
     if (next.startISO && next.endISO && next.endISO < next.startISO) return;
+    /* Ein verknüpfter Balken gehört zu einer Sequenz – seine Änderung
+       ist deshalb eine, die man zurücknehmen können will. */
+    if (!live && (balkenSequenzId(curr) || balkenSequenzId(next))) {
+      sichereBalken(id, 'vorBalken');
+    }
     arr[idx] = next;
     nextDb.yearBars = arr;
     persist(nextDb);
@@ -5920,6 +6489,7 @@ const updateLessonAt = (weekStart, dayIndex, slotIndex, nextLesson) => {
 
   const deleteYearBar = (id) => {
     const before = db;
+    sichereBalken(id, 'vorLoeschen');
     const nextDb = deepClone(db);
     nextDb.yearBars = (Array.isArray(nextDb.yearBars) ? nextDb.yearBars : []).filter(b => b?.id !== id);
     runUndoable('Balken gelöscht', before, ()=>persist(nextDb));
@@ -6512,6 +7082,7 @@ const deleteTodo = (id) => {
     const before = db;
     const nextDb = deepClone(db);
     if (!nextDb.sequenceTemplates?.[templateId]) return;
+    sichereVorlage(templateId, 'vorLoeschen');
     delete nextDb.sequenceTemplates[templateId];
     runUndoable('Vorlage gelöscht', before, ()=>persist(nextDb));
   };
@@ -6569,6 +7140,10 @@ const deleteTodo = (id) => {
       createdAt: new Date().toISOString()
     };
     let inserted = 0;
+    /* Die Plätze, die die Vorlage belegt – mit dem Stand, den sie
+       VORHER trugen. Daraus entsteht ein einziger Eintrag im
+       Versionsverlauf, der das Einsetzen als Ganzes zurücknimmt. */
+    const ersetzteStunden = [];
 
     const schoolYear = nextDb.schoolCalendar?.schoolYear || { startISO:'', endISO:'' };
     const maxISO = (schoolYear.endISO || '').trim() || addDaysISO(startISO, 180);
@@ -6652,6 +7227,13 @@ const deleteTodo = (id) => {
         nextLesson.updatedAt = new Date().toISOString();
 
         if (!w.lessons) w.lessons = {};
+        /* Was hier überschrieben wird, wandert vorher in den
+           Versionsverlauf – als EIN Vorgang für die ganze Vorlage. */
+        for (let i = 0; i < spanne; i++){
+          const si = slotIndex + i;
+          const vorher = db?.weeks?.[weekStart]?.lessons?.[keyOf(dayIndex, si)] || null;
+          ersetzteStunden.push(stundenTeil({ weekStart, dayIndex, slotIndex: si, stunde: vorher }));
+        }
         w.lessons[k] = nextLesson;
         // Die mit belegten Plätze tragen keinen eigenen Eintrag mehr.
         for (let i = 1; i < spanne; i++) delete w.lessons[keyOf(dayIndex, slotIndex + i)];
@@ -6661,6 +7243,13 @@ const deleteTodo = (id) => {
       }
     }
 
+    if (ersetzteStunden.length) {
+      sichereSammlung(ersetzteStunden, 'vorImport', {
+        bereich: 'bulk',
+        zielId: sequenzZiel(seqId),
+        zielLabel: `Vorlage „${tpl.name || 'Vorlage'}“ eingesetzt`,
+      });
+    }
     persist(nextDb);
 
     const missing = Math.max(0, blueprints.length - inserted);
@@ -6833,12 +7422,16 @@ const doExportDocx = async (html, suggestedName) => {
           onHideClassGroupSuggestion={(label)=>hideSuggestion('classGroup', label)}
           onHideSubjectSuggestion={(label)=>hideSuggestion('subject', label)}
           onCreateBar={(payload)=>createYearBar(payload)}
-          onUpdateBar={(id, patch)=>updateYearBar(id, patch)}
+          onUpdateBar={(id, patch, opts)=>updateYearBar(id, patch, opts)}
           onDeleteBar={(id)=>deleteYearBar(id)}
           readOnly={imArchiv}
           onClearLane={(laneKey)=>clearYearPlanLane(laneKey)}
           onRemoveLane={(laneKey)=>removeYearPlanLane(laneKey)}
           onRenameLane={(laneKey)=>renameYearPlanLane(laneKey)}
+          onOpenSequenz={(sequenceId)=>setView({ name:'progression', sequenceId, weekStart: view.weekStart })}
+          onVerschiebeSequenz={({ sequenceId, wochen, barId })=>oeffneVerschieben({
+            sequenceId, umfang: 'gesamt', wochen, barId,
+          })}
           onSetView={setView}
         />
       );
@@ -6850,6 +7443,7 @@ const doExportDocx = async (html, suggestedName) => {
           templates={templates}
           sequences={sequences}
           schoolCalendar={schoolCalendar}
+          startVorschauId={view.vorschauId || ''}
           minDate={minDate}
           maxDate={maxDate}
           classGroupSuggestions={classGroupSuggestions}
@@ -6949,7 +7543,7 @@ const doExportDocx = async (html, suggestedName) => {
           languageMode={languageMode}
           onChangeReview={(next)=>{
             const akt = getLessonAt(view.weekStart, view.dayIndex, view.slotIndex);
-            updateLessonAt(view.weekStart, view.dayIndex, view.slotIndex, { ...akt, review: next });
+            updateLessonFromEditor(view.weekStart, view.dayIndex, view.slotIndex, { ...akt, review: next });
           }}
           onOpenLesson={()=>setView({
             name:'lesson', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
@@ -6977,6 +7571,14 @@ const doExportDocx = async (html, suggestedName) => {
           })}
           onExportDocx={()=>exportSequenceAs(view.sequenceId, 'docx')}
           onExportPdf={()=>exportSequenceAs(view.sequenceId, 'pdf')}
+          onVerschieben={imArchiv ? null : (()=>oeffneVerschieben({
+            sequenceId: view.sequenceId, umfang: VERSCHIEBE_UMFANG.GESAMT,
+          }))}
+          onVerschiebenAb={imArchiv ? null : ((z)=>oeffneVerschieben({
+            sequenceId: view.sequenceId,
+            umfang: VERSCHIEBE_UMFANG.AB_FOLGENDE,
+            ab: { weekStart: z.weekStart, dayIndex: z.dayIndex, slotIndex: z.slotIndex },
+          }))}
         />
       );
     }
@@ -7019,6 +7621,7 @@ const doExportDocx = async (html, suggestedName) => {
           onAddCompetencyArea={addCompetencyArea}
           onRenameCompetencyArea={renameCompetencyArea}
           onDeleteCompetencyArea={deleteCompetencyArea}
+          onLeereVerlauf={verlaufSpeicher.verfuegbar ? leereVerlauf : null}
         />
       );
     }
@@ -7032,6 +7635,17 @@ const doExportDocx = async (html, suggestedName) => {
           onOpenLesson={(ziel)=>setView({
             name: 'lesson', weekStart: ziel.weekStart, dayIndex: ziel.dayIndex, slotIndex: ziel.slotIndex,
           })}
+        />
+      );
+    }
+    if (view.name === 'search') {
+      return (
+        <GlobaleSucheView
+          index={suchIndex}
+          startQuery={suchQuery}
+          onQueryChange={setSuchQuery}
+          onOeffnen={oeffneTreffer}
+          onKopieren={imArchiv ? null : kopiereTreffer}
         />
       );
     }
@@ -7092,6 +7706,17 @@ const doExportDocx = async (html, suggestedName) => {
         })}
         onJoinBlock={(entwurf)=>joinLessonsIntoBlock(view.weekStart, view.dayIndex, lessonSlotIndex, entwurf)}
         onSplitBlock={(entwurf)=>splitBlockAt(view.weekStart, view.dayIndex, lessonSlotIndex, entwurf)}
+        onOpenVerlauf={verlaufSpeicher.verfuegbar ? (()=>oeffneVerlauf({
+          bereich: 'lesson',
+          zielId: stundenZiel({ weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: lessonSlotIndex }),
+          titel: 'Versionsverlauf der Stunde',
+          untertitel: stundenLabel(view.weekStart, view.dayIndex, lessonSlotIndex),
+        })) : null}
+        onVerschiebeSequenz={imArchiv ? null : ((sequenceId)=>oeffneVerschieben({
+          sequenceId,
+          umfang: VERSCHIEBE_UMFANG.AB_FOLGENDE,
+          ab: { weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: lessonSlotIndex },
+        }))}
         kannVerbinden={(()=>{
           const w = db?.weeks?.[view.weekStart];
           const l = w?.lessons?.[keyOf(view.dayIndex, lessonSlotIndex)];
@@ -7128,7 +7753,7 @@ const doExportDocx = async (html, suggestedName) => {
         onCreateSequence={createSequence}
           onRequestCreateSequence={openCreateSequenceModal}
         onRememberCompetency={rememberCompetency}
-        onUpdateLesson={(nextLesson)=>updateLessonAt(view.weekStart, view.dayIndex, lessonSlotIndex, nextLesson)}
+        onUpdateLesson={(nextLesson)=>updateLessonFromEditor(view.weekStart, view.dayIndex, lessonSlotIndex, nextLesson)}
         getSeqProgress={(sequenceId)=> sequenceProgress(db, sequenceId, {
           weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: lessonSlotIndex,
         })}
@@ -7278,7 +7903,43 @@ const doExportDocx = async (html, suggestedName) => {
       <CommandPalette
         open={paletteOpen}
         commands={paletteCommands}
+        suchIndex={suchIndex}
+        onOeffneTreffer={oeffneTreffer}
+        onAlleTreffer={(q)=>oeffneSuche(q)}
         onClose={()=>setPaletteOpen(false)}
+      />
+      <VerschiebenDialog
+        offen={!!verschiebenDialog}
+        db={liveDb}
+        sequenceId={verschiebenDialog?.sequenceId || ''}
+        ab={verschiebenDialog?.ab || null}
+        startUmfang={verschiebenDialog?.umfang || VERSCHIEBE_UMFANG.GESAMT}
+        startWochen={verschiebenDialog?.wochen}
+        heuteISO={todayISO}
+        onAusfuehren={fuehreVerschiebungAus}
+        onSchliessen={()=>setVerschiebenDialog(null)}
+      />
+      <VersionsverlaufDialog
+        offen={!!verlaufDialog}
+        titel={verlaufDialog?.titel || 'Versionsverlauf'}
+        untertitel={verlaufDialog?.untertitel || ''}
+        eintraege={verlaufEintraege}
+        laedt={verlaufLaedt}
+        db={liveDb}
+        readOnly={imArchiv}
+        ortName={(teil)=>{
+          if (!teil) return '';
+          if (teil.art === 'stunde') return stundenLabel(teil.weekStart, teil.dayIndex, teil.slotIndex, blockSpanOf(teil.wert));
+          if (teil.art === 'sequenz') return liveDb?.sequences?.[teil.id]?.name || 'Sequenz';
+          if (teil.art === 'vorlage') return liveDb?.sequenceTemplates?.[teil.id]?.name || 'Vorlage';
+          if (teil.art === 'balken') {
+            const b = (Array.isArray(liveDb?.yearBars) ? liveDb.yearBars : []).find(x => x?.id === teil.id);
+            return b?.title || 'Jahresbalken';
+          }
+          return '';
+        }}
+        onWiederherstellen={(eintrag)=>stelleVersionHer(eintrag)}
+        onSchliessen={()=>setVerlaufDialog(null)}
       />
       <ConfirmDialog
         open={!!confirmState}
@@ -7359,6 +8020,16 @@ const doExportDocx = async (html, suggestedName) => {
           onUpdate={(id, patch)=>updateSequence(id, patch)}
           onDelete={(id)=>deleteSequence(id)}
           onDuplicate={(id)=>duplicateSequence(id)}
+          onOpenVerlauf={verlaufSpeicher.verfuegbar ? ((id)=>oeffneVerlauf({
+            bereich: 'sequence',
+            zielId: sequenzZiel(id),
+            titel: 'Versionsverlauf der Sequenz',
+            untertitel: sequences?.[id]?.name || 'Sequenz',
+          })) : null}
+          onVerschieben={imArchiv ? null : ((id)=>{
+            closeSequenceManagerModal();
+            oeffneVerschieben({ sequenceId: id, umfang: VERSCHIEBE_UMFANG.GESAMT });
+          })}
           competencySuggestions={sichtbareKompetenzVorschlaege}
           languageMode={languageMode}
           competencyModel={competencyModel}
@@ -8384,6 +9055,8 @@ function LessonView({
   onOpenExecution,
   onJoinBlock,
   onSplitBlock,
+  onOpenVerlauf,
+  onVerschiebeSequenz,
   kannVerbinden = false,
   readOnly = false,
   classGroupSuggestions,
@@ -9019,6 +9692,20 @@ const exportDocx = () => {
                     title="Mit der folgenden Stunde derselben Lerngruppe zu einer Doppelstunde verbinden">
               <Link2 {...ICON_SM} /> Als Doppelstunde verbinden
             </button>
+          ) : null}
+          {(!readOnly && typeof onVerschiebeSequenz === 'function' && String(local.sequenceId || '').trim()) ? (
+            <button className="btn" onClick={()=>onVerschiebeSequenz(local.sequenceId)}
+                    title="Diese und die folgenden Stunden der Sequenz auf andere Termine legen – mit Vorschau">
+              <CalendarClock {...ICON_SM} /> Sequenz verschieben…
+            </button>
+          ) : null}
+          {typeof onOpenVerlauf === 'function' ? (
+            /* Ansehen und Zurückholen ändert nichts an der Stunde –
+               deshalb steht der Verlauf auch im Archiv zur Verfügung.
+               Das Wiederherstellen bleibt dort gesperrt. */
+            <OeffnenKnopf onClick={()=>onOpenVerlauf()} title="Frühere Fassungen dieser Stunde ansehen">
+              <FileClock {...ICON_SM} /> Versionsverlauf
+            </OeffnenKnopf>
           ) : null}
           {!readOnly ? (
             <>
@@ -10037,6 +10724,8 @@ function YearPlanView({
   onClearLane,
   onRemoveLane,
   onRenameLane,
+  onOpenSequenz,
+  onVerschiebeSequenz,
   onSetView,
   readOnly = false
 }){
@@ -10186,6 +10875,11 @@ function YearPlanView({
   };
 
   // --- Drag + Resize ---
+  /* Was nach dem Loslassen eines VERKNÜPFTEN Balkens zu entscheiden ist.
+     Ein Balken zu verschieben heisst nie von selbst, Unterricht zu
+     verschieben – gefragt wird deshalb erst, nachdem die Bewegung
+     abgeschlossen ist. */
+  const [balkenFrage, setBalkenFrage] = useState(null);
   const dragRef = useRef(null);
   const onMouseDownBar = (e, bar, mode) => {
     e.preventDefault();
@@ -10197,6 +10891,9 @@ function YearPlanView({
     const endIdx = weekIndexOf(bar.endISO);
     dragRef.current = {
       id: bar.id,
+      sequenceId: balkenSequenzId(bar),
+      vorher: { startISO: bar.startISO, endISO: bar.endISO },
+      letzte: { startISO: bar.startISO, endISO: bar.endISO },
       mode: mode || 'move',
       startX: e.clientX,
       startIdx,
@@ -10224,9 +10921,10 @@ function YearPlanView({
         else nEnd = nStart;
       }
       // live update (throttled by RAF to keep smooth)
+      d.letzte = { startISO: isoFromWeekIndex(nStart), endISO: isoFromWeekIndex(nEnd) };
       if (d.raf) cancelAnimationFrame(d.raf);
       d.raf = requestAnimationFrame(()=>{
-        onUpdateBar?.(d.id, { startISO: isoFromWeekIndex(nStart), endISO: isoFromWeekIndex(nEnd) });
+        onUpdateBar?.(d.id, { ...d.letzte }, { live: true });
       });
     };
     const onUp = () => {
@@ -10235,6 +10933,21 @@ function YearPlanView({
       dragRef.current = null;
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      if (!d) return;
+      const bewegt = d.letzte.startISO !== d.vorher.startISO || d.letzte.endISO !== d.vorher.endISO;
+      if (!bewegt) return;
+      /* Der Abschluss der Bewegung. Erst hier entsteht ein
+         Sicherungspunkt – während des Ziehens wäre er ein Einzelbild. */
+      onUpdateBar?.(d.id, { ...d.letzte });
+      if (!d.sequenceId) return;
+      const wochen = weekIndexOf(d.letzte.startISO) - weekIndexOf(d.vorher.startISO);
+      setBalkenFrage({
+        barId: d.id,
+        sequenceId: d.sequenceId,
+        vorher: d.vorher,
+        nachher: { ...d.letzte },
+        wochen,
+      });
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
@@ -10387,24 +11100,119 @@ function YearPlanView({
                     const sIdx = weekIndexOf(b.startISO);
                     const eIdx = weekIndexOf(b.endISO);
                     const left = sIdx * weekWidth;
-                    const width = Math.max(weekWidth, (eIdx - sIdx + 1) * weekWidth);
+                    const breiteInWochen = Math.max(1, eIdx - sIdx + 1);
+                    const width = Math.max(weekWidth, breiteInWochen * weekWidth);
                     // Für bessere Übersicht: Hintergrund der Balken abwechselnd etwas heller/dunkler
                     // (wir verändern NICHT die gespeicherte Balkenfarbe, nur die Darstellung).
                     const bgAlpha = (idx % 2 === 0) ? 0.16 : 0.30;
+                    /* Was der Balken über seine Sequenz weiss, wird bei
+                       jeder Darstellung neu gerechnet. Deshalb steht
+                       nach einem Umbenennen sofort der neue Name da. */
+                    const verknuepft = balkenBeschriftung(db, b);
+                    const verwaist = istVerwaist(b, db?.sequences);
+                    const titelText = [
+                      b.title || '',
+                      `${formatDateDE(b.startISO)} – ${formatDateDE(b.endISO)}`,
+                      verknuepft ? `Sequenz: ${verknuepft.name} · ${verknuepft.umfang}` : '',
+                      verwaist ? 'Die verknüpfte Sequenz gibt es nicht mehr.' : '',
+                      '(Doppelklick zum Bearbeiten)',
+                    ].filter(Boolean).join('\n');
                     return (
                       <div
                         key={b.id}
-                        className="yearPlanBar"
+                        className={`yearPlanBar${verknuepft ? ' yearPlanBar--verknuepft' : ''}`}
                         style={{left, width, background: hexToRgba(surfaceColor(b.color), bgAlpha), borderColor: lineColor(b.color)}}
                         onDoubleClick={()=>startEdit(b)}
                         onMouseDown={(e)=>onMouseDownBar(e, b, 'move')}
-                        title={`${b.title || ''}\n${formatDateDE(b.startISO)} – ${formatDateDE(b.endISO)}\n(Doppelklick zum Bearbeiten)`}
+                        title={titelText}
                       >
                         <div className="yearPlanBarHandle yearPlanBarHandle--left" onMouseDown={(e)=>onMouseDownBar(e, b, 'resize-left')} />
                         <div className="yearPlanBarHandle yearPlanBarHandle--right" onMouseDown={(e)=>onMouseDownBar(e, b, 'resize-right')} />
                         <div className="yearPlanBarTitle" style={{color: textColor(b.color)}}>
                           <span className="yearPlanDot" style={{background:b.color}} />
                           {b.title || 'Ohne Titel'}
+                        </div>
+                        {verknuepft ? (
+                          /* Zwei Zeilen: der Titel des Balkens gehört ihm
+                             allein, die Sequenz steht darunter. In einer
+                             Zeile drängte die Sequenzangabe den Titel aus
+                             dem Balken – bei 28 px je Woche ist das schnell
+                             geschehen.
+
+                             Was in die zweite Zeile passt, hängt von der
+                             Breite ab: der Name immer, die Anzahl ab sechs
+                             Wochen, der Zeitraum ab zehn. Alles Weitere
+                             steht im Tooltip – ein abgeschnittener Name
+                             wäre schlechter als eine Angabe weniger. */
+                          <div className="yearPlanBarSeq" style={{color: textColor(b.color)}}>
+                            <Link2 {...ICON_SM} />
+                            <span className="yearPlanBarSeqName">{verknuepft.name}</span>
+                            {breiteInWochen >= 6 ? (
+                              <span className="yearPlanBarSeqUmfang">{verknuepft.umfang}</span>
+                            ) : null}
+                            {(breiteInWochen >= 10 && verknuepft.vonISO) ? (
+                              <span className="yearPlanBarSeqZeit">
+                                {formatDateDE(verknuepft.vonISO)} – {formatDateDE(verknuepft.bisISO)}
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : verwaist ? (
+                          <div className="yearPlanBarSeq" style={{color: textColor(b.color)}}>
+                            <Unlink {...ICON_SM} />
+                            <span className="yearPlanBarSeqName">Sequenz nicht mehr vorhanden</span>
+                          </div>
+                        ) : null}
+                        {/* Das Menü des Balkens. Es liegt IM Balken, darf
+                            aber nicht mitziehen – deshalb hält es die
+                            Maustaste bei sich. */}
+                        <div className="yearPlanBarMenu" onMouseDown={(e)=>e.stopPropagation()} onDoubleClick={(e)=>e.stopPropagation()}>
+                          <KebabMenu
+                            titel={`Aktionen für „${b.title || 'Balken'}“`}
+                            ausrichtung="rechts"
+                            eintraege={[
+                              ...(verknuepft ? [
+                                {
+                                  label: 'Sequenz öffnen',
+                                  icon: <ListTree {...ICON_SM} />,
+                                  title: 'Zur Progression dieser Sequenz',
+                                  onSelect: ()=>onOpenSequenz?.(balkenSequenzId(b)),
+                                },
+                                {
+                                  label: 'Zeitraum aus Sequenz übernehmen',
+                                  icon: <CalendarRange {...ICON_SM} />,
+                                  disabled: readOnly || !verknuepft.vonISO,
+                                  title: 'Den Balken auf die tatsächlich geplanten Termine legen',
+                                  onSelect: ()=>{
+                                    const zeitraum = zeitraumAusSequenz(db, balkenSequenzId(b), { aufWoche: normalizeToWeek });
+                                    if (!zeitraum) return;
+                                    onUpdateBar?.(b.id, zeitraum);
+                                  },
+                                },
+                              ] : []),
+                              ...(verknuepft || verwaist ? [{
+                                label: 'Verknüpfung lösen',
+                                icon: <Unlink {...ICON_SM} />,
+                                disabled: readOnly,
+                                title: 'Der Balken bleibt, die Sequenz bleibt – nur die Verbindung geht',
+                                onSelect: ()=>onUpdateBar?.(b.id, { sequenceId: '' }),
+                              }] : []),
+                              ...((verknuepft || verwaist) ? [{ trenner: true }] : []),
+                              {
+                                label: 'Bearbeiten',
+                                icon: <Pencil {...ICON_SM} />,
+                                disabled: readOnly,
+                                onSelect: ()=>startEdit(b),
+                              },
+                              {
+                                label: 'Löschen',
+                                icon: <Trash2 {...ICON_SM} />,
+                                tone: 'danger',
+                                disabled: readOnly,
+                                title: 'Löscht nur den Balken – eine verknüpfte Sequenz bleibt erhalten',
+                                onSelect: ()=>onDeleteBar?.(b.id),
+                              },
+                            ]}
+                          />
                         </div>
                       </div>
                     );
@@ -10416,10 +11224,47 @@ function YearPlanView({
         })}
       </div>
 
+      {balkenFrage ? (
+        <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget) setBalkenFrage(null); }}>
+          <div className="modalCard" role="dialog" aria-modal="true" aria-label="Verknüpfter Balken verschoben"
+               onKeyDown={(e)=>{ if (e.key === 'Escape') setBalkenFrage(null); }}>
+            <h3 className="dialogTitle">Balken verschoben – und die Sequenz?</h3>
+            <p className="dialogBody">
+              Der Balken liegt jetzt auf {formatDateDE(balkenFrage.nachher.startISO)} – {formatDateDE(balkenFrage.nachher.endISO)}.
+              Die Sequenztermine sind unverändert geblieben. Sollen sie mitgehen?
+            </p>
+            <p className="muted small">
+              Beim Mitverschieben erscheint zuerst eine Vorschau. Ohne Vorschau wird nichts verschoben,
+              und belegte Plätze werden nie überschrieben.
+            </p>
+            <div className="dialogActions" style={{flexWrap:'wrap'}}>
+              <button type="button" className="btn" onClick={()=>{
+                const f = balkenFrage;
+                setBalkenFrage(null);
+                onUpdateBar?.(f.barId, { ...f.vorher });
+              }}>Abbrechen</button>
+              <button type="button" className="btn" onClick={()=>setBalkenFrage(null)}>
+                Nur Balken verschieben
+              </button>
+              <button type="button" className="btn primary" onClick={()=>{
+                const f = balkenFrage;
+                setBalkenFrage(null);
+                onVerschiebeSequenz?.({
+                  sequenceId: f.sequenceId,
+                  wochen: f.wochen,
+                  barId: f.barId,
+                });
+              }}>Sequenztermine mitverschieben…</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {modal.open && (
         <YearBarModal
           mode={modal.mode}
           bar={modal.bar}
+          db={db}
           minDate={minDate}
           maxDate={maxDate}
           classGroupSuggestions={classGroupSuggestions}
@@ -10447,15 +11292,27 @@ function YearPlanView({
   );
 }
 
-function YearBarModal({ mode, bar, minDate, maxDate, classGroupSuggestions, subjectSuggestions, onHideClassGroupSuggestion, onHideSubjectSuggestion, onClose, onSave, onDelete }){
+function YearBarModal({ mode, bar, db, minDate, maxDate, classGroupSuggestions, subjectSuggestions, onHideClassGroupSuggestion, onHideSubjectSuggestion, onClose, onSave, onDelete }){
   const [local, setLocal] = useState(()=>({
     title: String(bar?.title || '').trim(),
     classGroup: String(bar?.classGroup || '').trim(),
     subject: String(bar?.subject || '').trim(),
     startISO: String(bar?.startISO || '').trim(),
     endISO: String(bar?.endISO || '').trim(),
-    color: String(bar?.color || SEQ_COLORS[0]).trim()
+    color: String(bar?.color || SEQ_COLORS[0]).trim(),
+    sequenceId: String(bar?.sequenceId || '').trim(),
   }));
+
+  /* Die Auswahl: passende Sequenzen zuerst, die übrigen darunter.
+     Ausgeblendet wird nichts – aber eine unpassende Zuordnung wird
+     benannt, damit sie nicht stillschweigend entsteht. */
+  const auswahl = useMemo(
+    ()=> auswahlSequenzen(db, { classGroup: local.classGroup, subject: local.subject }),
+    [db, local.classGroup, local.subject],
+  );
+  const passende = auswahl.filter(a => a.passt);
+  const uebrige = auswahl.filter(a => !a.passt);
+  const gewaehlt = auswahl.find(a => a.id === local.sequenceId) || null;
 
   const canSave = Boolean((local.title || '').trim() && local.startISO && local.endISO && local.endISO >= local.startISO);
 
@@ -10511,6 +11368,50 @@ function YearBarModal({ mode, bar, minDate, maxDate, classGroupSuggestions, subj
         <div style={{height:10}} />
 
         <div className="row wrap" style={{gap:10}}>
+          <div className="grow" style={{minWidth:280}}>
+            <label className="small muted" htmlFor="yearBarSequence">Verknüpfte Sequenz (optional)</label>
+            <select
+              id="yearBarSequence"
+              className="input"
+              value={local.sequenceId}
+              onChange={(e)=>setLocal(prev=>({ ...prev, sequenceId: e.target.value }))}
+            >
+              <option value="">Ohne Verknüpfung</option>
+              {passende.length ? (
+                <optgroup label="Passende Sequenzen">
+                  {passende.map(a => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}{a.termine ? ` (${a.termine} ${a.termine === 1 ? 'Termin' : 'Termine'})` : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
+              {uebrige.length ? (
+                <optgroup label="Andere Lerngruppe oder anderes Fach">
+                  {uebrige.map(a => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}{a.gruppen?.[0] ? ` – ${[a.gruppen[0].classGroup, a.gruppen[0].subject].filter(Boolean).join(' · ')}` : ''}
+                    </option>
+                  ))}
+                </optgroup>
+              ) : null}
+            </select>
+            {gewaehlt && !gewaehlt.passt ? (
+              <div className="small" style={{color:'var(--warning)', marginTop:4}}>
+                Diese Sequenz liegt in einer anderen Lerngruppe. Die Verknüpfung ist möglich –
+                sie verschiebt aber nie von selbst Stunden.
+              </div>
+            ) : (
+              <div className="muted small" style={{marginTop:4}}>
+                Der Balken zeigt dann Name und Umfang der Sequenz. Die Sequenz selbst bleibt unberührt.
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={{height:10}} />
+
+        <div className="row wrap" style={{gap:10}}>
           <div style={{width:190}}>
             <label className="small muted">Start</label>
             <input className="input" type="date" min={minDate} max={maxDate} value={local.startISO} onChange={(e)=>setLocal(prev=>({ ...prev, startISO: e.target.value }))} />
@@ -10535,7 +11436,8 @@ function YearBarModal({ mode, bar, minDate, maxDate, classGroupSuggestions, subj
             subject: local.subject,
             startISO: local.startISO,
             endISO: local.endISO,
-            color: local.color
+            color: local.color,
+            sequenceId: local.sequenceId,
           })}>Speichern</button>
         </div>
       </div>
@@ -10822,6 +11724,7 @@ function SequenceLibraryView({
   templates,
   sequences,
   schoolCalendar,
+  startVorschauId = '',
   minDate,
   maxDate,
   onCreateTemplateFromSequence,
@@ -10879,7 +11782,12 @@ function SequenceLibraryView({
 
   const [activeTemplate, setActiveTemplate] = useState(null);
   const [showInsert, setShowInsert] = useState(false);
-  const [vorschauId, setVorschauId] = useState('');
+  /* Kommt der Weg aus der Suche, ist die Vorschau schon gewählt: die
+     Bibliothek öffnet sich dann direkt bei dieser Vorlage. */
+  const [vorschauId, setVorschauId] = useState(String(startVorschauId || ''));
+  useEffect(()=>{
+    if (startVorschauId) setVorschauId(String(startVorschauId));
+  }, [startVorschauId]);
   const [angabenId, setAngabenId] = useState('');
 
   /* --- Suchen und Filtern ------------------------------------------
@@ -11213,6 +12121,8 @@ function InsertTemplateModal({ template, groupSuggestions, subjectSuggestions, m
 function SequenceManager({
   sequences,
   onDuplicate,
+  onOpenVerlauf,
+  onVerschieben,
   appSettings,
   onUpdateAppSettings,
   schoolCalendar,
@@ -11508,6 +12418,12 @@ function SequenceManager({
                     title: 'Progression der Sequenz ansehen',
                     onSelect: ()=>onOpenProgression?.(s.id),
                   },
+                  ...(typeof onVerschieben === 'function' ? [{
+                    label: 'Termine verschieben…',
+                    icon: <CalendarClock {...ICON_SM} />,
+                    title: 'Die Termine dieser Sequenz auf andere Stundenplanplätze legen – mit Vorschau',
+                    onSelect: ()=>onVerschieben(s.id),
+                  }] : []),
                   {
                     label: 'Duplizieren',
                     icon: <Copy {...ICON_SM} />,
@@ -11533,6 +12449,12 @@ function SequenceManager({
                     title: 'Sequenz als Vorlage für spätere Schuljahre speichern',
                     onSelect: ()=>onSaveAsTemplate?.(s.id),
                   },
+                  ...(typeof onOpenVerlauf === 'function' ? [{
+                    label: 'Versionsverlauf',
+                    icon: <FileClock {...ICON_SM} />,
+                    title: 'Frühere Fassungen dieser Sequenz und ihrer Stunden',
+                    onSelect: ()=>onOpenVerlauf(s.id),
+                  }] : []),
                   {
                     label: 'Dateien…',
                     icon: <FileText {...ICON_SM} />,

@@ -2022,3 +2022,172 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
    ein <a> in Gestalt einer Schaltfläche. */
 a.btn { text-decoration: none; }
 a.btn.is-disabled { opacity: 0.5; pointer-events: none; }
+
+/* ============================================================
+   Versionsverlauf
+
+   Eine Liste von Fassungen, kein zweites Bedienkonzept: dieselbe
+   Modalfläche, dieselben Knöpfe, dieselbe Lineatur. Die Vorschau vor
+   dem Wiederherstellen benutzt die Tabellenform der Progression.
+   ============================================================ */
+.verlaufModal { width: min(880px, 100%); }
+.verlaufListe { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.verlaufEintrag {
+  border: 1px solid var(--border);
+  background: var(--card);
+  padding: 12px 14px;
+}
+.verlaufEintrag.is-active { border-color: var(--primary); }
+.verlaufKopf { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: flex-start; }
+.verlaufZeit { font-weight: var(--fw-bold); font-size: var(--fs-md); }
+.verlaufFelder { margin-top: 4px; font-size: var(--fs-sm); color: var(--text-secondary); }
+.verlaufDetail { margin-top: 12px; border-top: 1px solid var(--border-light); padding-top: 10px; display: flex; flex-direction: column; gap: 12px; }
+.verlaufTeil { display: flex; flex-direction: column; gap: 4px; }
+.verlaufSchau { display: flex; flex-direction: column; gap: 8px; }
+.verlaufFeld { display: flex; flex-direction: column; gap: 2px; }
+.verlaufPhasen { margin: 4px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.verlaufVorschau { overflow-x: auto; margin: 12px 0; max-height: 40vh; }
+.verlaufTabelle { border-collapse: collapse; width: 100%; min-width: 520px; }
+.verlaufTabelle th, .verlaufTabelle td {
+  border: 1px solid var(--border-light);
+  padding: 7px 9px; vertical-align: top; text-align: left;
+  font-size: var(--fs-sm); font-weight: var(--fw-normal);
+}
+.verlaufTabelle thead th {
+  background: var(--bg-subtle); font-weight: var(--fw-medium);
+  font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-secondary); white-space: nowrap;
+}
+
+/* Ein Balken, der auf eine Sequenz zeigt.
+
+   Dezent heisst hier: dieselbe Fläche, dieselbe Farbe, eine Zeile –
+   ergänzt um Verknüpfungssymbol, Name und Umfang. Das Menü erscheint
+   erst beim Zeigen oder beim Tastaturfokus, damit die Leiste ruhig
+   bleibt. */
+/* Ein verknüpfter Balken trägt zwei Zeilen: oben sein Titel, darunter
+   die Sequenz. Nebeneinander verdrängte die Sequenzangabe den Titel –
+   eine Wochenspalte ist 28 px breit. */
+.yearPlanBar--verknuepft {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 1px;
+  padding: 0 10px;
+}
+.yearPlanBar--verknuepft .yearPlanBarTitle { line-height: 1.15; }
+.yearPlanBarSeq {
+  display: flex; align-items: center; gap: 5px;
+  min-width: 0; overflow: hidden; white-space: nowrap;
+  font-size: var(--fs-2xs); line-height: 1.2; opacity: 0.85;
+}
+.yearPlanBarSeqName { font-weight: var(--fw-medium); overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+.yearPlanBarSeqUmfang, .yearPlanBarSeqZeit { opacity: 0.75; flex: 0 0 auto; }
+.yearPlanBarMenu {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  opacity: 0; transition: opacity var(--transition-fast);
+}
+.yearPlanBar:hover .yearPlanBarMenu,
+.yearPlanBarMenu:focus-within { opacity: 1; }
+
+/* ============================================================
+   Sequenz verschieben
+
+   Die Vorschau benutzt dieselbe Tabellenform wie der Versionsverlauf –
+   es ist dieselbe Frage: was ändert sich, wenn ich das jetzt tue?
+   ============================================================ */
+.verschiebenModal { width: min(980px, 100%); }
+.verschiebenFeld {
+  border: 1px solid var(--border-light);
+  padding: 10px 12px;
+  margin: 0 0 12px;
+  min-width: 0;
+}
+.verschiebenFeld legend { padding: 0 6px; text-transform: uppercase; letter-spacing: 0.05em; font-size: var(--fs-2xs); }
+.verschiebenFeld label { cursor: pointer; }
+.verschiebenVorschau { overflow-x: auto; max-height: 42vh; margin: 4px 0 10px; }
+.verschiebenFehler {
+  margin: 0 0 12px;
+  padding: 10px 12px 10px 28px;
+  border: 1px solid var(--warning);
+  background: var(--warning-soft);
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+/* ============================================================
+   Globale Suche
+
+   Ein grosses Feld, Filter als Reihe, Treffer als Liste. Dieselbe
+   Lineatur wie überall: Linien und Flächen, keine schwebenden Karten.
+   ============================================================ */
+.sucheFeldZeile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border-strong);
+  background: var(--card);
+  color: var(--muted);
+}
+.sucheFeldZeile:focus-within { border-color: var(--primary); }
+.sucheFeld {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: var(--fs-lg);
+  color: var(--text);
+  outline: none;
+}
+.sucheFeld::placeholder { color: var(--muted); }
+
+/* Eine kompakte Schaltfläche – für Filterreihen und Trefferzeilen, wo
+   die volle Höhe die Liste auseinanderzöge. */
+.btn.small { padding: 5px 10px; font-size: var(--fs-sm); }
+
+.sucheFilter { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 16px; }
+.sucheFilterZeile { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.sucheFilterTitel {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--fs-xs); text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--muted); align-self: center;
+}
+.sucheFilterFeld { display: flex; flex-direction: column; gap: 2px; min-width: 180px; }
+
+.sucheGruppe { margin-top: 18px; }
+.sucheGruppeTitel {
+  margin: 0 0 8px;
+  font-size: var(--fs-md);
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.sucheListe { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.sucheTreffer {
+  border: 1px solid var(--border);
+  background: var(--card);
+  padding: 10px 12px;
+}
+.sucheTreffer:hover { border-color: var(--primary); }
+.sucheTrefferKopf { display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: baseline; }
+.sucheTitel {
+  border: none; background: none; padding: 0; cursor: pointer; text-align: left;
+  font-size: var(--fs-lg); font-weight: var(--fw-bold); color: var(--text);
+}
+.sucheTitel:hover { color: var(--primary-ink); text-decoration: underline; }
+.sucheMeta { margin-top: 2px; }
+.sucheAusschnitt { margin-top: 6px; font-size: var(--fs-md); line-height: 1.5; }
+/* Die Fundstelle wird gekennzeichnet, nicht angestrichen: eine ruhige
+   Fläche, die auch im dunklen Design lesbar bleibt. */
+.sucheMarke { background: var(--primary-soft); color: var(--primary-ink); padding: 0 2px; }
+/* Der Ausschnitt einer Fundstelle in der Befehlspalette. */
+.paletteHinweis {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 46ch;
+}

@@ -17,7 +17,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  ONBOARDING_VERSION, STATUS, PFADE, SCHRITTE, HINWEISE,
+  ONBOARDING_VERSION, STATUS, PFADE, SCHRITTE, SCHRITTE_ZEITEN, SCHRITTE_ZEITEN_AB,
+  SCHRITT_TEXT, HINWEISE, ZEITEN_TEXTE,
+  checklistenArt, checklistenSchritte, zeitenSchritte, zeitenSchritt, onboardingModell,
   leeresOnboarding, normalisiereOnboarding,
   istLeereDatenbank, datenSchritte, schritteAus, anzahlErledigt, schnellstartFertig,
   schnellstartSchritt, onboardingKontext, naechsterHinweis, merkeHinweis, istHinweisErledigt,
@@ -477,4 +479,206 @@ test('Alte Backups ohne Onboarding-Felder bleiben lesbar und bekommen keine Einf
   assert.equal(zeigeWillkommen(altesBackup, zustand), false, 'vorhandene Daten schliessen die Einführung aus');
   assert.equal(altesBackup.appSettings.theme, 'dark', 'die übrigen Einstellungen bleiben');
   assert.deepEqual(schritteAus(altesBackup, zustand), { lerngruppe: true, stunde: true, phase: false });
+});
+
+/* ============================================================
+   Der Weg über die Unterrichtszeiten
+
+   Der zweite Einstieg: erst die regelmässigen Zeiten, dann die erste
+   Stunde. Die Checkliste richtet sich danach – und beim A-/B-Rhythmus
+   noch einmal anders.
+   ============================================================ */
+
+function vorlage(id, eintraege = [{ dayIndex: 0, slotIndex: 2, classGroup: '9b', subject: 'Französisch', room: 'A101', blockSpan: 1 }]){
+  return {
+    id, modelId: '', zyklusPosition: 0, name: id, version: 1, slotsPerDay: 6,
+    eintraege: eintraege.map((e, i)=> ({ id: `${id}-e${i}`, blockSpan: 1, room: '', ...e })),
+    createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+  };
+}
+
+function dbMitZeiten({ typ = 'singleWeek', aVoll = true, bVoll = true, aktiv = true, rhythmus = true, wochen = 0 } = {}){
+  const db = leereDb();
+  const a = vorlage('va');
+  const b = vorlage('vb', [{ dayIndex: 2, slotIndex: 1, classGroup: '7a', subject: 'Mathematik' }]);
+  if (!aVoll) a.eintraege = [];
+  if (!bVoll) b.eintraege = [];
+  const zyklus = typ === 'alternatingWeeks' ? ['va', 'vb'] : ['va'];
+  a.modelId = 'm1'; b.modelId = 'm1'; b.zyklusPosition = 1;
+  db.timetableTemplates = typ === 'alternatingWeeks' ? { va: a, vb: b } : { va: a };
+  db.timetableModels = [{
+    id: 'm1', name: 'Standard', typ, zyklus,
+    vonISO: '2026-08-01', bisISO: '2027-07-31', aktiv, archiviert: false,
+    referenzWocheISO: rhythmus ? '2026-08-31' : '',
+    referenzPosition: 0,
+    wechselregel: 'kalenderwochen',
+    ausnahmen: {}, createdAt: '', updatedAt: '2026-08-01T00:00:00.000Z',
+  }];
+  /* Angewendete Wochen erkennt das Onboarding am Vermerk an den
+     erzeugten Stunden. */
+  const wochenStarts = ['2026-08-31', '2026-09-07', '2026-09-14'];
+  for (let i = 0; i < wochen; i++) {
+    const ws = wochenStarts[i];
+    db.weeks[ws] = {
+      slotsPerDay: 6,
+      lessons: {
+        '0-2': stunde({
+          classGroup: '9b', subject: 'Französisch',
+          timetableRef: { modelId: 'm1', templateId: 'va', entryId: 'va-e0', version: 1, appliedAt: '' },
+        }),
+      },
+      duties: {},
+    };
+  }
+  return db;
+}
+
+test('Das Onboarding bietet „Meine Unterrichtszeiten einrichten" als eigenen Weg', ()=>{
+  assert.equal(PFADE.ZEITEN, 'unterrichtszeiten');
+  /* Der alte Wert aus einem gespeicherten Stand wird übersetzt, nicht
+     verworfen. */
+  assert.equal(normalisiereOnboarding({ pfad: 'stundenplan' }).pfad, PFADE.ZEITEN);
+});
+
+test('Die Checkliste folgt dem gewählten Einstieg', ()=>{
+  const db = dbMitZeiten();
+  const stundenWeg = starteOnboarding(leeresOnboarding(), { pfad: PFADE.STUNDE });
+  assert.equal(checklistenArt(db, stundenWeg), 'stunde');
+  assert.deepEqual(checklistenSchritte('stunde'), SCHRITTE);
+
+  const zeitenWeg = starteOnboarding(leeresOnboarding(), { pfad: PFADE.ZEITEN });
+  assert.equal(checklistenArt(db, zeitenWeg), 'zeiten');
+  assert.deepEqual(checklistenSchritte('zeiten'), SCHRITTE_ZEITEN);
+  assert.equal(SCHRITT_TEXT.vorlage, 'Stundenplanvorlage erstellt');
+  assert.equal(SCHRITT_TEXT.standard, 'Standardvorlage festgelegt');
+});
+
+test('Bei A-/B-Rhythmus gilt die A-/B-Checkliste', ()=>{
+  const db = dbMitZeiten({ typ: 'alternatingWeeks' });
+  const zustand = starteOnboarding(leeresOnboarding(), { pfad: PFADE.ZEITEN });
+  assert.equal(checklistenArt(db, zustand), 'zeitenAB');
+  assert.deepEqual(checklistenSchritte('zeitenAB'), SCHRITTE_ZEITEN_AB);
+  assert.deepEqual(
+    SCHRITTE_ZEITEN_AB.map(id => SCHRITT_TEXT[id]),
+    ['A-Woche eingerichtet', 'B-Woche eingerichtet', 'Wochenrhythmus festgelegt', 'Stundenplanvorschau bestätigt'],
+  );
+});
+
+test('Das Onboarding verlangt bei gewähltem A-/B-Rhythmus beide Wochenvorlagen', ()=>{
+  const zustand = starteOnboarding(leeresOnboarding(), { pfad: PFADE.ZEITEN });
+
+  const nurA = dbMitZeiten({ typ: 'alternatingWeeks', bVoll: false });
+  const schritteA = schritteAus(nurA, zustand);
+  assert.equal(schritteA.vorlageA, true);
+  assert.equal(schritteA.vorlageB, false, 'ohne B-Woche ist der Schritt offen');
+  assert.equal(schnellstartFertig(schritteA), false);
+  assert.equal(zeitenSchritt({ art: 'zeitenAB', schritte: schritteA }), 'vorlageB');
+
+  const beide = dbMitZeiten({ typ: 'alternatingWeeks' });
+  const schritteB = schritteAus(beide, zustand);
+  assert.equal(schritteB.vorlageA, true);
+  assert.equal(schritteB.vorlageB, true);
+  assert.equal(schritteB.rhythmus, true);
+  assert.equal(schritteB.vorschau, false, 'ohne Anwendung fehlt noch die Vorschau');
+  assert.equal(zeitenSchritt({ art: 'zeitenAB', schritte: schritteB }), 'vorschau');
+});
+
+test('Ohne Referenzwoche fehlt der Rhythmusschritt', ()=>{
+  const db = dbMitZeiten({ typ: 'alternatingWeeks', rhythmus: false });
+  const zustand = starteOnboarding(leeresOnboarding(), { pfad: PFADE.ZEITEN });
+  assert.equal(schritteAus(db, zustand).rhythmus, false);
+});
+
+test('Zwei aufeinanderfolgende angewendete Wochen schliessen die Vorschau ab', ()=>{
+  const zustand = starteOnboarding(leeresOnboarding(), { pfad: PFADE.ZEITEN });
+  const eine = dbMitZeiten({ typ: 'alternatingWeeks', wochen: 1 });
+  assert.equal(schritteAus(eine, zustand).vorschau, false);
+
+  const zwei = dbMitZeiten({ typ: 'alternatingWeeks', wochen: 2 });
+  assert.equal(schritteAus(zwei, zustand).vorschau, true);
+
+  /* Oder ausdrücklich: "nur als Vorlage gespeichert". */
+  const nurVorlage = markiereSchritt(zustand, 'vorschau');
+  assert.equal(schritteAus(eine, nurVorlage).vorschau, true);
+});
+
+test('Der Einstieg erkennt vorhandene Vorlagen und verlangt sie nicht noch einmal', ()=>{
+  const zustand = starteOnboarding(leeresOnboarding(), { pfad: PFADE.ZEITEN });
+  const db = dbMitZeiten({ wochen: 1 });
+  const schritte = schritteAus(db, zustand);
+  assert.equal(schritte.vorlage, true, 'die vorhandene Vorlage zählt');
+  assert.equal(schritte.standard, true, 'das aktive Modell zählt');
+  assert.equal(schritte.angewendet, true);
+  assert.equal(zeitenSchritt({ art: 'zeiten', schritte }), 'stundeGeoeffnet');
+
+  /* Und die Willkommensansicht erscheint gar nicht erst: Eine Datenbank
+     mit Unterrichtszeiten ist nicht leer. */
+  assert.equal(istLeereDatenbank(dbMitZeiten()), false);
+});
+
+test('Nach abgeschlossener Einrichtung führt der Abschluss zur ersten planbaren Stunde', ()=>{
+  const zustand = markiereSchritt(starteOnboarding(leeresOnboarding(), { pfad: PFADE.ZEITEN }), 'stundeGeoeffnet');
+  const db = dbMitZeiten({ wochen: 1 });
+  const schritte = schritteAus(db, zustand);
+  assert.equal(schnellstartFertig(schritte), true);
+  assert.equal(zeitenSchritt({ art: 'zeiten', schritte }), 'abschluss');
+  assert.match(ZEITEN_TEXTE.abschluss.titel, /Unterrichtszeiten sind eingerichtet/);
+  assert.match(ZEITEN_TEXTE.abschluss.text, /Stundenplatz öffnen/);
+  assert.match(ZEITEN_TEXTE.abschlussAB.titel, /A-\/B-Stundenplan ist eingerichtet/);
+  assert.match(ZEITEN_TEXTE.abschlussAB.text, /automatisch die passende Vorlage/);
+});
+
+test('Das Modell für die Einrichtung ist das aktive – sonst das zuletzt geänderte', ()=>{
+  const db = dbMitZeiten({ aktiv: false });
+  assert.equal(onboardingModell(db).id, 'm1');
+  const leer = leereDb();
+  assert.equal(onboardingModell(leer), null);
+});
+
+test('Das Zurücksetzen des Onboardings löscht weder Vorlagen noch Unterrichtsdaten', ()=>{
+  const db = dbMitZeiten({ typ: 'alternatingWeeks', wochen: 2 });
+  const vorher = JSON.stringify({ weeks: db.weeks, templates: db.timetableTemplates, models: db.timetableModels });
+  const zustand = merkeHinweis(starteOnboarding(leeresOnboarding(), { pfad: PFADE.ZEITEN }), 'makro', 'verstanden');
+
+  starteSchnellstartNeu(zustand);
+  setzeHinweiseZurueck(zustand);
+  ueberspringeOnboarding(zustand);
+
+  assert.equal(
+    JSON.stringify({ weeks: db.weeks, templates: db.timetableTemplates, models: db.timetableModels }),
+    vorher,
+  );
+  /* Und nach dem Neustart des Schnellstarts sind die erledigten
+     Schritte weiter erledigt, weil sie in den Daten stehen. */
+  const neu = starteSchnellstartNeu(zustand);
+  assert.equal(schritteAus(db, neu, 'zeitenAB').vorlageA, true);
+});
+
+test('Die neuen Hinweise zu den Unterrichtszeiten sind vorhanden und passen nur im richtigen Fall', ()=>{
+  const ids = HINWEISE.map(h => h.id);
+  for (const id of ['wocheOhneZeiten', 'wocheAlsVorlage', 'vorlageBearbeiten']) {
+    assert.ok(ids.includes(id), id);
+  }
+
+  const leer = leereDb();
+  leer.weeks['2026-08-31'] = { slotsPerDay: 6, lessons: {}, duties: {} };
+  const kontextLeer = onboardingKontext(leer, { ansicht: 'week', weekStart: '2026-08-31' });
+  assert.equal(naechsterHinweis({ zustand: leeresOnboarding(), kontext: kontextLeer }).id, 'wocheOhneZeiten');
+
+  /* Mit Vorlagen erscheint er nicht mehr. */
+  const mitVorlagen = dbMitZeiten();
+  mitVorlagen.weeks['2026-08-31'] = { slotsPerDay: 6, lessons: {}, duties: {} };
+  const kontextVorlagen = onboardingKontext(mitVorlagen, { ansicht: 'week', weekStart: '2026-08-31' });
+  assert.notEqual(naechsterHinweis({ zustand: leeresOnboarding(), kontext: kontextVorlagen })?.id, 'wocheOhneZeiten');
+
+  /* Eine von Hand gefüllte Woche ohne Vorlagen bietet das Speichern an. */
+  const gefuellt = leereDb();
+  gefuellt.weeks['2026-08-31'] = { slotsPerDay: 6, lessons: {}, duties: {} };
+  for (let i = 0; i < 6; i++) {
+    gefuellt.weeks['2026-08-31'].lessons[`${i % 5}-${i}`] = stunde({ classGroup: '9b', subject: 'Französisch' });
+  }
+  const kontextGefuellt = onboardingKontext(gefuellt, { ansicht: 'week', weekStart: '2026-08-31' });
+  const hinweis = naechsterHinweis({ zustand: leeresOnboarding(), kontext: kontextGefuellt });
+  assert.equal(hinweis.id, 'wocheAlsVorlage');
+  assert.equal(hinweis.hauptaktion.id, 'wocheAlsVorlage');
 });

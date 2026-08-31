@@ -27,6 +27,10 @@
 
 import { blockSpanOf, lessonKey, passenZusammen } from './doppelstunde.js';
 import { hatNachbereitung } from './nachbereitung.js';
+import {
+  hatStundenplanVorlagen, hatAktivesModell, aktivesModellFuer, istWechselModell,
+  angewendeteWochen, modellVollstaendig, istUnterrichtsfreieWoche, montagVon,
+} from './stundenplan.js';
 
 /* Die Fassung der Einführung.
 
@@ -48,19 +52,46 @@ const STATUS_WERTE = new Set(Object.values(STATUS));
 
 export const PFADE = {
   STUNDE: 'stunde',
-  STUNDENPLAN: 'stundenplan',
+  /* Früher hiess dieser Weg "Stundenplan einrichten". Das war
+     missverständlich – gemeint sind die eigenen Unterrichtszeiten, nicht
+     der Stundenplan der Schule. Der alte Wert wird beim Einlesen
+     übersetzt, damit ein gespeicherter Stand nicht verlorengeht. */
+  ZEITEN: 'unterrichtszeiten',
   IMPORT: 'import',
   ERKUNDEN: 'erkunden',
 };
 
-/* Die drei Pflichtschritte. Mehr sind es nicht – die Zahl steht in der
-   Checkliste und ist damit ein Versprechen. */
+const PFAD_ALIAS = { stundenplan: PFADE.ZEITEN };
+
+/* Die Checkliste richtet sich nach dem gewählten Einstieg. Drei Listen,
+   je nachdem, was jemand vorhat:
+
+     - die erste Stunde planen,
+     - die Unterrichtszeiten als gleichbleibende Woche einrichten,
+     - die Unterrichtszeiten als A-/B-Rhythmus einrichten.
+
+   `SCHRITTE` bleibt die Liste des Schnellstarts: Sie ist der Weg, den
+   die meisten gehen, und andere Teile des Programms zählen darauf. */
 export const SCHRITTE = ['lerngruppe', 'stunde', 'phase'];
+export const SCHRITTE_ZEITEN = ['vorlage', 'standard', 'angewendet', 'stundeGeoeffnet'];
+export const SCHRITTE_ZEITEN_AB = ['vorlageA', 'vorlageB', 'rhythmus', 'vorschau'];
+
+export const ALLE_SCHRITTE = [...SCHRITTE, ...SCHRITTE_ZEITEN, ...SCHRITTE_ZEITEN_AB];
 
 export const SCHRITT_TEXT = {
   lerngruppe: 'Lerngruppe eingetragen',
   stunde: 'erste Stunde angelegt',
   phase: 'erste Unterrichtsphase geplant',
+
+  vorlage: 'Stundenplanvorlage erstellt',
+  standard: 'Standardvorlage festgelegt',
+  angewendet: 'Vorlage auf mindestens eine Woche angewendet',
+  stundeGeoeffnet: 'erste Stunde zur Planung geöffnet',
+
+  vorlageA: 'A-Woche eingerichtet',
+  vorlageB: 'B-Woche eingerichtet',
+  rhythmus: 'Wochenrhythmus festgelegt',
+  vorschau: 'Stundenplanvorschau bestätigt',
 };
 
 /* ---- Zustand ---------------------------------------------------------- */
@@ -93,7 +124,7 @@ export function normalisiereOnboarding(raw){
 
   const schritte = {};
   const rohSchritte = (o.schritte && typeof o.schritte === 'object') ? o.schritte : {};
-  for (const id of SCHRITTE) {
+  for (const id of ALLE_SCHRITTE) {
     const wert = rohSchritte[id];
     if (!wert) continue;
     schritte[id] = (typeof wert === 'string') ? wert : new Date().toISOString();
@@ -116,7 +147,11 @@ export function normalisiereOnboarding(raw){
     ...basis,
     version: Number.isFinite(Number(o.version)) && Number(o.version) > 0 ? Number(o.version) : ONBOARDING_VERSION,
     status: STATUS_WERTE.has(text(o.status)) ? text(o.status) : basis.status,
-    pfad: Object.values(PFADE).includes(text(o.pfad)) ? text(o.pfad) : '',
+    pfad: (()=>{
+      const roh = text(o.pfad);
+      const uebersetzt = PFAD_ALIAS[roh] || roh;
+      return Object.values(PFADE).includes(uebersetzt) ? uebersetzt : '';
+    })(),
     schritte,
     hinweise,
     checkliste: {
@@ -153,6 +188,10 @@ export function istLeereDatenbank(db){
   if ((Array.isArray(db.yearPlanLanes) ? db.yearPlanLanes : []).length) return false;
   if ((Array.isArray(db.todos) ? db.todos : []).length) return false;
   if ((Array.isArray(db.schoolYearArchives) ? db.schoolYearArchives : []).length) return false;
+  /* Auch eingerichtete Unterrichtszeiten heissen: Hier hat schon jemand
+     gearbeitet. */
+  if (Object.keys(db.timetableTemplates || {}).length) return false;
+  if ((Array.isArray(db.timetableModels) ? db.timetableModels : []).length) return false;
 
   /* Vorschlagslisten entstehen nur durch Benutzung. Sie sind deshalb ein
      verlässliches Zeichen dafür, dass hier schon jemand gearbeitet hat –
@@ -197,23 +236,100 @@ export function datenSchritte(db){
   return { lerngruppe, stunde, phase };
 }
 
+/* Das Modell, um das es bei der Einrichtung gerade geht: das aktive –
+   und solange keines aktiv ist, das zuletzt geänderte. */
+export function onboardingModell(db){
+  const modelle = Array.isArray(db?.timetableModels) ? db.timetableModels : [];
+  const aktiv = aktivesModellFuer(modelle, new Date().toISOString().slice(0, 10));
+  if (aktiv) return aktiv;
+  return [...modelle]
+    .filter(m => !m?.archiviert)
+    .sort((a, b)=> text(b?.updatedAt).localeCompare(text(a?.updatedAt)))[0] || null;
+}
+
+/* Welche Checkliste gilt? Sie folgt dem gewählten Einstieg – und beim
+   Weg über die Unterrichtszeiten der Art des Stundenplans. */
+export function checklistenArt(db, zustand){
+  const z = normalisiereOnboarding(zustand);
+  if (z.pfad !== PFADE.ZEITEN) return 'stunde';
+  const modell = onboardingModell(db);
+  return (modell && istWechselModell(modell)) ? 'zeitenAB' : 'zeiten';
+}
+
+export function checklistenSchritte(art){
+  if (art === 'zeiten') return SCHRITTE_ZEITEN;
+  if (art === 'zeitenAB') return SCHRITTE_ZEITEN_AB;
+  return SCHRITTE;
+}
+
+/* Der Fortschritt beim Einrichten der Unterrichtszeiten – ebenfalls aus
+   den Daten, nicht aus Klicks. */
+export function zeitenSchritte(db, zustand){
+  const z = normalisiereOnboarding(zustand);
+  const modell = onboardingModell(db);
+  const vorlagen = db?.timetableTemplates || {};
+  const zyklus = Array.isArray(modell?.zyklus) ? modell.zyklus : [];
+  const hatEintraege = (id)=> Boolean(vorlagen[id]?.eintraege?.length);
+  const wochen = angewendeteWochen(db, modell?.id || '');
+
+  return {
+    vorlage: hatStundenplanVorlagen(db),
+    standard: hatAktivesModell(db),
+    angewendet: wochen.length >= 1,
+    stundeGeoeffnet: Boolean(z.schritte.stundeGeoeffnet) || Boolean(datenSchritte(db).phase),
+
+    vorlageA: hatEintraege(zyklus[0]),
+    vorlageB: hatEintraege(zyklus[1]),
+    rhythmus: Boolean(modell && modellVollstaendig(modell, vorlagen) && istWechselModell(modell)),
+    /* Angewendet auf mindestens ZWEI aufeinanderfolgende
+       Unterrichtswochen – oder ausdrücklich nur als Vorlage gespeichert. */
+    vorschau: Boolean(z.schritte.vorschau) || zweiAufeinanderfolgende(wochen, db?.schoolCalendar),
+  };
+}
+
+function zweiAufeinanderfolgende(wochen, schoolCalendar){
+  const liste = [...(wochen || [])].sort();
+  for (let i = 0; i < liste.length - 1; i++) {
+    /* "Aufeinanderfolgend" heisst: dazwischen liegt keine Woche, in der
+       Unterricht stattgefunden hätte. Ferien unterbrechen die Folge
+       nicht. */
+    let naechste = liste[i];
+    for (let schritt = 0; schritt < 12; schritt++) {
+      naechste = plusWoche(naechste);
+      if (naechste === liste[i + 1]) return true;
+      if (!istUnterrichtsfreieWoche(naechste, schoolCalendar)) break;
+    }
+  }
+  return false;
+}
+
+function plusWoche(weekStartISO){
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(weekStartISO || ''));
+  if (!m) return '';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  d.setDate(d.getDate() + 7);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 /* Die Schritte, wie die Checkliste sie zeigt: was in den Daten steht,
    ergänzt um das, was während der Einführung vermerkt wurde (etwa das
    blosse Öffnen einer Stunde). */
-export function schritteAus(db, zustand){
-  const aus = datenSchritte(db);
+export function schritteAus(db, zustand, art = null){
+  const welche = art || checklistenArt(db, zustand);
   const vermerkt = normalisiereOnboarding(zustand).schritte;
+  const aus = welche === 'stunde' ? datenSchritte(db) : zeitenSchritte(db, zustand);
   const out = {};
-  for (const id of SCHRITTE) out[id] = Boolean(aus[id] || vermerkt[id]);
+  for (const id of checklistenSchritte(welche)) out[id] = Boolean(aus[id] || vermerkt[id]);
   return out;
 }
 
 export function anzahlErledigt(schritte){
-  return SCHRITTE.filter(id => schritte?.[id]).length;
+  return Object.values(schritte || {}).filter(Boolean).length;
 }
 
 export function schnellstartFertig(schritte){
-  return SCHRITTE.every(id => schritte?.[id]);
+  const ids = Object.keys(schritte || {});
+  return ids.length > 0 && ids.every(id => schritte[id]);
 }
 
 /* ---- Welcher Hinweis ist jetzt dran? ----------------------------------
@@ -271,6 +387,69 @@ export const SCHNELLSTART_TEXTE = {
   },
 };
 
+/* Der Weg über die Unterrichtszeiten. Dieselbe Regel wie beim
+   Schnellstart: Der nächste Hinweis erscheint erst, wenn der vorige
+   wirklich erledigt ist. */
+export function zeitenSchritt({ art = 'zeiten', schritte = {} } = {}){
+  for (const id of checklistenSchritte(art)) {
+    if (!schritte[id]) return id;
+  }
+  return 'abschluss';
+}
+
+export const ZEITEN_TEXTE = {
+  vorlage: {
+    titel: 'Unterrichtszeiten anlegen',
+    text: 'Trage deine regelmässig wiederkehrenden Unterrichtszeiten einmalig als Vorlage ein – Klasse, Fach, Raum und Dauer.',
+    ziel: 'nav-timetable',
+  },
+  standard: {
+    titel: 'Stundenplan aktivieren',
+    text: 'Aktiviere den Stundenplan, damit Prép-ybara ihn für deine Unterrichtswochen verwendet.',
+    ziel: 'nav-timetable',
+  },
+  angewendet: {
+    titel: 'Auf Wochen übernehmen',
+    text: 'Übernimm die Unterrichtszeiten in deine Wochen. Bestehende Planungen bleiben dabei unverändert.',
+    ziel: 'nav-timetable',
+  },
+  stundeGeoeffnet: {
+    titel: 'Erste Stunde planen',
+    text: 'Öffne einen vorbereiteten Stundenplatz und plane deine erste Unterrichtsstunde.',
+    ziel: 'nav-week',
+  },
+  vorlageA: {
+    titel: 'A-Woche einrichten',
+    text: 'Trage die Unterrichtszeiten der A-Woche ein. Die B-Woche bearbeitest du gleich darauf getrennt.',
+    ziel: 'nav-timetable',
+  },
+  vorlageB: {
+    titel: 'B-Woche einrichten',
+    text: 'Jetzt die B-Woche: Sie darf andere Zeiten, Lerngruppen, Räume und Doppelstunden enthalten.',
+    ziel: 'nav-timetable',
+  },
+  rhythmus: {
+    titel: 'Wochenrhythmus festlegen',
+    text: 'Wähle eine Referenzwoche und lege fest, ob sie eine A- oder B-Woche ist – und ob der Wechsel nach Kalender- oder nach Unterrichtswochen läuft.',
+    ziel: 'nav-timetable',
+  },
+  vorschau: {
+    titel: 'Vorschau bestätigen',
+    text: 'Sieh dir die ermittelten A- und B-Wochen an und übernimm sie in deinen Zeitraum.',
+    ziel: 'nav-timetable',
+  },
+  abschluss: {
+    titel: 'Deine Unterrichtszeiten sind eingerichtet.',
+    text: 'Du kannst jetzt einen Stundenplatz öffnen und deine erste Unterrichtsstunde planen.',
+    ziel: 'nav-week',
+  },
+  abschlussAB: {
+    titel: 'Dein A-/B-Stundenplan ist eingerichtet.',
+    text: 'Prép-ybara ordnet deinen Unterrichtswochen automatisch die passende Vorlage zu. Du kannst den Rhythmus und beide Wochenvorlagen jederzeit in der Stundenplanverwaltung ändern.',
+    ziel: 'nav-timetable',
+  },
+};
+
 /* Der einmalige Hinweis nach der ersten Phase. Er gehört zum
    Schnellstart, ist aber kein Schritt: er verlangt nichts. */
 export const PHASEN_HINWEIS = {
@@ -320,7 +499,7 @@ export function schliesseOnboardingAb(zustand, { jetzt = new Date().toISOString(
 
 export function markiereSchritt(zustand, id, { jetzt = new Date().toISOString() } = {}){
   const z = normalisiereOnboarding(zustand);
-  if (!SCHRITTE.includes(id) || z.schritte[id]) return z;
+  if (!ALLE_SCHRITTE.includes(id) || z.schritte[id]) return z;
   return { ...z, schritte: { ...z.schritte, [id]: jetzt } };
 }
 
@@ -374,6 +553,35 @@ export const HINWEISE = [
     text: 'Zwei aufeinanderfolgende Stunden derselben Lerngruppe lassen sich zu einer Doppelstunde verbinden – öffne eine davon und wähle „Als Doppelstunde verbinden".',
     ziel: 'nav-week',
     bedingung: (k)=> k.ansicht === 'week' && k.hatBenachbarte && !k.hatDoppelstunde,
+  },
+  {
+    id: 'wocheOhneZeiten',
+    titel: 'Diese Woche ist noch leer',
+    text: 'Du kannst diese Woche manuell füllen oder deine regelmässigen Unterrichtszeiten als Stundenplanvorlage anlegen.',
+    ziel: 'nav-timetable',
+    hauptaktion: { id: 'vorlageAnlegen', label: 'Vorlage anlegen' },
+    /* Nur "Später" daneben: Wer noch nichts hat, soll nicht dauerhaft
+       abwählen, was er später doch braucht. */
+    ohneNie: true,
+    /* `wocheBekannt`: Ohne die gerade gezeigte Woche lässt sich nicht
+       sagen, ob sie leer ist – dann schweigt der Hinweis. */
+    bedingung: (k)=> k.ansicht === 'week' && k.wocheBekannt && !k.hatZeitenVorlagen
+      && k.stundenInWoche === 0 && k.stundenAnzahl < 3,
+  },
+  {
+    id: 'wocheAlsVorlage',
+    titel: 'Diese Woche als Vorlage?',
+    text: 'Möchtest du diese Unterrichtszeiten als Vorlage für weitere Wochen speichern? Konkrete Planungsinhalte werden dabei nicht übernommen.',
+    ziel: 'woche-als-vorlage',
+    hauptaktion: { id: 'wocheAlsVorlage', label: 'Als Vorlage speichern' },
+    bedingung: (k)=> k.ansicht === 'week' && k.wocheBekannt && !k.hatZeitenVorlagen && k.stundenInWoche >= 6,
+  },
+  {
+    id: 'vorlageBearbeiten',
+    titel: 'Vorlage ändern',
+    text: 'Änderungen an der Vorlage verändern bestehende Wochen nicht automatisch. Wende sie ausdrücklich an, wenn neue Wochen entstehen sollen.',
+    ziel: 'nav-timetable',
+    bedingung: (k)=> k.ereignis === 'vorlageBearbeitet',
   },
   {
     id: 'makro',
@@ -433,7 +641,7 @@ export function hinweisNach(id){
 /* Die Tatsachen, aus denen die Bedingungen entscheiden. Alles davon
    steht in den Daten – bis auf Ansicht und Ereignis, die aus der
    Bedienung kommen. */
-export function onboardingKontext(db, { ansicht = '', ereignis = '', heuteISO = '', zustand = null } = {}){
+export function onboardingKontext(db, { ansicht = '', ereignis = '', heuteISO = '', zustand = null, weekStart = '' } = {}){
   const z = normalisiereOnboarding(zustand);
   let stundenAnzahl = 0;
   let hatDoppelstunde = false;
@@ -465,10 +673,19 @@ export function onboardingKontext(db, { ansicht = '', ereignis = '', heuteISO = 
     }
   }
 
+  const gezeigteWoche = montagVon(weekStart) || '';
+  const stundenInWoche = Object.values(db?.weeks?.[gezeigteWoche]?.lessons || {}).filter(Boolean).length;
+
   return {
     ansicht: String(ansicht || ''),
     ereignis: String(ereignis || ''),
     stundenAnzahl,
+    stundenInWoche,
+    wocheBekannt: Boolean(gezeigteWoche),
+    /* Bewusst NICHT `hatVorlagen`: Das meint seit jeher die
+       Sequenzvorlagen der Bibliothek. Zwei Dinge, zwei Namen. */
+    hatZeitenVorlagen: hatStundenplanVorlagen(db),
+    hatAktivenStundenplan: hatAktivesModell(db),
     hatDoppelstunde,
     hatBenachbarte,
     hatSequenzen: sequenzenMitStunden.size > 0,

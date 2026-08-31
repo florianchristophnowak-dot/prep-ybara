@@ -20,6 +20,9 @@ und **Fach** ein – beides zusammen ist in Prép‑ybara die *Lerngruppe*, eine
 dafür gibt es nicht. Dann **Thema**, **Lernziel** und in einer **Phase**, was passiert. Mehr
 braucht eine Stunde nicht; alles andere ist freiwillig.
 
+**Meine Unterrichtszeiten.** Statt jede Woche von Hand zu füllen, legst du deine regelmässig
+wiederkehrenden Zeiten einmalig als **Stundenplanvorlage** an – siehe 0b.
+
 **Sequenzen.** Eine Sequenz fasst die Stunden zu einem Thema zusammen und zeigt dir, wo du
 darin stehst („Stunde 4 von 9"). Du legst sie in der Stunde unter *Unterrichtssequenz* an. Ihre
 Abfolge siehst du in der **Progression**, ihre Termine lassen sich später gemeinsam verschieben.
@@ -37,6 +40,69 @@ Dateien – keine Verbindung, keine Cloud, kein Konto (siehe 9).
 
 **Backup.** Alle Daten liegen auf diesem Gerät. Ein Backup ist eine einzelne Datei; lege sie
 regelmässig an, am besten nach jeder Planungssitzung (siehe 8).
+
+---
+
+## 0b) Meine Unterrichtszeiten
+
+Zu finden über **Zeiten** in der Seitenleiste. Eine **Wochenvorlage** beschreibt, WANN du
+regelmässig unterrichtest: Wochentag, Stunde, Klasse/Kurs, Fach, Raum, Einzel- oder
+Doppelstunde. Sie enthält ausdrücklich **keine** Planungsinhalte – keine Themen, Lernziele,
+Kompetenzen, Phasen, Materialien, Hausaufgaben, Notizen, Sequenzzuordnungen und keine
+Nachbereitung.
+
+Ein **Stundenplanmodell** fasst zusammen, was für einen Zeitraum gilt:
+
+- **Jede Woche gleich** – eine Wochenvorlage,
+- **A- und B-Woche im Wechsel** – zwei Vorlagen, die sich abwechseln. Beide gehören gemeinsam
+  zum aktiven Stundenplan; du bearbeitest sie getrennt über den Umschalter **A-Woche / B-Woche**.
+
+Weitere Modelle und einzelne Vorlagen kannst du speichern, ohne sie zu benutzen. Für denselben
+sich überschneidenden Zeitraum ist immer nur **ein** Modell aktiv; beim Aktivieren wird gefragt,
+bevor ein anderes stillgelegt wird.
+
+### Eine vorhandene Woche übernehmen
+
+**Wochenplan → Als Vorlage speichern** zeigt alle geeigneten Stunden mit Tag, Zeit, Lerngruppe,
+Fach, Raum und Dauer. Einzelne Zeilen lassen sich **abwählen** – Vertretungsstunden oder
+Klassenarbeiten gehören nicht in den Stundenplan. Du kannst die Woche speichern als:
+
+- normale Wochenvorlage,
+- **A-Woche** eines neuen oder bestehenden Modells,
+- **B-Woche** eines neuen oder bestehenden Modells.
+
+Nach einer A-Woche bietet Prép-ybara an, gleich die passende B-Woche einzurichten.
+
+### Wochenrhythmus (A/B)
+
+Du wählst eine **Referenzwoche** und legst fest: *Diese Woche ist eine A-Woche* oder *eine
+B-Woche*. Alles Weitere rechnet Prép-ybara aus – ohne Annahmen über gerade oder ungerade
+Kalenderwochen. Dazu die Wechselregel:
+
+- **nach Kalenderwochen** – der Rhythmus läuft auch während der Ferien rechnerisch weiter,
+- **nach Unterrichtswochen** – vollständig unterrichtsfreie Wochen werden übersprungen.
+
+Eine Vorschau zeigt die ermittelten Wochen, bevor etwas gilt. Im Wochenplan steht dann dezent
+**A-Woche** oder **B-Woche**; über das ⋯-Menü daneben lässt sich eine einzelne Woche nach
+Rückfrage abweichend zuordnen – etwa nach einem Feiertag. Dabei ändert sich nur die Zuordnung,
+nie eine Stunde.
+
+### Übernehmen
+
+**Übernehmen…** legt die Stundenplätze in deinen Wochen an: aktuelle Woche, gewählter Zeitraum
+oder restliches Schuljahr. Vorher zeigt eine Vorschau je Woche: Kalenderwoche, A/B, neu
+anzulegende Stunden, bereits vorhandene identische, Konflikte mit Grund und übersprungene
+Ferien- oder schulfreie Tage.
+
+- Bestehende Stunden werden **nie** überschrieben, identische **nie** doppelt angelegt.
+- Belegte Plätze erscheinen als Konflikt und bleiben, wie sie sind.
+- Doppelstunden brauchen zwei freie Plätze am Stück und bleiben zusammen.
+- Nur auf ausdrücklichen Wunsch werden **leere Stundenplan-Rahmen ohne Planung** ersetzt.
+- Die ganze Übernahme ist **ein** Vorgang: ein „Rückgängig" und ein Eintrag im Versionsverlauf.
+
+**Änderungen an einer Vorlage verändern bestehende Wochen nicht automatisch.** Erzeugte Stunden
+merken sich intern, aus welcher Vorlage und Fassung sie stammen – das schränkt ihre Bearbeitung
+in keiner Weise ein. Das **Löschen einer Vorlage löscht keine Unterrichtsstunden**.
 
 ---
 

@@ -26,7 +26,7 @@ const historyStore = new Store({ name: 'prepybara-verlauf' });
 // Einzige Quelle für die Schema-Kennzeichnung. Muss mit SCHEMA_VERSION in
 // renderer/src/app.jsx übereinstimmen: ensureDbShape() dort hebt jede geladene
 // Datenbank auf genau diesen Wert an.
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 function defaultDB() {
   return {

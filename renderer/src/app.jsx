@@ -7,7 +7,7 @@ import { APP_VERSION } from './version.js';
 import { setupServiceWorker } from './pwa.js';
 import {
   sequenceProgress, sequenceOccurrences, competencyHeatmap, competencyProfile,
-  offenePunkteFuer, todayOverview, weekSummary,
+  offenePunkteFuer, todayOverview, weekSummary, allLessonsChronological,
 } from './insights.js';
 import {
   OHNE_BEREICH_ID, normalisiereModell, normalisiereEtikett,
@@ -87,9 +87,10 @@ import { GlobaleSucheView } from './suche-ansicht.jsx';
 /* Onboarding. Der Zustand liegt in appSettings.onboarding, die
    Bedingungen im Modul – hier steht nur, was gezeigt wird. */
 import {
-  STATUS as ONB_STATUS, PFADE as ONB_PFADE, SCHRITTE as ONB_SCHRITTE, SCHRITT_TEXT as ONB_SCHRITT_TEXT,
-  SCHNELLSTART_TEXTE, PHASEN_HINWEIS,
-  normalisiereOnboarding, schritteAus, schnellstartSchritt,
+  STATUS as ONB_STATUS, PFADE as ONB_PFADE, SCHRITT_TEXT as ONB_SCHRITT_TEXT,
+  SCHNELLSTART_TEXTE, ZEITEN_TEXTE, PHASEN_HINWEIS,
+  normalisiereOnboarding, schritteAus, schnellstartSchritt, zeitenSchritt,
+  checklistenArt, checklistenSchritte, onboardingModell,
   onboardingKontext, naechsterHinweis, merkeHinweis, istHinweisErledigt,
   starteOnboarding, pausiereOnboarding, ueberspringeOnboarding, schliesseOnboardingAb,
   markiereSchritt, setzeCheckliste, setzeBackupZeitpunkt,
@@ -97,6 +98,22 @@ import {
   ersterFreierPlatz, zeigeWillkommen, zeigeCheckliste,
 } from './onboarding.js';
 import { Coachmark, WillkommenAnsicht, OnboardingCheckliste } from './onboarding-ansicht.jsx';
+/* Unterrichtszeiten: Wochenvorlagen und Stundenplanmodelle. Die
+   Berechnung steht im Modul, die Ansicht daneben – hier wird nur
+   verbunden. */
+import {
+  MODELL_TYP, RHYTHMUS, ZEILEN_STATUS,
+  normalisiereStundenplandaten, normalisiereStundenplanVorlage, normalisiereStundenplanModell,
+  vorlageAusWoche, anwendungsVorschau, wendeVorlageAn, betroffeneOrte as stundenplanOrte,
+  aktiviereModell, archiviereModell, aktivesModellFuer, tauscheZyklus, dupliziereVorlage,
+  speichereVorlage as speichereVorlageIn, loescheVorlage as loescheVorlageAus,
+  setzeAusnahme, labelFuerWoche, positionFuer, zyklusLabel, zyklusLaenge, istWechselModell,
+  hatStundenplanVorlagen, hatAktivesModell, modellVollstaendig, angewendeteWochen,
+  montagVon as stundenplanMontag,
+} from './stundenplan.js';
+import {
+  StundenplanView, ModellAssistent, AnwendenDialog, RhythmusDialog, WocheAlsVorlageDialog,
+} from './stundenplan-ansicht.jsx';
 import { VersionsverlaufDialog } from './verlauf-ansicht.jsx';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
@@ -1708,7 +1725,7 @@ function deepClone(obj){
 
 // Einzige Quelle für die Schema-Kennzeichnung im Renderer. Muss mit
 // SCHEMA_VERSION in electron/main.cjs übereinstimmen.
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 /* ============================================================
    Interaktionsschicht: Meldungen, Bestätigung, Eingabe
@@ -3556,6 +3573,9 @@ const NAV_EBENEN = [
      in die Inhalte, keine Einstellung. Das Lupensymbol ist dasselbe wie
      in der Befehlspalette – es ist derselbe Vorgang. */
   { id: 'search',       label: 'Suche',       Icon: Search },
+  /* Die Unterrichtszeiten stehen bei den Ebenen: Sie beschreiben, wann
+     unterrichtet wird – die Woche zeigt, was darin geplant ist. */
+  { id: 'timetable',    label: 'Zeiten',      Icon: CalendarClock },
   { id: 'macro',        label: 'Makro',       Icon: Rows3 },
   { id: 'year',         label: 'Jahr',        Icon: CalendarRange },
   { id: 'competencies', label: 'Kompetenzen', Icon: Grid3x3 },
@@ -4250,6 +4270,15 @@ db.todos = (Array.isArray(db.todos) ? db.todos : []).map(t => {
      ihr eigenes Profil und werden davon nie berührt – das ist der ganze
      Sinn der Angabe je Stunde. */
   db.appSettings.defaultPlanningProfile = normalisiereProfilId(db.appSettings.defaultPlanningProfile);
+
+  /* Unterrichtszeiten: Wochenvorlagen und Stundenplanmodelle.
+
+     Schema 11, rein additiv: Eine Datenbank ohne diese Felder bekommt
+     leere Ablagen und verhält sich unverändert. Eine einzelne, als
+     Standard gekennzeichnete Vorlage aus einem früheren Stand wird
+     dabei zu einem Ein-Wochen-Modell – dieselbe Sache, nur mit einem
+     Rahmen darum. */
+  normalisiereStundenplandaten(db);
 
   /* Der Stand der Einführung. Rein additiv und rückwärtsverträglich:
      Eine Datenbank aus einer früheren Fassung kennt das Feld nicht und
@@ -5347,6 +5376,298 @@ const classGroupSuggestions = useMemo(()=>{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view.weekStart, sequences, db?.groupColors, undoLast, imArchiv]);
 
+  /* ---- Unterrichtszeiten ----------------------------------------------
+
+     Eine Wochenvorlage beschreibt die wiederkehrende Struktur; ein
+     Stundenplanmodell fasst zusammen, was für einen Zeitraum gilt –
+     eine gleichbleibende Woche oder ein A-/B-Zyklus.
+
+     Zwei Regeln gelten hier durchgehend und stehen deshalb an jeder
+     Schreibstelle: In eine Vorlage kommt NIE Planungsinhalt, und beim
+     Übernehmen wird NIE etwas überschrieben.                           */
+  const stundenplanModelle = useMemo(
+    ()=> (Array.isArray(liveDb?.timetableModels) ? liveDb.timetableModels : []),
+    [liveDb?.timetableModels],
+  );
+  const stundenplanVorlagen = liveDb?.timetableTemplates || {};
+
+  /* Das Modell, das in der gerade gezeigten Woche gilt – und daraus die
+     Kennzeichnung A/B. Sie kommt aus dem Modell, nicht aus der Woche:
+     eine Woche weiss nichts von ihrem Rhythmus. */
+  const aktivesStundenplanModell = useMemo(
+    ()=> aktivesModellFuer(stundenplanModelle, view.weekStart || toISODate(new Date())),
+    [stundenplanModelle, view.weekStart],
+  );
+  const wochenRhythmus = useMemo(()=>{
+    const m = aktivesStundenplanModell;
+    if (!m || !istWechselModell(m)) return null;
+    const label = labelFuerWoche(m, view.weekStart, { schoolCalendar: db?.schoolCalendar });
+    if (!label) return null;
+    return {
+      label,
+      position: positionFuer(m, view.weekStart, { schoolCalendar: db?.schoolCalendar }),
+      modell: m,
+      laenge: zyklusLaenge(m),
+      ausnahme: Object.prototype.hasOwnProperty.call(m.ausnahmen || {}, stundenplanMontag(view.weekStart)),
+    };
+  }, [aktivesStundenplanModell, view.weekStart, db?.schoolCalendar]);
+
+  const [stundenplanDialog, setStundenplanDialog] = useState(null);
+  // { art: 'assistent' | 'anwenden' | 'rhythmus' | 'ausWoche', ... }
+  const [stundenplanZiel, setStundenplanZiel] = useState('');   // Modell, das die Ansicht öffnen soll
+
+  const schreibeStundenplan = useCallback((patch, { label = '', umkehrbar = true } = {})=>{
+    if (imArchiv) { archivHinweisRef.current?.(); return; }
+    const vorher = liveDb;
+    const nextDb = {
+      ...deepClone(liveDb),
+      ...patch,
+    };
+    if (umkehrbar && label) runUndoable(label, vorher, ()=>persistLive(nextDb));
+    else persistLive(nextDb);
+  }, [imArchiv, liveDb, runUndoable, persistLive]);
+
+  /* Eine Vorlage speichern. Die Fassung zählt dabei hoch – bereits
+     erzeugte Stunden bleiben unberührt und tragen weiter die Fassung,
+     mit der sie entstanden sind. */
+  const speichereStundenplanVorlage = useCallback((vorlage, { modell = null, position = null } = {})=>{
+    const norm = normalisiereStundenplanVorlage({
+      ...vorlage,
+      modelId: modell ? modell.id : (vorlage.modelId || ''),
+      zyklusPosition: (position === null || position === undefined)
+        ? (vorlage.zyklusPosition || 0)
+        : position,
+    });
+    const vorlagen = speichereVorlageIn(liveDb?.timetableTemplates || {}, norm);
+    let modelle = stundenplanModelle;
+    if (modell) {
+      modelle = modelle.map(m => {
+        if (m.id !== modell.id) return m;
+        const zyklus = [...(m.zyklus || [])];
+        const index = (position === null || position === undefined) ? norm.zyklusPosition : position;
+        zyklus[index] = norm.id;
+        return normalisiereStundenplanModell({ ...m, zyklus: zyklus.filter(Boolean), updatedAt: new Date().toISOString() });
+      });
+    }
+    schreibeStundenplan({ timetableTemplates: vorlagen, timetableModels: modelle }, { umkehrbar: false });
+    return norm;
+  }, [liveDb, stundenplanModelle, schreibeStundenplan]);
+
+  const speichereStundenplanModell = useCallback((modell)=>{
+    const norm = normalisiereStundenplanModell(modell);
+    const vorhanden = stundenplanModelle.some(m => m.id === norm.id);
+    const modelle = vorhanden
+      ? stundenplanModelle.map(m => (m.id === norm.id ? norm : m))
+      : [...stundenplanModelle, norm];
+    schreibeStundenplan({ timetableModels: modelle }, { umkehrbar: false });
+    return norm;
+  }, [stundenplanModelle, schreibeStundenplan]);
+
+  /* Ein neues Modell samt seiner Vorlagen. Bei A/B entstehen zwei
+     getrennt bearbeitbare Wochen, die von Anfang an eindeutig
+     beschriftet sind. */
+  const legeStundenplanModellAn = useCallback(({ typ, name })=>{
+    const wechsel = typ === MODELL_TYP.WECHSEL;
+    const modellId = uid();
+    const vorlagen = { ...(liveDb?.timetableTemplates || {}) };
+    const zyklus = [];
+    const anzahl = wechsel ? 2 : 1;
+    for (let i = 0; i < anzahl; i++) {
+      const v = normalisiereStundenplanVorlage({
+        id: uid(),
+        modelId: modellId,
+        zyklusPosition: i,
+        name: wechsel ? `${name} · ${zyklusLabel(i, 2)}-Woche` : name,
+        slotsPerDay: db?.weeks?.[view.weekStart]?.slotsPerDay || 6,
+      });
+      vorlagen[v.id] = v;
+      zyklus.push(v.id);
+    }
+    const sy = db?.schoolCalendar?.schoolYear || {};
+    const modell = normalisiereStundenplanModell({
+      id: modellId,
+      name,
+      typ: wechsel ? MODELL_TYP.WECHSEL : MODELL_TYP.EINZEL,
+      zyklus,
+      vonISO: String(sy.startISO || '').trim(),
+      bisISO: String(sy.endISO || '').trim(),
+      /* Bewusst OHNE Referenzwoche: Welche Woche die A-Woche ist,
+         entscheidet die Schule – nicht die App. Solange das offen ist,
+         gilt das Modell als unvollständig, und die Einführung fragt
+         danach. */
+      referenzWocheISO: '',
+      referenzPosition: 0,
+      wechselregel: RHYTHMUS.KALENDERWOCHEN,
+      aktiv: false,
+    });
+    schreibeStundenplan({
+      timetableTemplates: vorlagen,
+      timetableModels: [...stundenplanModelle, modell],
+    }, { umkehrbar: false });
+    return modell;
+  }, [liveDb, db, view.weekStart, stundenplanModelle, schreibeStundenplan]);
+
+  const aktiviereStundenplanModell = useCallback(async (modell)=>{
+    const { modelle, deaktiviert } = aktiviereModell(stundenplanModelle, modell.id);
+    if (deaktiviert.length) {
+      const namen = stundenplanModelle.filter(m => deaktiviert.includes(m.id)).map(m => m.name).join(', ');
+      const ok = await askConfirm({
+        title: 'Anderen Stundenplan ablösen',
+        body: `Für denselben Zeitraum kann nur ein Stundenplan gelten. „${namen}" wird deshalb stillgelegt. Bereits angelegte Unterrichtsstunden bleiben davon unberührt.`,
+        confirmLabel: 'Aktivieren',
+      });
+      if (!ok) return;
+    }
+    schreibeStundenplan({ timetableModels: modelle }, { label: `${modell.name} aktiviert` });
+  }, [stundenplanModelle, askConfirm, schreibeStundenplan]);
+
+  /* Übernehmen. Ein Vorgang: ein Undo-Eintrag, ein zusammengehöriger
+     Eintrag im Versionsverlauf, eine Zusammenfassung. */
+  const fuehreStundenplanAn = useCallback(({ plan })=>{
+    if (imArchiv) { archivHinweisRef.current?.(); return; }
+    if (!plan?.ok) return;
+    const naechste = wendeVorlageAn(liveDb, plan, {
+      neueStunde: ({ classGroup, subject, room, blockSpan })=>{
+        const l = defaultLesson();
+        l.classGroup = classGroup;
+        l.subject = subject;
+        l.room = room;
+        l.blockSpan = normalisiereBlockSpan(blockSpan);
+        l.phases = normalizePhases(l.phases, TOTAL_MIN * l.blockSpan);
+        l.planningProfile = normalisiereProfilId(db?.appSettings?.defaultPlanningProfile);
+        return l;
+      },
+    });
+    if (!naechste) return;
+
+    /* Was dabei entsteht, gehört als EIN Vorgang in den Verlauf. */
+    const teile = stundenplanOrte(plan).map(o => stundenTeil({
+      weekStart: o.weekStart, dayIndex: o.dayIndex, slotIndex: o.slotIndex,
+      stunde: liveDb?.weeks?.[o.weekStart]?.lessons?.[keyOf(o.dayIndex, o.slotIndex)] || null,
+    }));
+    sichereSammlung(teile, 'vorImport', {
+      bereich: 'bulk',
+      zielLabel: 'Unterrichtszeiten übernommen',
+    });
+    for (const o of stundenplanOrte(plan)) {
+      try { draftLessonCacheRef.current.delete(`${o.weekStart}|${o.dayIndex}|${o.slotIndex}`); } catch {}
+    }
+
+    /* Lerngruppen und Farben mitziehen – dieselbe Ablage wie beim
+       Planen, kein zweiter Datensatz. */
+    for (const b of plan.bewegungen) {
+      rememberClassGroupIn(naechste, b.eintrag.classGroup);
+      rememberSubjectIn(naechste, b.eintrag.subject);
+      ensureGroupColorIn(naechste, b.eintrag.classGroup, b.eintrag.subject);
+    }
+
+    const anzahl = plan.bewegungen.length;
+    runUndoable(
+      `${anzahl} ${anzahl === 1 ? 'Stunde' : 'Stunden'} aus der Vorlage angelegt`,
+      liveDb,
+      ()=>persistLive(ensureDbShape(naechste)),
+    );
+    setStundenplanDialog(null);
+    showToast([
+      `${anzahl} ${anzahl === 1 ? 'Stunde angelegt' : 'Stunden angelegt'}`,
+      plan.summe.identisch ? `${plan.summe.identisch} schon vorhanden` : '',
+      plan.summe.konflikt ? `${plan.summe.konflikt} belegte Plätze unverändert` : '',
+      plan.summe.freieWochen ? `${plan.summe.freieWochen} unterrichtsfreie Wochen übersprungen` : '',
+    ].filter(Boolean).join(' · '), { ttl: 9000 });
+  }, [imArchiv, liveDb, db, runUndoable, persistLive, showToast, sichereSammlung]);
+
+  /* Eine Woche als Vorlage: nur Struktur, nie Inhalt. */
+  const speichereWocheAlsVorlage = useCallback(({ name, auswahl, ziel = 'frei', modellId = 'neu' }, { weekStart } = {})=>{
+    const ws = weekStart || view.weekStart;
+    const woche = liveDb?.weeks?.[ws];
+    if (!woche) return null;
+
+    const position = ziel === 'B' ? 1 : 0;
+    let modell = null;
+    let modelle = stundenplanModelle;
+    const vorlagen = { ...(liveDb?.timetableTemplates || {}) };
+
+    if (ziel !== 'frei') {
+      if (modellId === 'neu') {
+        modell = normalisiereStundenplanModell({
+          id: uid(),
+          name,
+          typ: MODELL_TYP.WECHSEL,
+          zyklus: [],
+          vonISO: String(db?.schoolCalendar?.schoolYear?.startISO || '').trim(),
+          bisISO: String(db?.schoolCalendar?.schoolYear?.endISO || '').trim(),
+          referenzWocheISO: ws,
+          referenzPosition: position,
+          wechselregel: RHYTHMUS.KALENDERWOCHEN,
+        });
+        modelle = [...modelle, modell];
+      } else {
+        modell = modelle.find(m => m.id === modellId) || null;
+      }
+    }
+
+    const vorlage = vorlageAusWoche(woche, {
+      name,
+      auswahl,
+      modelId: modell?.id || '',
+      zyklusPosition: position,
+      slotsPerDay: woche.slotsPerDay,
+    });
+    vorlagen[vorlage.id] = vorlage;
+
+    if (modell) {
+      const zyklus = [...(modell.zyklus || [])];
+      zyklus[position] = vorlage.id;
+      modelle = modelle.map(m => (m.id === modell.id
+        ? normalisiereStundenplanModell({ ...m, zyklus, updatedAt: new Date().toISOString() })
+        : m));
+    }
+
+    schreibeStundenplan({ timetableTemplates: vorlagen, timetableModels: modelle }, { umkehrbar: false });
+    setStundenplanDialog(null);
+
+    if (modell) {
+      const zyklus = modelle.find(m => m.id === modell.id)?.zyklus || [];
+      const fehlt = zyklus.filter(Boolean).length < 2;
+      showToast(
+        fehlt
+          ? `${zyklusLabel(position, 2)}-Woche gespeichert. Jetzt passende ${zyklusLabel(position === 0 ? 1 : 0, 2)}-Woche auswählen oder einrichten.`
+          : 'Wochenvorlage gespeichert.',
+        {
+          ttl: 10000,
+          action: {
+            label: fehlt ? 'Jetzt einrichten' : 'Öffnen',
+            onAct: ()=>{ setStundenplanZiel(modell.id); setView(v => ({ name: 'timetable', weekStart: v.weekStart })); },
+          },
+        },
+      );
+    } else {
+      showToast('Wochenvorlage gespeichert. Nur Unterrichtszeiten – die Planung ist in der Woche geblieben.', {
+        ttl: 9000,
+        action: { label: 'Unterrichtszeiten öffnen', onAct: ()=> setView(v => ({ name: 'timetable', weekStart: v.weekStart })) },
+      });
+    }
+    return vorlage;
+  }, [liveDb, db, view.weekStart, stundenplanModelle, schreibeStundenplan, showToast]);
+
+  /* Eine manuelle Abweichung im Rhythmus. Sie ändert die Zuordnung –
+     und nichts sonst: keine Stunde wird dabei angefasst. */
+  const setzeRhythmusAusnahme = useCallback(async (position)=>{
+    const m = aktivesStundenplanModell;
+    if (!m || !istWechselModell(m)) return;
+    const ws = stundenplanMontag(view.weekStart);
+    const bisher = labelFuerWoche(m, ws, { schoolCalendar: db?.schoolCalendar });
+    const neu = zyklusLabel(position, zyklusLaenge(m));
+    const ok = await askConfirm({
+      title: 'Woche abweichend zuordnen',
+      body: `Diese Woche gilt künftig als ${neu}-Woche statt als ${bisher}-Woche. Die folgenden Wochen behalten ihren Rhythmus. An deinen Unterrichtsstunden ändert sich dabei nichts.`,
+      confirmLabel: `Als ${neu}-Woche führen`,
+    });
+    if (!ok) return;
+    const modelle = stundenplanModelle.map(x => (x.id === m.id ? setzeAusnahme(x, ws, position) : x));
+    schreibeStundenplan({ timetableModels: modelle }, { label: `Woche als ${neu}-Woche geführt` });
+  }, [aktivesStundenplanModell, view.weekStart, db, stundenplanModelle, askConfirm, schreibeStundenplan]);
+
   /* ---- Globale Suche --------------------------------------------------
 
      Der Index entsteht im Arbeitsspeicher aus den Daten – und zwar
@@ -5458,9 +5779,13 @@ const classGroupSuggestions = useMemo(()=>{
   const onboardingAktiv = !imArchiv && !isHelpOnlyWindow && !isExecutionOnlyWindow
     && onboarding.status === ONB_STATUS.AKTIV;
 
+  /* Welche Checkliste gilt, entscheidet der gewählte Einstieg – und beim
+     Weg über die Unterrichtszeiten die Art des Stundenplans. */
+  const onboardingArt = useMemo(()=> checklistenArt(liveDb, onboarding), [liveDb, onboarding]);
+  const onboardingListe = useMemo(()=> checklistenSchritte(onboardingArt), [onboardingArt]);
   const onboardingSchritte = useMemo(
-    ()=> schritteAus(liveDb, onboarding),
-    [liveDb, onboarding],
+    ()=> schritteAus(liveDb, onboarding, onboardingArt),
+    [liveDb, onboarding, onboardingArt],
   );
 
   /* Beantwortet ist beantwortet – für diese Sitzung.
@@ -5478,29 +5803,32 @@ const classGroupSuggestions = useMemo(()=>{
      der hinter einem Overlay klebt, ist keine Hilfe. */
   const dialogeOffen = Boolean(willkommenOffen || confirmState || promptState || paletteOpen
     || verlaufDialog || verschiebenDialog || seqManagerModal.open || showWeekCopyDialog
-    || colorPalette.visible || schoolYearDialog.visible || reviewWeek);
+    || colorPalette.visible || schoolYearDialog.visible || reviewWeek || stundenplanDialog);
 
   /* Der Schritt, der gerade dran ist. '' heisst: nichts zu zeigen. */
   const schnellstartId = (onboardingAktiv && !dialogeOffen)
-    ? schnellstartSchritt({ ansicht: view.name, entwurf: stundeFortschritt, schritte: onboardingSchritte })
+    ? (onboardingArt === 'stunde'
+      ? schnellstartSchritt({ ansicht: view.name, entwurf: stundeFortschritt, schritte: onboardingSchritte })
+      : zeitenSchritt({ art: onboardingArt, schritte: onboardingSchritte }))
     : '';
 
   /* Der freie Platz, an dem der erste Hinweis hängt. Nur solange die
      erste Stunde noch aussteht – danach wäre die Hervorhebung im Weg. */
   const onboardingPlatz = useMemo(
-    ()=> ((onboardingAktiv && schnellstartId === 'stunde')
+    ()=> ((onboardingAktiv && onboardingArt === 'stunde' && schnellstartId === 'stunde')
       ? ersterFreierPlatz(liveDb, view.weekStart)
       : null),
-    [onboardingAktiv, schnellstartId, liveDb, view.weekStart],
+    [onboardingAktiv, onboardingArt, schnellstartId, liveDb, view.weekStart],
   );
 
   /* Das Öffnen einer Stunde ist der zweite Schritt – ohne "Weiter",
      wie versprochen. */
   useEffect(()=>{
     if (!onboardingAktiv || view.name !== 'lesson') return;
-    if (onboarding.schritte.stunde) return;
-    setzeOnboarding(markiereSchritt(onboarding, 'stunde'));
-  }, [onboardingAktiv, view.name, onboarding, setzeOnboarding]);
+    const id = onboardingArt === 'stunde' ? 'stunde' : 'stundeGeoeffnet';
+    if (onboarding.schritte[id]) return;
+    setzeOnboarding(markiereSchritt(onboarding, id));
+  }, [onboardingAktiv, onboardingArt, view.name, onboarding, setzeOnboarding]);
 
   /* Der Schnellstart endet, wenn alle drei Schritte getan sind und der
      Abschluss quittiert wurde – nicht schon beim dritten Häkchen: die
@@ -5509,6 +5837,21 @@ const classGroupSuggestions = useMemo(()=>{
     setzeOnboarding(schliesseOnboardingAb(onboarding));
     weiter?.();
   }, [onboarding, setzeOnboarding]);
+
+  /* Die nächste Stunde, die sich planen lässt: die erste vorbereitete
+     Stunde ab heute. Sie ist das Ziel nach dem Einrichten der
+     Unterrichtszeiten – dort geht die Arbeit weiter. */
+  const oeffneNaechsteStunde = useCallback(()=>{
+    const heute = toISODate(new Date());
+    const alle = allLessonsChronological(liveDb).filter(x => x.dateISO >= heute);
+    const ziel = alle[0];
+    if (!ziel) {
+      setView(v => ({ name: 'week', weekStart: v.weekStart }));
+      return;
+    }
+    setSelectedDate(ziel.dateISO);
+    setView({ name: 'lesson', weekStart: ziel.weekStart, dayIndex: ziel.dayIndex, slotIndex: ziel.slotIndex });
+  }, [liveDb]);
 
   /* Ein echtes Bedienelement anstossen, statt seine Wirkung ein zweites
      Mal zu schreiben. Die Einführung soll die App bedienen, nicht sie
@@ -5544,8 +5887,15 @@ const classGroupSuggestions = useMemo(()=>{
       return;
     }
     setzeOnboarding(starteOnboarding(onboarding, { pfad: weg }));
-    if (weg === ONB_PFADE.STUNDENPLAN) {
-      setView(v => ({ name: 'calendar', weekStart: v.weekStart }));
+    if (weg === ONB_PFADE.ZEITEN) {
+      /* Vorhandene Vorlagen werden erkannt: Wer schon welche hat, wird
+         nicht noch einmal durch die Einrichtung geschickt. */
+      setView(v => ({ name: 'timetable', weekStart: v.weekStart }));
+      if (!hatStundenplanVorlagen(liveDb)) {
+        setStundenplanDialog({ art: 'assistent' });
+      } else {
+        showToast('Deine Unterrichtszeiten sind bereits angelegt. Du kannst sie hier ergänzen oder übernehmen.');
+      }
       return;
     }
     setView(v => ({ name: 'week', weekStart: v.weekStart }));
@@ -5564,7 +5914,8 @@ const classGroupSuggestions = useMemo(()=>{
     if (onboarding.status === ONB_STATUS.AKTIV) return;   // erst den Schnellstart zu Ende
     if (onboardingSitzung.current.gezeigt || aktiverHinweis) return;
     const kontext = onboardingKontext(liveDb, {
-      ansicht: view.name, ereignis, heuteISO: toISODate(new Date()), zustand: onboarding,
+      ansicht: view.name, ereignis, heuteISO: toISODate(new Date()),
+      zustand: onboarding, weekStart: view.weekStart,
     });
     const hinweis = naechsterHinweis({ zustand: onboarding, kontext, sitzung: onboardingSitzung.current });
     if (!hinweis) return;
@@ -5643,6 +5994,7 @@ const classGroupSuggestions = useMemo(()=>{
       case 'progression':  return 'Progression';
       case 'review':       return 'Nachbereitung';
       case 'search':   return 'Suche';
+      case 'timetable': return 'Meine Unterrichtszeiten';
       case 'settings': return 'Einstellungen';
       case 'help':     return 'Hilfe';
       case 'week':     return '';
@@ -7573,6 +7925,9 @@ const doExportDocx = async (html, suggestedName) => {
         <WeekView
           readOnly={imArchiv}
           onboardingPlatz={onboardingPlatz}
+          rhythmus={wochenRhythmus}
+          onRhythmusAusnahme={imArchiv ? null : ((position)=>setzeRhythmusAusnahme(position))}
+          onAlsVorlage={imArchiv ? null : (()=>setStundenplanDialog({ art: 'ausWoche' }))}
           weekStart={view.weekStart}
           week={week}
           sequences={sequences}
@@ -7890,6 +8245,63 @@ const doExportDocx = async (html, suggestedName) => {
         />
       );
     }
+    if (view.name === 'timetable') {
+      return (
+        <StundenplanView
+          db={db}
+          aktuelleWoche={view.weekStart}
+          readOnly={imArchiv}
+          startModellId={stundenplanZiel}
+          komponenten={{
+            ClassGroupInput, SubjectInput,
+            classGroupSuggestions, subjectSuggestions,
+          }}
+          onNeuesModell={()=>setStundenplanDialog({ art: 'assistent' })}
+          onAusWoche={(ziel)=>setStundenplanDialog({ art: 'ausWoche', ...(ziel || {}) })}
+          onSpeichereVorlage={(vorlage, opts)=>{
+            const gespeichert = speichereStundenplanVorlage(vorlage, opts);
+            /* Beim ersten Bearbeiten einer Vorlage, die schon Wochen
+               erzeugt hat, gehört der Satz dazu: Sie ändern sich nicht
+               von selbst. */
+            if (angewendeteWochen(liveDb, opts?.modell?.id || '').length) {
+              setTimeout(()=>pruefeHinweis('vorlageBearbeitet'), 400);
+            }
+            return gespeichert;
+          }}
+          onSpeichereModell={(m)=>speichereStundenplanModell(m)}
+          onLoescheVorlage={async (vorlage)=>{
+            const ok = await askConfirm({
+              title: 'Wochenvorlage löschen',
+              body: `„${vorlage.name}" wird gelöscht. Bereits angelegte Unterrichtsstunden bleiben davon unberührt – gelöscht wird nur die Vorlage.`,
+              confirmLabel: 'Vorlage löschen',
+              tone: 'danger',
+            });
+            if (!ok) return;
+            schreibeStundenplan(loescheVorlageAus(liveDb, vorlage.id), { label: 'Wochenvorlage gelöscht' });
+          }}
+          onAktiviere={(m)=>aktiviereStundenplanModell(m)}
+          onArchiviere={(m)=>schreibeStundenplan(
+            { timetableModels: archiviereModell(stundenplanModelle, m.id) },
+            { label: `${m.name} archiviert` },
+          )}
+          onTausche={(m)=>{
+            const getauscht = tauscheZyklus(m, liveDb?.timetableTemplates || {});
+            schreibeStundenplan({
+              timetableModels: stundenplanModelle.map(x => (x.id === m.id ? getauscht.modell : x)),
+              timetableTemplates: getauscht.vorlagen,
+            }, { label: 'A- und B-Woche getauscht' });
+          }}
+          onDupliziere={(vorlage)=>{
+            const kopie = dupliziereVorlage(vorlage);
+            schreibeStundenplan({
+              timetableTemplates: { ...(liveDb?.timetableTemplates || {}), [kopie.id]: kopie },
+            }, { label: 'Wochenvorlage dupliziert' });
+          }}
+          onAnwenden={(ziel)=>setStundenplanDialog({ art: 'anwenden', ...ziel })}
+          onRhythmus={(m)=>setStundenplanDialog({ art: 'rhythmus', modell: m })}
+        />
+      );
+    }
     if (view.name === 'search') {
       return (
         <GlobaleSucheView
@@ -8177,6 +8589,61 @@ const doExportDocx = async (html, suggestedName) => {
         onAlleTreffer={(q)=>oeffneSuche(q)}
         onClose={()=>setPaletteOpen(false)}
       />
+      {/* ---- Unterrichtszeiten ------------------------------------------ */}
+      <ModellAssistent
+        offen={stundenplanDialog?.art === 'assistent'}
+        schuljahr={db?.schoolCalendar?.schoolYear}
+        vorhandeneWoche={Object.keys(db?.weeks?.[view.weekStart]?.lessons || {}).length > 0}
+        onSchliessen={()=>setStundenplanDialog(null)}
+        onAnlegen={({ typ, name, quelle })=>{
+          if (quelle === 'woche') {
+            setStundenplanDialog({ art: 'ausWoche', typ, name });
+            return;
+          }
+          const modell = legeStundenplanModellAn({ typ, name });
+          setStundenplanDialog(null);
+          setStundenplanZiel(modell.id);
+          setView(v => ({ name: 'timetable', weekStart: v.weekStart }));
+          showToast(typ === MODELL_TYP.WECHSEL
+            ? 'Zwei Wochenvorlagen angelegt: A-Woche und B-Woche. Trage jetzt die Unterrichtszeiten ein.'
+            : 'Wochenvorlage angelegt. Trage jetzt deine Unterrichtszeiten ein.');
+        }}
+      />
+      <WocheAlsVorlageDialog
+        offen={stundenplanDialog?.art === 'ausWoche'}
+        woche={db?.weeks?.[view.weekStart] || null}
+        weekStartISO={view.weekStart}
+        modelle={stundenplanModelle}
+        vorlagen={liveDb?.timetableTemplates || {}}
+        onSchliessen={()=>setStundenplanDialog(null)}
+        onSpeichern={(payload)=>speichereWocheAlsVorlage(payload, { weekStart: view.weekStart })}
+      />
+      <AnwendenDialog
+        offen={stundenplanDialog?.art === 'anwenden'}
+        db={liveDb}
+        modell={stundenplanDialog?.modell || null}
+        vorlage={stundenplanDialog?.vorlage || null}
+        aktuelleWoche={view.weekStart}
+        schuljahr={db?.schoolCalendar?.schoolYear}
+        onSchliessen={()=>setStundenplanDialog(null)}
+        onAusfuehren={fuehreStundenplanAn}
+      />
+      <RhythmusDialog
+        offen={stundenplanDialog?.art === 'rhythmus'}
+        modell={stundenplanDialog?.modell || null}
+        aktuelleWoche={view.weekStart}
+        schoolCalendar={db?.schoolCalendar}
+        schuljahr={db?.schoolCalendar?.schoolYear}
+        onSchliessen={()=>setStundenplanDialog(null)}
+        onSpeichern={(patch)=>{
+          const m = stundenplanDialog?.modell;
+          if (!m) return;
+          speichereStundenplanModell({ ...m, ...patch });
+          setStundenplanDialog(null);
+          showToast('Wochenrhythmus gespeichert.');
+        }}
+      />
+
       {/* ---- Einführung ------------------------------------------------
 
           Drei Teile: die einmalige Willkommensansicht, der Coachmark am
@@ -8194,7 +8661,8 @@ const doExportDocx = async (html, suggestedName) => {
 
       {/* Der Schnellstart. Der Hinweis nach der ersten Phase kommt
           dazwischen: Er verlangt nichts und wird deshalb kein Schritt. */}
-      {(schnellstartId === 'abschluss' && !istHinweisErledigt(onboarding, PHASEN_HINWEIS.id)) ? (
+      {(schnellstartId === 'abschluss' && onboardingArt === 'stunde'
+        && !istHinweisErledigt(onboarding, PHASEN_HINWEIS.id)) ? (
         <Coachmark
           offen
           titel={PHASEN_HINWEIS.titel}
@@ -8205,6 +8673,24 @@ const doExportDocx = async (html, suggestedName) => {
               onSelect: ()=>setzeOnboarding(merkeHinweis(onboarding, PHASEN_HINWEIS.id, 'verstanden')) },
           ]}
           onSchliessen={()=>setzeOnboarding(pausiereOnboarding(onboarding))}
+        />
+      ) : (schnellstartId === 'abschluss' && onboardingArt !== 'stunde') ? (
+        /* Der Abschluss des Weges über die Unterrichtszeiten. Er führt
+           dorthin, wo es weitergeht: zur ersten planbaren Stunde. */
+        <Coachmark
+          offen
+          titel={(onboardingArt === 'zeitenAB' ? ZEITEN_TEXTE.abschlussAB : ZEITEN_TEXTE.abschluss).titel}
+          text={(onboardingArt === 'zeitenAB' ? ZEITEN_TEXTE.abschlussAB : ZEITEN_TEXTE.abschluss).text}
+          ziel={(onboardingArt === 'zeitenAB' ? ZEITEN_TEXTE.abschlussAB : ZEITEN_TEXTE.abschluss).ziel}
+          aktionen={[
+            { id: 'planen', label: 'Nächste Unterrichtsstunde planen', tone: 'primary',
+              onSelect: ()=>beendeSchnellstart(()=>oeffneNaechsteStunde()) },
+            { id: 'woche', label: 'Zur Wochenübersicht',
+              onSelect: ()=>beendeSchnellstart(()=>setView(v => ({ name: 'week', weekStart: v.weekStart }))) },
+            { id: 'vorlage', label: 'Vorlage weiter bearbeiten',
+              onSelect: ()=>beendeSchnellstart(()=>setView(v => ({ name: 'timetable', weekStart: v.weekStart }))) },
+          ]}
+          onSchliessen={()=>beendeSchnellstart()}
         />
       ) : schnellstartId === 'abschluss' ? (
         <Coachmark
@@ -8225,10 +8711,10 @@ const doExportDocx = async (html, suggestedName) => {
       ) : schnellstartId ? (
         <Coachmark
           offen
-          titel={SCHNELLSTART_TEXTE[schnellstartId]?.titel || ''}
-          text={SCHNELLSTART_TEXTE[schnellstartId]?.text || ''}
-          ziel={SCHNELLSTART_TEXTE[schnellstartId]?.ziel || ''}
-          fortschritt={`${ONB_SCHRITTE.filter(id => onboardingSchritte[id]).length} von ${ONB_SCHRITTE.length}`}
+          titel={(onboardingArt === 'stunde' ? SCHNELLSTART_TEXTE : ZEITEN_TEXTE)[schnellstartId]?.titel || ''}
+          text={(onboardingArt === 'stunde' ? SCHNELLSTART_TEXTE : ZEITEN_TEXTE)[schnellstartId]?.text || ''}
+          ziel={(onboardingArt === 'stunde' ? SCHNELLSTART_TEXTE : ZEITEN_TEXTE)[schnellstartId]?.ziel || ''}
+          fortschritt={`${onboardingListe.filter(id => onboardingSchritte[id]).length} von ${onboardingListe.length}`}
           onSchliessen={()=>{
             setzeOnboarding(pausiereOnboarding(onboarding));
             showToast('Einführung pausiert. In den Einstellungen kannst du sie fortsetzen.');
@@ -8236,16 +8722,38 @@ const doExportDocx = async (html, suggestedName) => {
         />
       ) : null}
 
-      {/* Kontextbezogene Hinweise: höchstens einer je Sitzung. */}
+      {/* Kontextbezogene Hinweise: höchstens einer je Sitzung.
+
+          Manche bieten zusätzlich eine Handlung an – dann führt sie
+          direkt dorthin, wovon der Hinweis spricht. */}
       <Coachmark
         offen={Boolean(aktiverHinweis && !dialogeOffen)}
         titel={aktiverHinweis?.titel || ''}
         text={aktiverHinweis?.text || ''}
         ziel={aktiverHinweis?.ziel || ''}
         aktionen={[
-          { id: 'ok', label: 'Verstanden', tone: 'primary', onSelect: ()=>beantworteHinweis('verstanden') },
+          ...(aktiverHinweis?.hauptaktion ? [{
+            id: 'haupt',
+            label: aktiverHinweis.hauptaktion.label,
+            tone: 'primary',
+            onSelect: ()=>{
+              const aktion = aktiverHinweis.hauptaktion.id;
+              beantworteHinweis('verstanden');
+              if (aktion === 'vorlageAnlegen') {
+                setView(v => ({ name: 'timetable', weekStart: v.weekStart }));
+                setStundenplanDialog({ art: 'assistent' });
+              } else if (aktion === 'wocheAlsVorlage') {
+                setStundenplanDialog({ art: 'ausWoche' });
+              }
+            },
+          }] : []),
+          ...(aktiverHinweis?.hauptaktion ? [] : [
+            { id: 'ok', label: 'Verstanden', tone: 'primary', onSelect: ()=>beantworteHinweis('verstanden') },
+          ]),
           { id: 'spaeter', label: 'Später', onSelect: ()=>beantworteHinweis('spaeter') },
-          { id: 'nie', label: 'Nicht mehr anzeigen', onSelect: ()=>beantworteHinweis('nie') },
+          ...(aktiverHinweis?.ohneNie ? [] : [
+            { id: 'nie', label: 'Nicht mehr anzeigen', onSelect: ()=>beantworteHinweis('nie') },
+          ]),
         ]}
         onSchliessen={()=>beantworteHinweis('spaeter')}
       />
@@ -8253,7 +8761,7 @@ const doExportDocx = async (html, suggestedName) => {
       <OnboardingCheckliste
         offen={!dialogeOffen && zeigeCheckliste(liveDb, onboarding)}
         schritte={onboardingSchritte}
-        reihenfolge={ONB_SCHRITTE}
+        reihenfolge={onboardingListe}
         texte={ONB_SCHRITT_TEXT}
         eingeklappt={onboarding.checkliste.eingeklappt}
         onEinklappen={(wert)=>setzeOnboarding(setzeCheckliste(onboarding, { eingeklappt: wert }))}
@@ -8421,6 +8929,7 @@ const doExportDocx = async (html, suggestedName) => {
 
 function WeekView({ weekStart, week, sequences, schoolCalendar, todos, todayISO, groupColors, duties, supervisionSuggestions, onHideSupervisionSuggestion = ()=>{},
   onboardingPlatz = null,
+  rhythmus = null, onRhythmusAusnahme = null, onAlsVorlage = null,
   readOnly = false,
   lessonClipboard, onCopyLesson, onCutLesson, onPasteLesson, onLessonDnd, onReviewLesson,
   onJoinBlock, onSplitBlock,
@@ -8572,10 +9081,40 @@ const exportWeekDocx = () => {
           <div className="muted small">{readOnly
             ? 'Archiviertes Schuljahr – klicke auf eine Stunde, um die Planung anzusehen.'
             : 'Klicke auf eine Stunde, um in die Einzelstundenplanung zu zoomen.'}</div>
-          <span className="badge" style={{marginTop:6}}>{formatWeekLabel(weekStart)}</span>
+          <div className="row wrap" style={{gap:8, marginTop:6}}>
+            <span className="badge">{formatWeekLabel(weekStart)}</span>
+            {/* Der Rhythmus dieser Woche. Er kommt aus dem aktiven
+                Stundenplanmodell, nicht aus einer einzelnen Stunde –
+                deshalb steht er hier oben und sieht anders aus als ein
+                Stundenetikett. */}
+            {rhythmus?.label ? (
+              <span className="badge rhythmusBadge" title={`Aus dem Stundenplan „${rhythmus.modell?.name || ''}"${rhythmus.ausnahme ? ' · manuell abweichend zugeordnet' : ''}`}>
+                {rhythmus.label}-Woche{rhythmus.ausnahme ? ' (abweichend)' : ''}
+              </span>
+            ) : null}
+            {(!readOnly && rhythmus?.laenge > 1 && typeof onRhythmusAusnahme === 'function') ? (
+              <KebabMenu
+                titel="Rhythmus dieser Woche"
+                eintraege={Array.from({ length: rhythmus.laenge }).map((_, index)=>({
+                  label: `Als ${zyklusLabel(index, rhythmus.laenge)}-Woche führen`,
+                  icon: <CalendarClock {...ICON_SM} />,
+                  disabled: index === rhythmus.position,
+                  title: 'Nur die Zuordnung ändert sich – an den Stunden dieser Woche nichts',
+                  onSelect: ()=>onRhythmusAusnahme(index),
+                }))}
+              />
+            ) : null}
+          </div>
         </div>
-        <div className="row" style={{gap:8}}>
+        <div className="row wrap" style={{gap:8}}>
           <button className="btn warning" onClick={onOpenTodos} title="To-do-Checkliste öffnen">To-dos{todayTodoCount ? ` (${todayTodoCount})` : ''}</button>
+          {(!readOnly && typeof onAlsVorlage === 'function') ? (
+            <button className="btn" onClick={onAlsVorlage}
+                    data-onboarding-target="woche-als-vorlage"
+                    title="Die Unterrichtszeiten dieser Woche als Stundenplanvorlage sichern – ohne Planungsinhalte">
+              <CalendarRange {...ICON_SM} /> Als Vorlage speichern
+            </button>
+          ) : null}
           {capabilities.docxExport ? (
             <button className="btn iconBtn-word" onClick={exportWeekDocx} title="Als Word-Datei speichern"><FileText {...ICON_SM} /> Word Woche</button>
           ) : null}

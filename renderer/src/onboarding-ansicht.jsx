@@ -195,9 +195,9 @@ export function WillkommenAnsicht({ offen, onWaehlen, onSpaeter, importMoeglich 
       primaer: true,
     },
     {
-      id: 'stundenplan',
-      label: 'Stundenplan einrichten',
-      hinweis: 'Zuerst Schuljahr, Ferien und Stundenzeiten eintragen.',
+      id: 'unterrichtszeiten',
+      label: 'Meine Unterrichtszeiten einrichten',
+      hinweis: 'Die regelmässig wiederkehrenden Zeiten einmalig als Vorlage anlegen.',
     },
     {
       id: 'import',

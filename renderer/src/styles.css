@@ -2306,3 +2306,89 @@ a.btn.is-disabled { opacity: 0.5; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) {
   .onboardingKarte { animation: none !important; }
 }
+
+/* ============================================================
+   Meine Unterrichtszeiten
+
+   Der Vorlageneditor sieht aus wie das Wochenraster – das ist Absicht.
+   Damit er trotzdem nicht mit einer echten Unterrichtswoche verwechselt
+   wird, trägt er durchgehend die Kennzeichnung „Vorlage" und eine
+   eigene, gestrichelte Kante.
+   ============================================================ */
+.stundenplanModal { width: min(920px, 100%); }
+.stundenplanListe { display: flex; flex-direction: column; gap: 12px; }
+.stundenplanKarte {
+  border: 1px solid var(--border);
+  background: var(--card);
+  padding: 10px 12px;
+}
+.stundenplanKarte.is-offen { border-color: var(--primary); }
+.stundenplanKarte.is-archiviert { opacity: 0.75; }
+.stundenplanKopf {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  width: 100%; text-align: left; cursor: pointer;
+  border: none; background: none; padding: 0; font: inherit; color: inherit;
+}
+.stundenplanName { font-weight: var(--fw-bold); font-size: var(--fs-lg); }
+.stundenplanInhalt { margin-top: 12px; border-top: 1px solid var(--border-light); padding-top: 12px; }
+.stundenplanGruende { margin: 6px 0 0; padding-left: 18px; font-size: var(--fs-sm); }
+.badge--aktiv { border-color: var(--success); color: var(--success); background: var(--success-soft); }
+.badge--offen { border-color: var(--warning); color: var(--warning); background: var(--warning-soft); }
+
+/* Der Umschalter zwischen A- und B-Woche: gross genug, um nicht
+   versehentlich die falsche Woche zu bearbeiten. */
+.rhythmusUmschalter { display: inline-flex; border: 1px solid var(--border-strong); }
+.rhythmusTab {
+  border: none; background: var(--card); cursor: pointer;
+  padding: 7px 14px; font: inherit; font-weight: var(--fw-medium); color: var(--text-secondary);
+  border-right: 1px solid var(--border);
+}
+.rhythmusTab:last-child { border-right: none; }
+.rhythmusTab.is-active { background: var(--primary); color: var(--on-primary); }
+.rhythmusBadge { border-color: var(--primary); color: var(--primary-ink); background: var(--primary-soft); }
+
+.stundenplanRhythmus { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.rhythmusZelle {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); padding: 4px 8px; font-size: var(--fs-sm);
+}
+.rhythmusZelle.is-frei { background: var(--bg-subtle); color: var(--muted); }
+.rhythmusZelleWoche { font-variant-numeric: tabular-nums; }
+
+/* ---- Vorlageneditor ----------------------------------------------------- */
+.vorlagenEditor {
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-subtle);
+  padding: 12px;
+  margin-top: 10px;
+}
+.vorlagenBadge { border-color: var(--primary); color: var(--primary-ink); background: var(--primary-soft); }
+.vorlagenRaster { display: flex; flex-direction: column; gap: 4px; overflow-x: auto; }
+.vorlagenKopf, .vorlagenZeile { display: grid; grid-template-columns: 44px repeat(5, minmax(110px, 1fr)); gap: 4px; }
+.vorlagenTag {
+  font-weight: var(--fw-medium); font-size: var(--fs-sm); color: var(--text-secondary);
+  text-align: center; padding: 4px; background: var(--card); border: 1px solid var(--border);
+}
+.vorlagenEcke { }
+.vorlagenStunde {
+  display: flex; align-items: center; justify-content: center;
+  font-size: var(--fs-sm); color: var(--muted); background: var(--card); border: 1px solid var(--border);
+}
+.vorlagenPlatz {
+  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  min-height: 54px; padding: 6px 8px; cursor: pointer;
+  background: var(--card); border: 1px dashed var(--border); font: inherit; color: inherit;
+  text-align: left;
+}
+.vorlagenPlatz:hover:not(:disabled) { border-color: var(--primary); border-style: solid; }
+.vorlagenPlatz:disabled { cursor: default; }
+.vorlagenPlatz.is-belegt { border-style: solid; border-color: var(--border-strong); }
+.vorlagenPlatz.is-offen { border-color: var(--primary); box-shadow: inset 0 0 0 1px var(--primary-soft); }
+.vorlagenPlatz--abgedeckt { background: var(--bg-subtle); border: 1px dashed var(--border-light); min-height: 54px; }
+.vorlagenPlatzGruppe { font-weight: var(--fw-bold); font-size: var(--fs-sm); }
+.vorlagenPlatzFach { font-size: var(--fs-sm); color: var(--text-secondary); }
+.vorlagenPlatzLeer { color: var(--muted); }
+.vorlagenFormular {
+  margin-top: 10px; padding: 10px 12px;
+  background: var(--card); border: 1px solid var(--primary);
+}

@@ -2,6 +2,7 @@ import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } 
 import logo from './assets/logo.webp';
 import eastereggImg from './assets/easteregg.webp';
 import helpMd from './assets/HELP.md?raw';
+import { parseHelpMarkdown } from './help-markdown.js';
 import platform, { capabilities, platformName } from './platform/index.js';
 import { APP_VERSION } from './version.js';
 import { setupServiceWorker } from './pwa.js';
@@ -440,28 +441,78 @@ function EasterEggOverlay({ visible }){
 }
 
 
+const HELP_DOCUMENT = parseHelpMarkdown(helpMd);
+
+function HelpInline({ tokens }){
+  return (tokens || []).map((token, index)=>{
+    const key = `${token.type}-${index}`;
+    if (token.type === 'strong') return <strong key={key}>{token.text}</strong>;
+    if (token.type === 'em') return <em key={key}>{token.text}</em>;
+    if (token.type === 'code') return <code key={key}>{token.text}</code>;
+    return <React.Fragment key={key}>{token.text}</React.Fragment>;
+  });
+}
+
+function HelpBlock({ block }){
+  if (block.type === 'heading') {
+    if (block.level === 2) return <h2 id={block.id}>{block.text}</h2>;
+    if (block.level === 3) return <h3 id={block.id}>{block.text}</h3>;
+    return <h4 id={block.id}>{block.text}</h4>;
+  }
+  if (block.type === 'paragraph') {
+    return <p><HelpInline tokens={block.tokens} /></p>;
+  }
+  if (block.type === 'list') {
+    const ListTag = block.ordered ? 'ol' : 'ul';
+    return (
+      <ListTag
+        className={`helpList helpList--level-${block.level}`}
+        start={block.ordered ? block.start : undefined}
+      >
+        {block.items.map((tokens, index)=>(
+          <li key={index}><HelpInline tokens={tokens} /></li>
+        ))}
+      </ListTag>
+    );
+  }
+  if (block.type === 'rule') return <hr className="helpRule" />;
+  return null;
+}
+
 function HelpView({ version, onStarteEinfuehrung }){
   return (
-    <div className="card">
-      <div className="row wrap" style={{justifyContent:'space-between', alignItems:'flex-start'}}>
-        <div>
-          <div style={{fontWeight:900, fontSize:16}}>Hilfe</div>
-          <div className="muted small">Prép-ybara {version || ''} – Kurzhandbuch</div>
-        </div>
+    <section className="helpPage" aria-labelledby="help-title">
+      <header className="helpHero">
+        <div className="helpKicker">Kurzhandbuch · Version {version || '–'}</div>
+        <h1 id="help-title">{HELP_DOCUMENT.title}</h1>
+        <p>Die wichtigsten Funktionen schnell finden und direkt nachlesen.</p>
+        {/* Die Einführung gehört in die Hilfe: Wer hier landet, sucht
+            Erklärungen – und der Schnellstart ist eine davon. */}
         {typeof onStarteEinfuehrung === 'function' ? (
-          <button className="btn" onClick={onStarteEinfuehrung}
+          <button className="btn helpHeroAktion" onClick={onStarteEinfuehrung}
                   title="Den Schnellstart noch einmal durchlaufen – an der Planung ändert sich nichts">
             <GraduationCap {...ICON_SM} /> Einführung erneut starten
           </button>
         ) : null}
-      </div>
+      </header>
 
-      <div style={{height:12}} />
+      <div className="helpLayout">
+        <aside className="helpToc">
+          <div className="helpTocTitle">Inhalt</div>
+          <nav aria-label="Inhaltsverzeichnis der Hilfe">
+            {HELP_DOCUMENT.toc.map((entry)=>(
+              <a key={entry.id} href={`#${entry.id}`}>{entry.text}</a>
+            ))}
+          </nav>
+        </aside>
 
-      <div className="helpBox" role="document" aria-label="Hilfe">
-        <pre className="helpPre">{helpMd}</pre>
+        <article className="helpArticle" role="document" aria-label="Prép-ybara Kurzhandbuch">
+          {HELP_DOCUMENT.blocks.map((block, index)=>(
+            <HelpBlock key={`${block.type}-${block.id || index}`} block={block} />
+          ))}
+        </article>
       </div>
-    </div>
+    </section>
   );
 }
 

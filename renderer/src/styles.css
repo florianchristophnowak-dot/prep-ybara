@@ -980,8 +980,144 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .dutyCell--has .dutyCellPlus { opacity: 0; }
 .dayOffDutyCell { background: var(--warning-light); }
 
-.helpBox { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; background: var(--bg-subtle); max-height: calc(100vh - 240px); overflow: auto; }
-.helpPre { margin: 0; white-space: pre-wrap; font-size: var(--fs-md); line-height: 1.6; font-family: var(--font-sans); }
+.helpPage {
+  max-width: 1120px;
+  margin: 0 auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+.helpHero {
+  padding: 26px 32px 24px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(120deg, var(--primary-soft), var(--card) 72%);
+}
+.helpKicker {
+  margin-bottom: 5px;
+  color: var(--primary-ink);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.helpHero h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-2xl);
+  line-height: var(--lh-tight);
+  letter-spacing: -0.025em;
+}
+.helpHero p {
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+/* Die Aktion im Hilfe-Kopf: "Einführung erneut starten". Sie sitzt im
+   Fluss darunter statt in einer eigenen Zeile – auf schmalen Fenstern
+   rutscht sie damit von selbst mit. */
+.helpHeroAktion { margin-top: 14px; }
+.helpLayout {
+  display: grid;
+  grid-template-columns: minmax(190px, 240px) minmax(0, 760px);
+  justify-content: center;
+  align-items: start;
+}
+.helpToc {
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - 150px);
+  padding: 28px 20px 28px 24px;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+.helpTocTitle {
+  margin: 0 0 10px 10px;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.helpToc nav { display: flex; flex-direction: column; gap: 2px; }
+.helpToc a {
+  display: block;
+  padding: 7px 10px;
+  border-left: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.35;
+  text-decoration: none;
+}
+.helpToc a:hover,
+.helpToc a:focus-visible {
+  border-left-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary-ink);
+}
+.helpArticle {
+  min-width: 0;
+  padding: 30px 40px 48px;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  line-height: var(--lh-relaxed);
+}
+.helpArticle h2,
+.helpArticle h3,
+.helpArticle h4 {
+  scroll-margin-top: 20px;
+  color: var(--text);
+  line-height: var(--lh-tight);
+}
+.helpArticle h2 {
+  margin: 34px 0 14px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-xl);
+  letter-spacing: -0.015em;
+}
+.helpArticle h2:first-of-type { margin-top: 22px; }
+.helpArticle h3 { margin: 24px 0 8px; font-size: var(--fs-lg); }
+.helpArticle h4 { margin: 20px 0 8px; font-size: var(--fs-base); }
+.helpArticle p { margin: 0 0 12px; }
+.helpArticle strong { color: var(--text); font-weight: var(--fw-bold); }
+.helpArticle code {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.92em;
+}
+.helpList {
+  margin: 0 0 14px;
+  padding-left: 24px;
+}
+.helpList li { margin: 5px 0; padding-left: 3px; }
+.helpList li::marker { color: var(--primary); font-weight: var(--fw-bold); }
+.helpList--level-1,
+.helpList--level-2,
+.helpList--level-3 { margin-left: 18px; }
+.helpRule { margin: 28px 0; border: 0; border-top: 1px solid var(--border); }
+
+@media (max-width: 820px) {
+  .helpHero { padding: 22px 24px 20px; }
+  .helpLayout { grid-template-columns: 1fr; }
+  .helpToc {
+    position: static;
+    max-height: none;
+    padding: 18px 20px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .helpTocTitle { margin-left: 8px; }
+  .helpToc nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .helpArticle { padding: 26px 24px 40px; }
+}
+
+@media (max-width: 560px) {
+  .helpToc nav { grid-template-columns: 1fr; }
+  .helpHero h1 { font-size: 24px; }
+  .helpArticle { padding-inline: 20px; }
+}
 
 .rte { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--card); position: relative; transition: border-color var(--transition); }
 .rte:focus-within { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-light); }

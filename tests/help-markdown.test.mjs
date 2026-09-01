@@ -22,7 +22,13 @@ test('Das Kurzhandbuch wird als Ueberschriften, Absaetze und Listen gelesen', as
 
   assert.equal(dokument.title, 'Prép-ybara – Hilfe');
   assert.ok(dokument.toc.length >= 9);
-  assert.equal(dokument.toc[0].text, '1) Wochenplan');
+  /* Das Inhaltsverzeichnis folgt dem Dokument: Der erste Eintrag ist die
+     erste Ebene-2-Überschrift. Bewusst aus dem Markdown abgeleitet und
+     nicht fest eingetragen – sonst bräche der Test jedes Mal, wenn die
+     Hilfe vorne einen Abschnitt bekommt. */
+  const ersteUeberschrift = markdown.split('\n').find(zeile => zeile.startsWith('## '))?.slice(3).trim();
+  assert.equal(dokument.toc[0].text, ersteUeberschrift);
+  assert.ok(dokument.toc.some(eintrag => eintrag.text === '1) Wochenplan'));
   assert.ok(dokument.blocks.some(block => block.type === 'heading' && block.level === 3));
   assert.ok(dokument.blocks.some(block => block.type === 'list' && block.ordered));
   assert.ok(dokument.blocks.some(block => block.type === 'list' && !block.ordered));
@@ -33,6 +39,20 @@ test('Das Kurzhandbuch wird als Ueberschriften, Absaetze und Listen gelesen', as
     .join(' ');
   assert.ok(sichtbarerText.includes('direkt aufeinanderfolgende'));
   assert.ok(!sichtbarerText.includes('**direkt aufeinanderfolgende**'));
+});
+
+test('Eine Hervorhebung ueberlebt den Zeilenumbruch im Quelltext', ()=>{
+  /* Im Markdown darf ein **fetter Ausdruck** ueber zwei Quellzeilen
+     laufen. Wird jede Zeile fuer sich gelesen, stuenden die Sternchen
+     hinterher sichtbar in der Hilfe. */
+  const dokument = parseHelpMarkdown('# Hilfe\n\n- Er fragt nach: **Nur Balken\n  verschieben**, sonst nichts.');
+  const liste = dokument.blocks.find(block => block.type === 'list');
+  assert.deepEqual(liste.items[0], [
+    { type: 'text', text: 'Er fragt nach: ' },
+    { type: 'strong', text: 'Nur Balken verschieben' },
+    { type: 'text', text: ', sonst nichts.' },
+  ]);
+  assert.equal('rohItems' in liste, false, 'Werkzeug bleibt aussen vor');
 });
 
 test('Gleichlautende Ueberschriften erhalten eindeutige Sprungziele', ()=>{

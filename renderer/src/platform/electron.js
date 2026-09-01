@@ -101,10 +101,20 @@ export function createElectronPlatform(api){
       executionWindow: typeof api.openExecutionWindow === 'function',
       // Ältere Preload-Brücken kennen den Pocket-Austausch nicht.
       pocketFiles: typeof api.exportPocketProfile === 'function',
+      /* Der Versionsverlauf braucht eine eigene Ablage. Kennt die
+         Preload-Brücke sie nicht (ältere Fassung), bietet die
+         Oberfläche ihn gar nicht erst an – statt nach dem Klick zu
+         melden, dass nichts gespeichert wurde. */
+      versionHistory: typeof api.getHistory === 'function' && typeof api.setHistory === 'function',
     },
 
     loadDB,
     saveDB,
+
+    /* Versionsverlauf: eigene Datei im Hauptprozess, nicht Teil der
+       Unterrichtsdatenbank und deshalb auch nicht Teil eines Backups. */
+    loadHistory: () => api.getHistory(),
+    saveHistory: (daten) => api.setHistory(daten),
 
     exportBackup: () => api.exportBackup(),
     importBackup: () => api.importBackup(),

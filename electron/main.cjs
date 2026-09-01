@@ -14,10 +14,19 @@ app.setName('Prép-ybara');
 const store = new Store({ name: 'prepybara' });
 const legacyStore = new Store({ name: 'lehrerplan' });
 
+/* Der Versionsverlauf liegt in einer EIGENEN Datei.
+
+   Er gehört nicht in die Unterrichtsdatenbank: ein Backup soll die
+   Planung enthalten, nicht ihre Geschichte. Getrennt gespeichert wächst
+   ein Backup dadurch nicht unkontrolliert an, und ein beschädigter
+   Verlauf kann die Planung nicht mitreissen. Die Datei wird erst
+   angelegt, wenn der erste Sicherungspunkt entsteht. */
+const historyStore = new Store({ name: 'prepybara-verlauf' });
+
 // Einzige Quelle für die Schema-Kennzeichnung. Muss mit SCHEMA_VERSION in
 // renderer/src/app.jsx übereinstimmen: ensureDbShape() dort hebt jede geladene
 // Datenbank auf genau diesen Wert an.
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 11;
 
 function defaultDB() {
   return {
@@ -498,6 +507,26 @@ ipcMain.handle('db:patch', async (_evt, patch) => {
   }
   setDB(db);
   return { ok: true };
+});
+
+/* ---- Versionsverlauf --------------------------------------------------
+
+   Der Hauptprozess verwaltet ihn nicht, er verwahrt ihn nur: Bündelung
+   und Aufbewahrungsgrenzen entscheidet der Renderer (versionsverlauf.js),
+   weil sie dort prüfbar sind. Hier geht es allein um Lesen und Schreiben
+   einer eigenen Datei. */
+ipcMain.handle('history:get', async () => {
+  try { return historyStore.get('verlauf') || null; }
+  catch (e) { console.error('[verlauf] Lesen fehlgeschlagen:', e?.message || e); return null; }
+});
+
+ipcMain.handle('history:set', async (_evt, daten) => {
+  const d = (daten && typeof daten === 'object') ? daten : { schema: 1, eintraege: [] };
+  try { historyStore.set('verlauf', d); return { ok: true }; }
+  catch (e) {
+    console.error('[verlauf] Schreiben fehlgeschlagen:', e?.message || e);
+    return { ok: false, error: String(e?.message || e) };
+  }
 });
 
 ipcMain.handle('backup:export', async () => {

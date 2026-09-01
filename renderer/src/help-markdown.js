@@ -72,7 +72,10 @@ export function parseHelpMarkdown(value) {
 
   const pushList = () => {
     if (!activeList) return;
-    document.blocks.push(activeList);
+    /* Die Rohtexte waren nur Werkzeug beim Zusammensetzen der
+       Fortsetzungszeilen; der Renderer bekommt allein die Bausteine. */
+    const { rohItems, ...liste } = activeList;
+    document.blocks.push(liste);
     activeList = null;
   };
 
@@ -130,8 +133,9 @@ export function parseHelpMarkdown(value) {
 
       if (!activeList || activeList.ordered !== ordered || activeList.level !== level) {
         pushList();
-        activeList = { type: 'list', ordered, level, start, items: [] };
+        activeList = { type: 'list', ordered, level, start, items: [], rohItems: [] };
       }
+      activeList.rohItems.push(itemText);
       activeList.items.push(parseHelpInline(itemText));
       continue;
     }
@@ -141,8 +145,13 @@ export function parseHelpMarkdown(value) {
        zwei Quellzeilen verteilt ist. Ohne diese Behandlung wuerde daraus
        mitten in einer nummerierten Anleitung ein eigener Absatz. */
     if (activeList && /^\s+/.test(rawLine) && activeList.items.length) {
-      const lastItem = activeList.items[activeList.items.length - 1];
-      lastItem.push({ type: 'text', text: ' ' }, ...parseHelpInline(trimmed));
+      /* Erst zusammensetzen, dann lesen – nicht umgekehrt. Wird jede
+         Quellzeile fuer sich ausgewertet, endet eine Hervorhebung, die
+         ueber den Zeilenumbruch laeuft ("**Nur Balken / verschieben**"),
+         als sichtbares ** im Text. */
+      const letzter = activeList.rohItems.length - 1;
+      activeList.rohItems[letzter] = `${activeList.rohItems[letzter]} ${trimmed}`;
+      activeList.items[letzter] = parseHelpInline(activeList.rohItems[letzter]);
       continue;
     }
 

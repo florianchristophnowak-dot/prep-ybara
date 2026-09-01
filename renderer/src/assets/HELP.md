@@ -4,6 +4,108 @@ Dieses Hilfe‑Dokument erklärt die wichtigsten Funktionen von **Prép‑ybara*
 
 ---
 
+## 0) Erste Schritte
+
+Beim ersten Start – solange noch nichts geplant ist – bietet Prép‑ybara einen **Schnellstart** an:
+drei Schritte bis zur ersten fertigen Stunde. Er lässt sich jederzeit überspringen, pausieren
+(**Escape**) und über **Einführung erneut starten** (oben auf dieser Seite) oder die
+**Einstellungen** wiederholen. An deiner Planung ändert das nie etwas.
+
+Alles Weitere erklärt sich erst, wenn du es zum ersten Mal brauchst: ein kurzer Hinweis mit
+**Verstanden**, **Später** und **Nicht mehr anzeigen**. Höchstens einer je Sitzung – und keiner
+zu einer Funktion, die du längst benutzt.
+
+**Deine erste Stunde.** Klicke im **Wochenplan** auf einen Stundenplatz. Trage **Klasse/Kurs**
+und **Fach** ein – beides zusammen ist in Prép‑ybara die *Lerngruppe*, eine eigene Verwaltung
+dafür gibt es nicht. Dann **Thema**, **Lernziel** und in einer **Phase**, was passiert. Mehr
+braucht eine Stunde nicht; alles andere ist freiwillig.
+
+**Meine Unterrichtszeiten.** Statt jede Woche von Hand zu füllen, legst du deine regelmässig
+wiederkehrenden Zeiten einmalig als **Stundenplanvorlage** an – siehe 0b.
+
+**Sequenzen.** Eine Sequenz fasst die Stunden zu einem Thema zusammen und zeigt dir, wo du
+darin stehst („Stunde 4 von 9"). Du legst sie in der Stunde unter *Unterrichtssequenz* an. Ihre
+Abfolge siehst du in der **Progression**, ihre Termine lassen sich später gemeinsam verschieben.
+
+**Doppelstunden.** Zwei aufeinanderfolgende Stunden derselben Lerngruppe kannst du in der Stunde
+mit **Als Doppelstunde verbinden** zusammenlegen. Es bleibt EINE Stunde mit 90 Minuten – nicht
+zwei halbe. **Doppelstunde trennen** macht es rückgängig.
+
+**Jahresplanung.** Die farbigen Balken sind zunächst nur Orientierung: Sie verschieben keine
+Stunden und erscheinen in keinem Export. Optional kannst du einen Balken mit einer Sequenz
+verknüpfen (siehe 4b).
+
+**Pocket.** Die mobile Begleit‑App plant einzelne Stunden unterwegs. Der Austausch läuft über
+Dateien – keine Verbindung, keine Cloud, kein Konto (siehe 9).
+
+**Backup.** Alle Daten liegen auf diesem Gerät. Ein Backup ist eine einzelne Datei; lege sie
+regelmässig an, am besten nach jeder Planungssitzung (siehe 8).
+
+---
+
+## 0b) Meine Unterrichtszeiten
+
+Zu finden über **Zeiten** in der Seitenleiste. Eine **Wochenvorlage** beschreibt, WANN du
+regelmässig unterrichtest: Wochentag, Stunde, Klasse/Kurs, Fach, Raum, Einzel- oder
+Doppelstunde. Sie enthält ausdrücklich **keine** Planungsinhalte – keine Themen, Lernziele,
+Kompetenzen, Phasen, Materialien, Hausaufgaben, Notizen, Sequenzzuordnungen und keine
+Nachbereitung.
+
+Ein **Stundenplanmodell** fasst zusammen, was für einen Zeitraum gilt:
+
+- **Jede Woche gleich** – eine Wochenvorlage,
+- **A- und B-Woche im Wechsel** – zwei Vorlagen, die sich abwechseln. Beide gehören gemeinsam
+  zum aktiven Stundenplan; du bearbeitest sie getrennt über den Umschalter **A-Woche / B-Woche**.
+
+Weitere Modelle und einzelne Vorlagen kannst du speichern, ohne sie zu benutzen. Für denselben
+sich überschneidenden Zeitraum ist immer nur **ein** Modell aktiv; beim Aktivieren wird gefragt,
+bevor ein anderes stillgelegt wird.
+
+### Eine vorhandene Woche übernehmen
+
+**Wochenplan → Als Vorlage speichern** zeigt alle geeigneten Stunden mit Tag, Zeit, Lerngruppe,
+Fach, Raum und Dauer. Einzelne Zeilen lassen sich **abwählen** – Vertretungsstunden oder
+Klassenarbeiten gehören nicht in den Stundenplan. Du kannst die Woche speichern als:
+
+- normale Wochenvorlage,
+- **A-Woche** eines neuen oder bestehenden Modells,
+- **B-Woche** eines neuen oder bestehenden Modells.
+
+Nach einer A-Woche bietet Prép-ybara an, gleich die passende B-Woche einzurichten.
+
+### Wochenrhythmus (A/B)
+
+Du wählst eine **Referenzwoche** und legst fest: *Diese Woche ist eine A-Woche* oder *eine
+B-Woche*. Alles Weitere rechnet Prép-ybara aus – ohne Annahmen über gerade oder ungerade
+Kalenderwochen. Dazu die Wechselregel:
+
+- **nach Kalenderwochen** – der Rhythmus läuft auch während der Ferien rechnerisch weiter,
+- **nach Unterrichtswochen** – vollständig unterrichtsfreie Wochen werden übersprungen.
+
+Eine Vorschau zeigt die ermittelten Wochen, bevor etwas gilt. Im Wochenplan steht dann dezent
+**A-Woche** oder **B-Woche**; über das ⋯-Menü daneben lässt sich eine einzelne Woche nach
+Rückfrage abweichend zuordnen – etwa nach einem Feiertag. Dabei ändert sich nur die Zuordnung,
+nie eine Stunde.
+
+### Übernehmen
+
+**Übernehmen…** legt die Stundenplätze in deinen Wochen an: aktuelle Woche, gewählter Zeitraum
+oder restliches Schuljahr. Vorher zeigt eine Vorschau je Woche: Kalenderwoche, A/B, neu
+anzulegende Stunden, bereits vorhandene identische, Konflikte mit Grund und übersprungene
+Ferien- oder schulfreie Tage.
+
+- Bestehende Stunden werden **nie** überschrieben, identische **nie** doppelt angelegt.
+- Belegte Plätze erscheinen als Konflikt und bleiben, wie sie sind.
+- Doppelstunden brauchen zwei freie Plätze am Stück und bleiben zusammen.
+- Nur auf ausdrücklichen Wunsch werden **leere Stundenplan-Rahmen ohne Planung** ersetzt.
+- Die ganze Übernahme ist **ein** Vorgang: ein „Rückgängig" und ein Eintrag im Versionsverlauf.
+
+**Änderungen an einer Vorlage verändern bestehende Wochen nicht automatisch.** Erzeugte Stunden
+merken sich intern, aus welcher Vorlage und Fassung sie stammen – das schränkt ihre Bearbeitung
+in keiner Weise ein. Das **Löschen einer Vorlage löscht keine Unterrichtsstunden**.
+
+---
+
 ## 1) Wochenplan
 
 ### Stunden anlegen
@@ -103,6 +205,31 @@ Filter:
   - **Aus Jahresplanung entfernen** – entfernt die ganze Zeile. **Die Lerngruppe selbst bleibt erhalten**: Stunden, Sequenzen, Farben und Kompetenzen sind davon nicht betroffen.
 - Beides lässt sich sofort **rückgängig** machen (Meldung „Rückgängig" oder **Strg+Z**).
 
+### Balken und Sequenzen verbinden (optional)
+
+Ein Balken kann auf eine vorhandene **Sequenz** zeigen. Das ist freiwillig: Balken ohne
+Verknüpfung verhalten sich genau wie bisher.
+
+- Im Dialog **Balken hinzufügen/bearbeiten** steht dafür **Verknüpfte Sequenz**. Zur Wahl stehen
+  „Ohne Verknüpfung" und die vorhandenen Sequenzen – passende (gleiche Lerngruppe, gleiches Fach)
+  zuerst. Eine Sequenz aus einer anderen Lerngruppe lässt sich trotzdem wählen; die App sagt es dazu.
+- Ein verknüpfter Balken zeigt dezent das **Verknüpfungssymbol**, den **Namen der Sequenz** und –
+  wenn der Balken breit genug ist – die **Anzahl ihrer Termine** und deren **Zeitraum**. Alles davon
+  wird aus der Sequenz gelesen: Wird sie umbenannt, steht der neue Name sofort am Balken.
+- Das **⋯‑Menü des Balkens** bietet zusätzlich: **Sequenz öffnen**, **Zeitraum aus Sequenz
+  übernehmen**, **Verknüpfung lösen** – dazu wie bisher **Bearbeiten** und **Löschen**.
+
+Was dabei ausdrücklich **nicht** passiert:
+
+- Einen Balken zu verschieben oder zu verlängern verschiebt **nie von selbst** Unterrichtsstunden.
+  Wird ein *verknüpfter* Balken gezogen, fragt Prép‑ybara nach dem Loslassen: **Nur Balken
+  verschieben**, **Sequenztermine mitverschieben…** (öffnet die Vorschau, siehe 4d) oder **Abbrechen**.
+- Einen Balken zu löschen löscht **nie** die Sequenz.
+- Eine Sequenz zu löschen **erhält** ihre Balken; nur die Verknüpfung entfällt.
+- Mehrere Balken dürfen dieselbe Sequenz meinen. Daraus entsteht keine mehrfache Verschiebung:
+  Die Sequenz wird einmal verschoben, die Balken werden anschliessend nur angepasst.
+- In der Archivansicht sind alle diese Aktionen abgeschaltet.
+
 ---
 
 ## 4c) Archivierte Schuljahre
@@ -130,6 +257,44 @@ Jahr ins Archiv: Wochenplanung, Sequenzen, Jahresgrobplanung, To‑dos, Ferien u
 
 Ältere Archive enthalten weniger Bereiche (etwa keine Jahresgrobplanung). Die Übersicht sagt das
 an der jeweiligen Zeile; alles Übrige funktioniert unverändert.
+
+---
+
+## 4d) Sequenzen verschieben
+
+Fällt eine Woche aus, verschiebt sich selten eine einzelne Stunde – meist alles Folgende.
+Dafür gibt es **Sequenz verschieben**. Zu finden ist es:
+
+- im **⋯‑Menü einer Sequenz** („Termine verschieben…"),
+- in der **Progressionsansicht** (oben, und je Zeile „Ab dieser Stunde verschieben"),
+- in einer geöffneten **Stunde**, die zu einer Sequenz gehört,
+- beim Ziehen eines **verknüpften Jahresbalkens**.
+
+Im Dialog wählst du **Umfang** (nur diese Stunde / diese und alle folgenden / die ganze Sequenz)
+und den **neuen Termin** (um n Wochen verschieben oder ab einem Datum). Prép‑ybara erzeugt daraus
+zunächst nur einen **Vorschlag** und zeigt ihn als Tabelle: bisheriger Termin, neuer Termin,
+Klasse/Fach, Thema, Dauer und Status.
+
+Beim Suchen der neuen Plätze gilt:
+
+- Gesucht wird auf den **Stundenplanplätzen der Lerngruppe** – dort, wo sie ohnehin Unterricht hat.
+- **Ferien und schulfreie Tage** werden übersprungen und in der Vorschau benannt.
+- **Doppelstunden** bleiben zusammen und brauchen entsprechend viele freie Plätze am Stück.
+- Die **Reihenfolge** der Sequenz bleibt erhalten.
+- **Belegte Termine** werden übersprungen (oder brechen die Aktion ab, wenn du das Häkchen
+  entfernst). Überschrieben wird **nie** etwas – auch nicht Stunden anderer Sequenzen.
+- Was in der **Vergangenheit** liegt oder schon **nachbereitet** ist, bleibt liegen. Auf Wunsch
+  lässt sich das umstellen.
+- Endet das **Schuljahr** vorher, sagt die Vorschau das und die Ausführung bleibt gesperrt.
+
+**Verschiebung ausführen** ist erst anwählbar, wenn der Vorschlag vollständig aufgeht – dann
+geschieht alles auf einmal oder gar nicht. Danach gibt es genau **einen** Eintrag zum
+Rückgängigmachen, **einen** zusammengehörigen Eintrag im Versionsverlauf und eine kurze
+Zusammenfassung. Verknüpfte Jahresbalken lassen sich dabei auf Wunsch an den neuen Zeitraum legen.
+
+Am alten Platz bleibt der **Stundenplan** stehen: Klasse, Fach und Raum bleiben als leerer Rahmen
+zurück, die Planung zieht um. Am Zielplatz gilt umgekehrt dessen **Raum** – der gehört zum
+Stundenplan, nicht zur Planung.
 
 ---
 
@@ -188,6 +353,60 @@ Nach dem Einfügen bleibt alles flexibel: Stunden können gelöscht, hinzugefüg
 
 - **Backup exportieren** sichert alles (Wochen, Sequenzen, Vorlagen, Schulkalender, Farben, To‑dos).
 - **Backup importieren** stellt den Stand wieder her.
+
+### Versionsverlauf (lokal)
+
+**Strg+Z** nimmt zurück, was gerade eben geschah. Der **Versionsverlauf** reicht weiter zurück:
+Er merkt sich frühere Fassungen und übersteht einen Neustart.
+
+- Zu finden über **Versionsverlauf** in der geöffneten Stunde und im **⋯‑Menü einer Sequenz**.
+- Jeder Eintrag nennt **Datum und Uhrzeit**, den **Anlass** (z. B. „vor dem Verschieben"), den
+  betroffenen Bereich und eine kurze Zusammenfassung der geänderten Felder.
+- **Ansehen** zeigt die gespeicherte Fassung. **Wiederherstellen** zeigt zuerst eine **Vorschau**
+  – was wird ersetzt, angelegt, entfernt – und fragt nach. Der aktuelle Stand wird dabei selbst
+  als Fassung gesichert: Auch eine Wiederherstellung lässt sich zurücknehmen.
+- Eine **Sammelaktion** (etwa eine verschobene Sequenz) wird immer vollständig wiederhergestellt.
+
+Fassungen entstehen an wenigen, festen Punkten – nicht bei jedem Tastendruck:
+
+- beim Verlassen einer geänderten Stunde (mehrere Änderungen kurz hintereinander werden gebündelt),
+- vor dem **Löschen**, vor dem **Ersetzen durch einen Import**, vor dem **Verschieben**,
+- vor strukturellen Änderungen einer Sequenz (Verbinden, Trennen, Sammelverschiebung),
+- vor einer **Wiederherstellung** und vor Änderungen an **verknüpften Jahresbalken**.
+
+Wo er liegt und wie lange:
+
+- In einer **eigenen Ablage neben der Planung** (Desktop: eigene Datei; Browser: eigene Datenbank).
+  Er gehört deshalb **nicht** zum Backup, wandert nicht nach Pocket und nicht in exportierte Vorlagen.
+- **Keine Kopien angehängter Dateien** – gespeichert werden nur Verweise und Angaben dazu.
+- Aufbewahrt werden höchstens **30 Tage**, höchstens **20 Fassungen je Stunde bzw. Sequenz** und
+  insgesamt **400 Einträge**. Ältere fallen von selbst weg, ohne die Planung anzutasten.
+- **Einstellungen → Versionsverlauf → Versionsverlauf leeren** räumt ihn von Hand.
+- In der Archivansicht lässt sich der Verlauf ansehen, aber nichts wiederherstellen.
+
+---
+
+## 8b) Suche
+
+Über **Suche** in der Seitenleiste, das Lupensymbol oder **Strg+K** (macOS: **Cmd+K**).
+Strg+K öffnet die Befehlspalette – dort stehen Befehle **und** Treffer aus den Inhalten;
+„Alle Treffer anzeigen" führt in die vollständige Suchansicht.
+
+Gesucht wird lokal, im laufenden **und** in archivierten Schuljahren:
+
+- **Stunden**: Thema, Lernziele, Phasen (Titel, Inhalt, Sozialform, Material, Bemerkungen),
+  Hausaufgaben, Notizen, Klasse, Fach, Raum, Kompetenzen, Sprechabsichten, Erfolgskriterien,
+  Hilfen, sprachliche Mittel sowie Namen von Materialien und Links.
+- **Sequenzen und Vorlagen**: Name, Beschreibung, Lerngruppe, Fach, Zielaufgabe, Zielprodukt,
+  Kompetenzen, Themen der Einheiten, Voraussetzungen und Lehrwerksbezug.
+- **Jahresplanung** (samt verknüpfter Sequenz) und **To‑dos**.
+- Der **Versionsverlauf** wird nicht durchsucht.
+
+Eigenschaften: Gross‑ und Kleinschreibung spielen keine Rolle, Akzente werden zusammengeführt
+(„Quebec" findet „Québec"), mehrere Begriffe werden **und**‑verknüpft, Anführungszeichen fassen
+eine Wortgruppe zusammen. Treffer sind nach Inhaltstyp gruppiert und lassen sich nach Inhaltstyp,
+Lerngruppe, Schuljahr und Kompetenz filtern. Archivierte Treffer sind gekennzeichnet und öffnen
+sich schreibgeschützt in der Archivansicht.
 
 ---
 

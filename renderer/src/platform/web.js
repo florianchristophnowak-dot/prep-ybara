@@ -35,6 +35,14 @@ const WEEK_PREFIX = 'week:';
 
 const store = createStore('prepybara', 'db');
 
+/* Der Versionsverlauf bekommt eine EIGENE Datenbank, nicht nur einen
+   eigenen Schlüssel: ein Backup liest `prepybara` aus, und die
+   Geschichte der Planung soll darin nicht auftauchen. Sie wird ausserdem
+   erst angelegt, wenn der erste Sicherungspunkt entsteht – der Start der
+   App fasst sie nicht an. */
+const verlaufStore = createStore('prepybara-verlauf', 'verlauf');
+const VERLAUF_KEY = 'eintraege';
+
 function splitDb(db){
   const { weeks, ...meta } = (db && typeof db === 'object') ? db : {};
   return { weeks: weeks || {}, meta };
@@ -132,6 +140,18 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
     }
   };
 
+  /* Versionsverlauf. Bewusst als ein Eintrag: die Aufbewahrungsregeln
+     halten ihn klein, und ein Vorgang soll entweder ganz oder gar nicht
+     geschrieben werden. */
+  const loadHistory = async () => {
+    try { return (await get(VERLAUF_KEY, verlaufStore)) || null; }
+    catch { return null; }
+  };
+
+  const saveHistory = async (daten) => {
+    await set(VERLAUF_KEY, (daten && typeof daten === 'object') ? daten : { schema: 1, eintraege: [] }, verlaufStore);
+  };
+
   const notAvailable = async () => null;
 
   const BACKUP_TYPE = { description: 'Prép-ybara Backup', accept: { 'application/json': ['.json'] } };
@@ -219,10 +239,14 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
       installable: true,
       // Austausch mit Prép-ybara Pocket: Download und Dateifeld genügen.
       pocketFiles: true,
+      // Eigene IndexedDB-Ablage, getrennt von den Unterrichtsdaten.
+      versionHistory: true,
     },
 
     loadDB,
     saveDB,
+    loadHistory,
+    saveHistory,
     requestPersistence,
 
     exportBackup,

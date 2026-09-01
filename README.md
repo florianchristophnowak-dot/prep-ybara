@@ -38,10 +38,56 @@ npm run dist:portable
 ```
 
 ## Daten speichern / Backup
-- Die App speichert lokal in deinem Benutzerprofil (Electron Store).
+- Die App speichert lokal in deinem Benutzerprofil (Electron Store, Datei `prepybara`).
 - In der Wochenansicht:
   - **Backup exportieren** → JSON-Datei speichern
   - **Backup importieren** → JSON-Datei wiederherstellen
+
+## Meine Unterrichtszeiten (Stundenplanvorlagen)
+- Eine **Wochenvorlage** (`timetableTemplates`) beschreibt die wiederkehrende Struktur:
+  Wochentag, Stundenplatz, Klasse/Kurs, Fach, Raum, Einzel- oder Doppelstunde. Planungsinhalte
+  (Thema, Lernziele, Kompetenzen, Phasen, Materialien, Hausaufgaben, Notizen, Sequenz,
+  Nachbereitung) sind **nie** Teil einer Vorlage.
+- Ein **Stundenplanmodell** (`timetableModels`) fasst zusammen, was für einen Zeitraum gilt:
+  `singleWeek` (eine Vorlage) oder `alternatingWeeks` (A-/B-Zyklus). Der Zyklus ist eine Liste
+  von Vorlagen-IDs – längere Rhythmen liessen sich später ohne Umbau ergänzen.
+- Der A-/B-Rhythmus hängt an einer **Referenzwoche** und einer Wechselregel
+  (`kalenderwochen` oder `unterrichtswochen`), nie an geraden/ungeraden Kalenderwochen.
+  Einzelne Wochen lassen sich als Ausnahme abweichend zuordnen.
+- Für denselben überschneidenden Gültigkeitszeitraum ist nur **ein** Modell aktiv; innerhalb
+  eines Modells gehören A- und B-Woche gemeinsam zum Standard.
+- Beim Anwenden werden nur freie Plätze gefüllt: nichts wird überschrieben, identische Stunden
+  werden nicht doppelt angelegt, Ferien und schulfreie Tage werden übersprungen. Erzeugte
+  Stunden tragen `timetableRef` (Modell, Vorlage, Eintrag, Fassung) – nur zur Wiedererkennung.
+- Alles liegt in der Datenbank und damit in jedem Backup. Alte Backups ohne diese Felder
+  funktionieren unverändert; eine frühere einzelne Standardvorlage wird zu einem Ein-Wochen-Modell.
+
+## Einführung (Onboarding)
+- Bei einer **leeren** Datenbank bietet die App einen Schnellstart an: drei Schritte bis zur
+  ersten geplanten Stunde. Sind bereits Stunden, Sequenzen, Vorlagen, Balken, To-dos oder ein
+  eingerichteter Schulkalender vorhanden, erscheint sie nicht.
+- Weitere Funktionen erklären sich erst bei ihrer ersten Nutzung – höchstens ein Hinweis je
+  Sitzung, und keiner zu einer Funktion, die schon benutzt wird.
+- Der Zustand liegt lokal unter `appSettings.onboarding` (Fassung, Status, Pfad, erledigte
+  Schritte, verstandene Hinweise, Checkliste). Ältere Datenbanken und Backups ohne dieses Feld
+  bekommen beim Laden sinnvolle Standardwerte.
+- Zwei Einstiege, zwei Checklisten: **Meine erste Stunde planen** (Lerngruppe, Stunde, Phase)
+  und **Meine Unterrichtszeiten einrichten** (Vorlage, Standard, angewendet, erste Stunde –
+  bei A/B stattdessen A-Woche, B-Woche, Rhythmus, Vorschau). Vorhandene Vorlagen werden erkannt;
+  niemand wird zu einer Einrichtung gedrängt, die es schon gibt.
+- Erneut starten: **Hilfe → Einführung erneut starten** oder **Einstellungen → Einführung**.
+  Zurücksetzen ändert ausschliesslich diese Einstellung, nie Unterrichtsdaten.
+
+## Versionsverlauf
+- Neben dem Rückgängigmachen führt die App einen lokalen **Versionsverlauf**: frühere Fassungen
+  einzelner Stunden, Sequenzen und Sammelaktionen (z. B. eine verschobene Sequenz).
+- Er liegt **getrennt** von der Planung – Desktop: eigene Store-Datei `prepybara-verlauf`;
+  Browser: eigene IndexedDB-Datenbank `prepybara-verlauf`. Er ist deshalb **nicht** Teil eines
+  Backups, wandert nicht nach Pocket und nicht in exportierte Vorlagen.
+- Aufbewahrt werden höchstens 30 Tage, 20 Fassungen je Stunde bzw. Sequenz und 400 Einträge
+  insgesamt. Binärkopien angehängter Dateien werden nie gespeichert, nur Verweise.
+- Zu finden über **Versionsverlauf** in der Stunde und im ⋯-Menü einer Sequenz;
+  leeren lässt er sich in den **Einstellungen**.
 
 ## PDF
 - In der Einzelstundenansicht: **PDF speichern** (wird als A4-PDF erzeugt)
@@ -65,7 +111,19 @@ Dateien**.
 
 ```
 renderer/          Desktop-App (Electron + Browser-Fassung)   – unverändert
-  src/doppelstunde.js  Doppelstunden: welche Stundenplätze eine Stunde belegt
+  src/doppelstunde.js       Doppelstunden: welche Stundenplätze eine Stunde belegt
+  src/versionsverlauf.js    Versionsverlauf: Einträge, Bündelung, Aufbewahrung, Wiederherstellung
+  src/verlauf-speicher.js   dessen Ablage (lädt erst bei Bedarf, schreibt der Reihe nach)
+  src/verlauf-ansicht.jsx   Dialog: Fassungen ansehen und zurückholen
+  src/jahresbalken.js       optionale Verbindung von Jahresbalken und Sequenzen
+  src/verschieben.js        Verschiebevorschläge: Ferien, Doppelstunden, Konflikte, Atomarität
+  src/verschieben-dialog.jsx  Vorschau und Ausführung des Verschiebens
+  src/suche.js              Suchindex, Normalisierung, Treffer, sichere Hervorhebung
+  src/suche-ansicht.jsx     Suchansicht mit Filtern und Treffergruppen
+  src/onboarding.js         Einführung: Zustand, leere Datenbank, Schritte, Hinweis-Registry
+  src/onboarding-ansicht.jsx  Willkommensansicht, Coachmark, Checkliste
+  src/stundenplan.js        Wochenvorlagen, Stundenplanmodelle, A-/B-Rhythmus, Anwenden
+  src/stundenplan-ansicht.jsx  Verwaltung, Vorlageneditor, Assistent, Vorschau-Dialoge
 electron/          Hauptprozess, Preload, Menü
 pocket/            Prép-ybara Pocket (PWA)
   src/views/       mobile Ansichten
@@ -74,7 +132,9 @@ shared/            von beiden benutzt
   exchange/        Austauschformat, stabile Kennungen, Prüfung
   types/           Typbeschreibung des Formats (.d.ts)
   datum.js         Datumsrechnung
-tests/             node:test – Format, Import, Pocket-Modell, Doppelstunden
+tests/             node:test – Format, Import, Pocket-Modell, Doppelstunden,
+                   Versionsverlauf, Jahresbalken, Verschieben, Suche, Onboarding,
+                   Stundenplanvorlagen
 ```
 
 Geteilt werden **Format, Kennungen und Prüfung** – keine Oberflächenbausteine.

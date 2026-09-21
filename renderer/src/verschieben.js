@@ -204,6 +204,7 @@ export function istLeerePlanung(l){
   if (!l || typeof l !== 'object') return true;
   const t = (v)=> String(v ?? '').trim();
   if (t(l.topic) || t(l.objectives) || t(l.homework) || t(l.notes) || t(l.progressionNote)) return false;
+  if (t(l.competencyGain)) return false;
   if (t(l.primaryCompetency)) return false;
   if (Array.isArray(l.competencies) && l.competencies.length) return false;
   if (Array.isArray(l.successCriteria) && l.successCriteria.length) return false;
@@ -251,6 +252,7 @@ export function rahmenStunde(lesson, { jetzt = new Date().toISOString() } = {}){
   return {
     ...l,
     topic: '', objectives: '', homework: '', notes: '', progressionNote: '',
+    competencyGain: '',
     phases: [], files: [], links: [],
     sequenceId: '', primaryCompetency: '', competencies: [],
     successCriteria: [], speechActs: [],

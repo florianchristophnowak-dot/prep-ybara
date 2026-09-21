@@ -47,6 +47,15 @@ import {
   istLeereAufgabe, istLeereMittel, istLeererScaffold, hatAufgabenDetails, hatFachdidaktik,
   scaffoldsDerStunde, sequenzProgression,
 } from './didaktik.js';
+/* Die zweite Darstellung einer Sequenz: Datum (Minuten), Stundenthema,
+   zentraler Kompetenzzuwachs, Funktion innerhalb der Progression. Sie
+   steht neben der sprachlichen Progression, nicht an ihrer Stelle. */
+import {
+  DARSTELLUNGEN, DARSTELLUNG_REIHE, DARSTELLUNG_SPRACHLICH,
+  normalisiereDarstellung, darstellungDerSequenz,
+  datumLabel, zuwachsQuelleName,
+  reihenZeilen, reihenSumme, reihenSummeLabel,
+} from './reihenuebersicht.js';
 import {
   SLOT_MIN, MAX_BLOCK_SPAN, MIN_PHASE_MIN,
   normalisiereBlockSpan, blockSpanOf, lessonTotalMin, lessonKey, belegteSlots,
@@ -1234,6 +1243,15 @@ function defaultLesson(){
        sie erscheint allein in der Progressionsansicht. */
     progressionNote: '',
 
+    /* Der zentrale Kompetenzzuwachs dieser Stunde – die dritte Spalte
+       der Reihenübersicht. Wie die Progressionsnotiz beschreibt er die
+       Stunde IN ihrer Reihe und liegt trotzdem in der Stunde: nur so
+       übersteht er das Verschieben, Kopieren und Übernehmen in eine
+       Vorlage. Bleibt er leer, wird nichts erfunden – die Ansicht zeigt
+       hilfsweise das Lernziel oder die Schwerpunktkompetenz und sagt
+       dazu, woher die Angabe stammt. */
+    competencyGain: '',
+
     /* Planungsprofil und Exportlayout dieser Stunde.
 
        Das Profil bestimmt, welche Phasenfelder beim Planen sichtbar
@@ -1655,6 +1673,7 @@ function verbindeStunden(ersteRaw, zweiteRaw){
       other: text(mittelA.other, mittelB.other),
     }),
     progressionNote: text(a.progressionNote, b.progressionNote, ' · '),
+    competencyGain: text(a.competencyGain, b.competencyGain, ' · '),
     /* Die Phasen behalten ihre Kennungen. Nur so bleiben die
        phasenweisen Nachbereitungen beider Stunden gültig. */
     phases: normalizePhases([...(a.phases || []), ...(b.phases || [])], TOTAL_MIN * span),
@@ -1745,6 +1764,7 @@ function normalizeLesson(lesson){
     speechActs: normalisiereSprechabsichten(l.speechActs),
     languageResources: normalisiereMittel(l.languageResources),
     progressionNote: String(l.progressionNote || '').trim(),
+    competencyGain: String(l.competencyGain || '').trim(),
     /* Unbekanntes fällt auf "standard" zurück – nie auf einen Fehler.
        Das eigene Layout bleibt leer, solange keines gewählt wurde. */
     planningProfile: normalisiereProfilId(l.planningProfile),
@@ -3245,23 +3265,122 @@ function LessonReviewView({
 }
 
 /* ============================================================
-   Progression einer Sequenz
+   Eine Sequenz, zwei Darstellungen
 
-   Sie zeigt, wie sich das sprachliche Handeln über die Sequenz
-   entwickelt – und speist sich vollständig aus dem, was in den Stunden
-   ohnehin steht. Es wird nichts doppelt eingegeben; die einzige eigene
-   Angabe ist die freie Notiz je Stunde, und die liegt in der Stunde.
+   Die SPRACHLICHE PROGRESSION zeigt, wie sich das sprachliche Handeln
+   über die Sequenz entwickelt – und speist sich vollständig aus dem,
+   was in den Stunden ohnehin steht. Es wird nichts doppelt eingegeben;
+   die einzige eigene Angabe ist die freie Notiz je Stunde, und die
+   liegt in der Stunde.
 
-   Was sie ausdrücklich NICHT tut: bewerten. Keine Reihenfolgeprüfung,
+   Die REIHENÜBERSICHT beschreibt dieselben Stunden über den Aufbau der
+   Reihe: Datum (Anzahl der Minuten), Stundenthema, zentraler
+   Kompetenzzuwachs, Funktion innerhalb der Progression – die Form, in
+   der Reihenpläne und Lernfeldplanungen geschrieben sind. Welche von
+   beiden gilt, entscheidet die Sequenz (siehe reihenuebersicht.js).
+
+   Was beide ausdrücklich NICHT tun: bewerten. Keine Reihenfolgeprüfung,
    kein Hinweis auf angeblich fehlende Progression, keine Ampel, kein
    Wert. Ob eine Sequenz didaktisch trägt, entscheidet die Lehrkraft;
    die App legt ihr die eigenen Angaben nebeneinander.
    ============================================================ */
+/* Die Reihenübersicht: Datum (Anzahl der Minuten), Stundenthema,
+   zentraler Kompetenzzuwachs, Funktion innerhalb der Progression.
+
+   Sie ist zugleich Darstellung UND Erfassung. Drei der vier Spalten
+   sind Eingabefelder: wer eine Reihe plant, schreibt sie hier in einem
+   Zug durch, statt jede Stunde einzeln zu öffnen. Geschrieben wird
+   dabei in dieselben Felder wie überall sonst – die Tabelle ist ein
+   zweiter Zugang zu den Angaben, keine zweite Ablage.
+
+   Das Datum bleibt Anzeige: wann eine Stunde stattfindet, entscheidet
+   der Stundenplan. Verschoben wird mit dem Kalendersymbol daneben, mit
+   Vorschau – nie durch Überschreiben eines Datums in einer Tabelle. */
+function ReihenTabelle({ zeilen, onOpenLesson, onChangeThema, onChangeZuwachs,
+                         onChangeFunktion, onVerschiebenAb }){
+  return (
+    <div className="progScroll">
+      <table className="progTable reihenTable">
+        <thead>
+          <tr>
+            <th scope="col" className="reihenDatum">Datum (Minuten)</th>
+            <th scope="col">Stundenthema</th>
+            <th scope="col">Zentraler Kompetenzzuwachs</th>
+            <th scope="col">Funktion innerhalb der Progression</th>
+          </tr>
+        </thead>
+        <tbody>
+          {zeilen.map((z)=>(
+            <tr key={z.key}>
+              <th scope="row" className="reihenDatum">
+                <div className="muted small">{z.nummer}. Stunde der Reihe</div>
+                <button className="linkBtn" onClick={()=>onOpenLesson(z)}
+                        title="Stunde öffnen">{datumLabel(z.dateISO, z.minuten)}</button>
+                {typeof onVerschiebenAb === 'function' ? (
+                  <button
+                    className="iconBtn"
+                    title="Ab dieser Stunde verschieben"
+                    aria-label={`Ab Stunde ${z.nummer} verschieben`}
+                    onClick={()=>onVerschiebenAb(z)}
+                  ><CalendarClock {...ICON_SM} /></button>
+                ) : null}
+              </th>
+              <td>
+                <textarea
+                  className="input reihenFeld"
+                  rows={2}
+                  value={z.thema}
+                  onChange={(e)=>onChangeThema(z, e.target.value)}
+                  placeholder="Worum es in dieser Stunde geht"
+                  aria-label={`Stundenthema der ${z.nummer}. Stunde`}
+                />
+              </td>
+              <td>
+                <textarea
+                  className="input reihenFeld"
+                  rows={3}
+                  value={z.eigenerZuwachs}
+                  onChange={(e)=>onChangeZuwachs(z, e.target.value)}
+                  placeholder="Die Lernenden …"
+                  aria-label={`Zentraler Kompetenzzuwachs der ${z.nummer}. Stunde`}
+                />
+                {/* Steht nichts im Feld, tritt hilfsweise etwas ein, das
+                    ohnehin in der Stunde steht – sichtbar geliehen, damit
+                    es nicht wie eine getroffene Aussage aussieht. */}
+                {!z.eigenerZuwachs && z.zuwachs.text ? (
+                  <div className="reihenAnleihe muted small">
+                    {z.zuwachs.text}
+                    <span className="reihenQuelle"> ({zuwachsQuelleName(z.zuwachs.quelle)})</span>
+                  </div>
+                ) : null}
+              </td>
+              <td>
+                <textarea
+                  className="input reihenFeld"
+                  rows={3}
+                  value={z.funktion}
+                  onChange={(e)=>onChangeFunktion(z, e.target.value)}
+                  placeholder="z. B. erarbeitet die Grundlage für die Zielaufgabe"
+                  aria-label={`Funktion der ${z.nummer}. Stunde innerhalb der Progression`}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 /* Eine geöffnete Sequenz. Hier – und nur hier – steht der Export einer
    konkreten Sequenz: ein dezentes "Exportieren ▾" oben rechts, in
    derselben Zeile wie die übrigen Aktionen. */
-function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, onOpenLessons,
+function SequenceProgressionView({ sequenz, zeilen, reihe = [], summe = null,
+                                   darstellung = DARSTELLUNG_SPRACHLICH, onChangeDarstellung,
+                                   onOpenLesson, onChangeNote, onChangeThema, onChangeZuwachs,
+                                   onOpenLessons,
                                    onExportDocx, onExportPdf, onVerschieben, onVerschiebenAb }){
+  const istReihe = darstellung === DARSTELLUNG_REIHE;
   const [exportOffen, setExportOffen] = useState(false);
   const exportRef = useRef(null);
   useEffect(()=>{
@@ -3291,9 +3410,32 @@ function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, 
         <div>
           <h2 className="dialogTitle">{sequenz?.name || 'Sequenz'}</h2>
           <p className="muted small" style={{margin:0}}>
-            Wie sich das sprachliche Handeln über die Sequenz entwickelt – aus den
-            Angaben der einzelnen Stunden.
+            {istReihe
+              ? 'Wie die Reihe aufgebaut ist – Datum, Thema, Kompetenzzuwachs und die Funktion jeder Stunde. Die Felder lassen sich hier direkt ausfüllen.'
+              : 'Wie sich das sprachliche Handeln über die Sequenz entwickelt – aus den Angaben der einzelnen Stunden.'}
           </p>
+          {/* Der Umfang der Reihe: gezählt, nicht bewertet. */}
+          {istReihe && summe && summe.termine > 0 ? (
+            <p className="muted small" style={{margin:'4px 0 0'}}>{reihenSummeLabel(summe)}</p>
+          ) : null}
+          {/* Zwei Darstellungen derselben Reihe. Die Wahl gilt nur für
+              diese Sequenz und ändert keine einzige Angabe – sie
+              entscheidet allein darüber, welche Spalten zu sehen sind
+              und was ein Export ausgibt. */}
+          {typeof onChangeDarstellung === 'function' ? (
+            <div className="darstellungWahl" role="group" aria-label="Darstellung dieser Reihe">
+              {DARSTELLUNGEN.map((d)=>(
+                <button
+                  key={d.id}
+                  type="button"
+                  className={`btn btnMini${darstellung === d.id ? ' primary' : ''}`}
+                  aria-pressed={darstellung === d.id}
+                  title={d.spalten}
+                  onClick={()=>onChangeDarstellung(d.id)}
+                >{d.name}</button>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="row wrap" style={{gap:8}}>
           <button className="btn" onClick={onOpenLessons}>Stunden im Makroplan</button>
@@ -3350,6 +3492,15 @@ function SequenceProgressionView({ sequenz, zeilen, onOpenLesson, onChangeNote, 
       {zeilen.length === 0 ? (
         <EmptyState
           text="Sobald dieser Sequenz Stunden zugeordnet sind, entsteht hier ihre Abfolge."
+        />
+      ) : istReihe ? (
+        <ReihenTabelle
+          zeilen={reihe}
+          onOpenLesson={onOpenLesson}
+          onChangeThema={onChangeThema}
+          onChangeZuwachs={onChangeZuwachs}
+          onChangeFunktion={onChangeNote}
+          onVerschiebenAb={onVerschiebenAb}
         />
       ) : (
         <div className="progScroll">
@@ -4245,6 +4396,10 @@ function ensureDbShape(raw){
     /* Zielaufgabe der Sequenz. Dieselbe Form wie die kommunikative
        Aufgabe einer Stunde – dieselben Bausteine bearbeiten beides. */
     s.finalTask = normalisiereAufgabe(s.finalTask);
+    /* Die gewählte Darstellung. Leer heisst „nicht entschieden" – dann
+       gilt die Voreinstellung, und eine Sequenz aus einer früheren
+       Fassung verhält sich unverändert. */
+    s.progressionLayout = normalisiereDarstellung(s.progressionLayout);
   }
 
   /* Vorlagen angleichen.
@@ -7645,6 +7800,7 @@ const deleteTodo = (id) => {
       speechActs: normalisiereSprechabsichten(lesson.speechActs),
       languageResources: normalisiereMittel(lesson.languageResources),
       progressionNote: String(lesson.progressionNote || '').trim(),
+      competencyGain: String(lesson.competencyGain || '').trim(),
       /* Die Dauer der Einheit. Eine Doppelstunde bleibt beim Speichern
          als Vorlage eine Doppelstunde – und wird beim Einsetzen wieder
          zu einer, wenn dort zwei Plätze frei sind. */
@@ -7758,6 +7914,7 @@ const deleteTodo = (id) => {
     const hasMeaningfulPhase = (l.phases || []).some(p => (p.socialForm || '').trim() || (p.content || '').trim());
     const hasDidaktik = (l.successCriteria || []).length > 0
       || (l.progressionNote || '').trim().length > 0
+      || (l.competencyGain || '').trim().length > 0
       || hatFachdidaktik(l);
     return !hasText && !hasComps && !hasMeaningfulPhase && !hasDidaktik;
   };
@@ -7867,6 +8024,7 @@ const deleteTodo = (id) => {
         nextLesson.speechActs = normalisiereSprechabsichten(bp.speechActs);
         nextLesson.languageResources = normalisiereMittel(bp.languageResources);
         nextLesson.progressionNote = String(bp.progressionNote || '').trim();
+        nextLesson.competencyGain = String(bp.competencyGain || '').trim();
         nextLesson.sequenceId = seqId;
         nextLesson.updatedAt = new Date().toISOString();
 
@@ -7961,7 +8119,12 @@ const doExportDocx = async (html, suggestedName) => {
         sequence: seq,
         occurrences: occ,
         schoolCalendar,
-        groupColors: db?.groupColors || {}
+        groupColors: db?.groupColors || {},
+        /* Ausgegeben wird, was auf dem Bildschirm steht: die
+           Übersichtstabelle folgt der gewählten Darstellung. Die
+           Verlaufspläne der einzelnen Stunden stehen in beiden Fällen
+           darunter – sie gehören zum Sequenzexport, nicht zur Wahl. */
+        darstellung: darstellungDerSequenz(seq, { languageMode }),
       });
       const safe = String(seq.name || 'Sequenz').replace(/[\\/:*?"<>|]/g, '_').trim() || 'Sequenz';
       raus(html, ziel === 'docx' ? `Sequenz_${safe}.doc` : `Sequenz_${safe}.pdf`);
@@ -8201,17 +8364,37 @@ const doExportDocx = async (html, suggestedName) => {
     }
     if (view.name === 'progression') {
       const seq = sequences?.[view.sequenceId] || null;
-      const zeilen = seq ? sequenzProgression(sequenceOccurrences(db, view.sequenceId)) : [];
+      /* Beide Darstellungen lesen aus derselben Quelle – den Vorkommen
+         der Sequenz in zeitlicher Reihenfolge. Gerechnet wird beides,
+         gezeigt nur eines: so bleibt der Wechsel ein Wechsel der
+         Ansicht und nicht der Daten. */
+      const vorkommen = seq ? sequenceOccurrences(db, view.sequenceId) : [];
+      const zeilen = sequenzProgression(vorkommen);
+      const reihe = reihenZeilen(vorkommen);
       return (
         <SequenceProgressionView
           sequenz={seq}
           zeilen={zeilen}
+          reihe={reihe}
+          summe={reihenSumme(reihe)}
+          darstellung={darstellungDerSequenz(seq, { languageMode })}
+          onChangeDarstellung={(id)=>updateSequence(view.sequenceId, {
+            progressionLayout: normalisiereDarstellung(id),
+          })}
           onOpenLesson={(z)=>setView({
             name:'lesson', weekStart: z.weekStart, dayIndex: z.dayIndex, slotIndex: z.slotIndex,
           })}
           onChangeNote={(z, wert)=>{
             const l = getLessonAt(z.weekStart, z.dayIndex, z.slotIndex);
             updateLessonAt(z.weekStart, z.dayIndex, z.slotIndex, { ...l, progressionNote: wert });
+          }}
+          onChangeThema={(z, wert)=>{
+            const l = getLessonAt(z.weekStart, z.dayIndex, z.slotIndex);
+            updateLessonAt(z.weekStart, z.dayIndex, z.slotIndex, { ...l, topic: wert });
+          }}
+          onChangeZuwachs={(z, wert)=>{
+            const l = getLessonAt(z.weekStart, z.dayIndex, z.slotIndex);
+            updateLessonAt(z.weekStart, z.dayIndex, z.slotIndex, { ...l, competencyGain: wert });
           }}
           onOpenLessons={()=>setView({
             name:'macro', weekStart: view.weekStart,
@@ -10040,6 +10223,7 @@ function LessonView({
     speechActs: normalisiereSprechabsichten(l.speechActs),
     languageResources: normalisiereMittel(l.languageResources),
     progressionNote: String(l.progressionNote || ''),
+    competencyGain: String(l.competencyGain || ''),
     planningProfile: normalisiereProfilId(l.planningProfile),
     customPlanningFields: normalisiereFeldListe(l.customPlanningFields),
     preferredExportLayout: l.preferredExportLayout ? normalisiereLayoutId(l.preferredExportLayout) : '',
@@ -10092,6 +10276,7 @@ function LessonView({
       speechActs: normalisiereSprechabsichten(n.speechActs),
       languageResources: normalisiereMittel(n.languageResources),
       progressionNote: String(n.progressionNote || ''),
+      competencyGain: String(n.competencyGain || ''),
       planningProfile: normalisiereProfilId(n.planningProfile),
       customPlanningFields: normalisiereFeldListe(n.customPlanningFields),
       preferredExportLayout: String(n.preferredExportLayout || ''),
@@ -15649,7 +15834,8 @@ function buildWeekPdfHtml({ weekStart, week, sequences, schoolCalendar, groupCol
 }
 
 
-function buildSequencePdfHtml({ sequence, occurrences, schoolCalendar, groupColors }){
+function buildSequencePdfHtml({ sequence, occurrences, schoolCalendar, groupColors,
+                               darstellung = DARSTELLUNG_SPRACHLICH }){
   // Makro-/Sequenz-Export: nutzt dieselbe Verlaufsplanungs-Tabelle wie die Einzelstundenansicht,
   // aber kompakter (damit mehrere Stunden auf eine A4-Hochkant-Seite passen können).
   const seqName = sequence?.name || 'Sequenz';
@@ -15672,7 +15858,41 @@ function buildSequencePdfHtml({ sequence, occurrences, schoolCalendar, groupColo
   </section>`;
   })();
 
+  /* Die Reihenübersicht als Ausgabe: dieselben vier Spalten wie auf dem
+     Bildschirm. Anders als die sprachliche Progression wird sie auch
+     dann gedruckt, wenn nur Termine und Themen stehen – genau das ist
+     eine Reihen- oder Lernfeldplanung im ersten Entwurf. */
+  const reihenuebersicht = (()=>{
+    if (darstellung !== DARSTELLUNG_REIHE) return '';
+    const zeilen = reihenZeilen(occurrences || []);
+    if (!zeilen.length) return '';
+    const reihen = zeilen.map((z)=>`
+      <tr>
+        <td class="rDatum">${escapeHtml(datumLabel(z.dateISO, z.minuten))}</td>
+        <td>${escapeHtml(z.thema)}</td>
+        <td>${escapeHtml(z.zuwachs.text)}${(z.zuwachs.quelle && z.zuwachs.quelle !== 'eigen')
+          ? `<div class="rQuelle">${escapeHtml(zuwachsQuelleName(z.zuwachs.quelle))}</div>` : ''}</td>
+        <td>${escapeHtml(z.funktion)}</td>
+      </tr>`).join('');
+    return `
+  <section class="prog">
+    <div class="zielKopf">Reihenübersicht · ${escapeHtml(reihenSummeLabel(reihenSumme(zeilen)))}</div>
+    <table class="progT">
+      <thead>
+        <tr>
+          <th class="rDatum">Datum (Minuten)</th>
+          <th>Stundenthema</th>
+          <th>Zentraler Kompetenzzuwachs</th>
+          <th>Funktion innerhalb der Progression</th>
+        </tr>
+      </thead>
+      <tbody>${reihen}</tbody>
+    </table>
+  </section>`;
+  })();
+
   const progression = (()=>{
+    if (darstellung === DARSTELLUNG_REIHE) return '';
     const zeilen = sequenzProgression(occurrences || []);
     // Ohne fachdidaktische Angaben wiederholte die Tabelle nur die Themen.
     const traegt = zeilen.some(z => z.ausAufgabe || z.sprechabsichten.length
@@ -15821,12 +16041,15 @@ function buildSequencePdfHtml({ sequence, occurrences, schoolCalendar, groupColo
     .progT th{background:#e5e7eb; font-weight:700}
     .pNr{width:12mm; white-space:nowrap}
     .pNotiz{color:#6b7280; font-style:italic; margin-top:0.5mm}
+    .rDatum{width:34mm}
+    .rQuelle{color:#6b7280; font-style:italic; margin-top:0.5mm; font-size:8px}
   </style>
 </head>
 <body>
   <h1>Sequenz: ${escapeHtml(seqName)}</h1>
   <div class="meta">${count} Unterrichtsstunde(n) · Export aus Prép-ybara</div>
   ${zielaufgabe}
+  ${reihenuebersicht}
   ${progression}
   ${count ? blocks : `<div class="muted">Keine Stunden dieser Sequenz im aktuellen Plan gefunden.</div>`}
 </body>

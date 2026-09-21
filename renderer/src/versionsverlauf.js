@@ -197,6 +197,7 @@ const STUNDEN_FELDER = [
   ['speechActs', 'Sprechabsichten'],
   ['languageResources', 'Sprachliche Mittel'],
   ['progressionNote', 'Progressionsnotiz'],
+  ['competencyGain', 'Zentraler Kompetenzzuwachs'],
   ['review', 'Nachbereitung'],
   ['blockSpan', 'Doppelstunde'],
 ];

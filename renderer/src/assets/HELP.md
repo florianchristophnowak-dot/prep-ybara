@@ -194,6 +194,37 @@ Filter:
 - **Sequenzen verwalten** dient dem Organisieren. Jede Zeile hat ein **⋯‑Menü**: Öffnen, Duplizieren, Umbenennen, Als Vorlage speichern, Dateien, Exportieren (Word/PDF), Löschen.
 - Ist eine Sequenz geöffnet (Progressionsansicht), steht oben rechts **Exportieren ▾** mit Word und PDF.
 
+### Zwei Darstellungen einer Reihe
+
+Eine geöffnete Sequenz lässt sich auf zwei Weisen lesen. Oben stehen dafür zwei Knöpfe;
+die Wahl gilt **nur für diese Sequenz** und ändert **keine einzige Angabe**.
+
+- **Sprachliche Progression** – die bisherige Ansicht: Sprachhandlung/Aufgabe, Kompetenz,
+  Sprechabsichten, sprachliche Mittel, Hilfen, Notiz.
+- **Reihenübersicht** – die Darstellung, in der Reihenpläne und Lernfeldplanungen
+  geschrieben sind: **Datum (Minuten)** · **Stundenthema** · **Zentraler Kompetenzzuwachs** ·
+  **Funktion innerhalb der Progression**.
+
+Welche Darstellung eine Sequenz zuerst zeigt, hängt vom **Fremdsprachenmodus** ab: ist er an,
+bleibt es bei der sprachlichen Progression, sonst beginnt die Sequenz mit der Reihenübersicht.
+Sobald du einmal wählst, gilt deine Wahl.
+
+Die Reihenübersicht ist zugleich eine **andere Art der Erfassung**: Stundenthema, zentraler
+Kompetenzzuwachs und Funktion sind Eingabefelder. Eine ganze Reihe lässt sich hier in einem
+Zug durchschreiben, ohne jede Stunde einzeln zu öffnen. Geschrieben wird dabei in dieselben
+Felder wie überall sonst.
+
+- **Datum (Minuten)** wird gelesen, nicht eingegeben: 45 Minuten je Stundenplatz, bei einer
+  Doppelstunde 90. Verschoben wird mit dem Kalendersymbol daneben – mit Vorschau (siehe 4d).
+- Über der Tabelle steht der **Umfang der Reihe**: Termine, Unterrichtsstunden, Minuten.
+- **Funktion innerhalb der Progression** ist dasselbe Feld wie die **Notiz** der sprachlichen
+  Progression. Wer die Darstellung wechselt, verliert nichts.
+- Ist der **zentrale Kompetenzzuwachs** noch leer, zeigt die Zelle hilfsweise dein **Lernziel**
+  oder die **Schwerpunktkompetenz** der Stunde – kursiv und mit dem Vermerk, woher die Angabe
+  stammt. Erfunden wird nichts, und in das Eingabefeld geschrieben wird es auch nicht.
+- Der **Export** folgt der gewählten Darstellung: Word und PDF geben die Tabelle aus, die du
+  auf dem Bildschirm siehst. Die Verlaufspläne der einzelnen Stunden stehen wie bisher darunter.
+
 ---
 
 ## 4b) Jahresgrobplanung

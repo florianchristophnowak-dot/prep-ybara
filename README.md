@@ -89,6 +89,36 @@ npm run dist:portable
 - Zu finden über **Versionsverlauf** in der Stunde und im ⋯-Menü einer Sequenz;
   leeren lässt er sich in den **Einstellungen**.
 
+## Reihen- und Lernfeldplanung (zweite Darstellung)
+- Eine geöffnete Sequenz kennt **zwei Darstellungen** derselben Stunden. Die Wahl steht in der
+  Sequenz (`sequences[id].progressionLayout`), gilt nur für sie und ändert **keine einzige
+  Angabe** – sie entscheidet allein über Spalten und Export.
+  - `sprachhandlung` – die bisherige Progression: Sprachhandlung/Aufgabe, Kompetenz,
+    Sprechabsichten, sprachliche Mittel, Hilfen, Notiz.
+  - `reihe` – die **Reihenübersicht**, wie Reihenpläne und Lernfeldplanungen geschrieben sind:
+    **Datum (Anzahl der Minuten) · Stundenthema · Zentraler Kompetenzzuwachs · Funktion
+    innerhalb der Progression**.
+- Ohne Angabe (jede Sequenz aus einer früheren Fassung) entscheidet der Fremdsprachenmodus:
+  mit ihm bleibt es beim bisherigen Verhalten, ohne ihn beginnt eine Sequenz mit der
+  Reihenübersicht.
+- Die Reihenübersicht ist zugleich eine **andere Art der Erfassung**: Stundenthema, zentraler
+  Kompetenzzuwachs und Funktion sind Eingabefelder, eine ganze Reihe lässt sich in einem Zug
+  durchschreiben. Geschrieben wird in dieselben Felder wie überall sonst – kein zweiter
+  Datenbestand.
+- Drei der vier Spalten stehen bereits in der Stunde: Datum und Minuten ergeben sich aus dem
+  Stundenplanplatz und der Spanne (45 Minuten je Platz, 90 bei einer Doppelstunde), das
+  Stundenthema ist `topic`, und die **Funktion innerhalb der Progression IST** die
+  Progressionsnotiz (`progressionNote`) – dasselbe Feld, das die sprachliche Darstellung
+  „Notiz" nennt.
+- Neu ist allein der zentrale Kompetenzzuwachs (`competencyGain`), ein optionales Feld neben
+  den bestehenden. Bleibt es leer, wird nichts erfunden: die Ansicht zeigt hilfsweise das
+  Lernziel oder die Schwerpunktkompetenz und nennt die Herkunft. In das Eingabefeld wandert
+  eine solche Anleihe nie.
+- Alte Datenbanken und Backups ohne diese Felder funktionieren unverändert; eine Stunde ohne
+  `competencyGain` und eine Sequenz ohne `progressionLayout` sind gültig wie bisher.
+- Der Export (Word/PDF) folgt der gewählten Darstellung; die Verlaufspläne der einzelnen
+  Stunden stehen wie bisher darunter.
+
 ## PDF
 - In der Einzelstundenansicht: **PDF speichern** (wird als A4-PDF erzeugt)
 
@@ -115,6 +145,8 @@ renderer/          Desktop-App (Electron + Browser-Fassung)   – unverändert
   src/versionsverlauf.js    Versionsverlauf: Einträge, Bündelung, Aufbewahrung, Wiederherstellung
   src/verlauf-speicher.js   dessen Ablage (lädt erst bei Bedarf, schreibt der Reihe nach)
   src/verlauf-ansicht.jsx   Dialog: Fassungen ansehen und zurückholen
+  src/reihenuebersicht.js   zweite Darstellung einer Sequenz: Datum (Minuten), Thema,
+                            Kompetenzzuwachs, Funktion in der Progression
   src/jahresbalken.js       optionale Verbindung von Jahresbalken und Sequenzen
   src/verschieben.js        Verschiebevorschläge: Ferien, Doppelstunden, Konflikte, Atomarität
   src/verschieben-dialog.jsx  Vorschau und Ausführung des Verschiebens
@@ -134,7 +166,7 @@ shared/            von beiden benutzt
   datum.js         Datumsrechnung
 tests/             node:test – Format, Import, Pocket-Modell, Doppelstunden,
                    Versionsverlauf, Jahresbalken, Verschieben, Suche, Onboarding,
-                   Stundenplanvorlagen
+                   Stundenplanvorlagen, Reihenübersicht
 ```
 
 Geteilt werden **Format, Kennungen und Prüfung** – keine Oberflächenbausteine.

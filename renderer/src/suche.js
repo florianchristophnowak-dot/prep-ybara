@@ -126,6 +126,7 @@ function felderAusStunde(l){
     feld('Hausaufgaben', l?.homework),
     feld('Notizen', l?.notes),
     feld('Progressionsnotiz', l?.progressionNote),
+    feld('Zentraler Kompetenzzuwachs', l?.competencyGain),
     feld('Kompetenz', l?.primaryCompetency),
     feld('Kompetenzen', (Array.isArray(l?.competencies) ? l.competencies : []).join(', ')),
     feld('Sprechabsichten', normalisiereSprechabsichten(l?.speechActs).join(', ')),

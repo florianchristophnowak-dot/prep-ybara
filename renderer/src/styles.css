@@ -870,6 +870,19 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .progHilfenListe { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .progHilfenListe li { display: flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
 
+/* Die Reihenübersicht – dieselbe Tabelle, vier andere Spalten. Sie ist
+   breiter angelegt als die sprachliche Progression: hier stehen Sätze,
+   keine Etiketten. */
+.darstellungWahl { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+/* Feste Spaltenbreiten: die Datumsspalte steht, den Rest teilen sich
+   die drei Textspalten zu gleichen Teilen. */
+.reihenTable { min-width: 820px; table-layout: fixed; }
+.reihenDatum { width: 190px; white-space: nowrap; }
+.reihenDatum .linkBtn { display: inline-block; margin: 2px 0; white-space: nowrap; }
+.reihenFeld { font-size: var(--fs-sm); min-width: 160px; min-height: 0; resize: vertical; line-height: 1.4; }
+.reihenAnleihe { margin-top: 6px; font-style: italic; }
+.reihenQuelle { font-style: normal; }
+
 /* Eine Zahl, die sich anklicken lässt, ohne wie ein Knopf auszusehen. */
 .linkBtn {
   background: none; border: none; padding: 0; cursor: pointer;

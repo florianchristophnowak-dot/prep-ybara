@@ -106,6 +106,12 @@ export function createElectronPlatform(api){
          Oberfläche ihn gar nicht erst an – statt nach dem Klick zu
          melden, dass nichts gespeichert wurde. */
       versionHistory: typeof api.getHistory === 'function' && typeof api.setHistory === 'function',
+      /* Das vollständige Löschen braucht den Hauptprozess: Nur dort
+         sind die Store-Dateien zu erreichen. Ältere Preload-Brücken
+         kennen den Weg nicht – dann bietet die Oberfläche ihn erst gar
+         nicht an, statt hinterher zu melden, dass nichts gelöscht
+         wurde. */
+      datenLoeschen: typeof api.resetAll === 'function',
     },
 
     loadDB,
@@ -121,6 +127,16 @@ export function createElectronPlatform(api){
     exportArchive: (payload) => api.exportArchive(payload),
     exportTemplates: () => api.exportTemplates(),
     importTemplates: () => api.importTemplates(),
+
+    /* Alles löschen. Der Zwischenspeicher dieser Schicht muss mit:
+       Sonst hielte er Wochen für "schon geschrieben", die es nicht mehr
+       gibt, und der nächste Schreibvorgang liesse sie aus. */
+    resetAll: async () => {
+      const res = await api.resetAll();
+      lastWeeks = new Map();
+      lastMeta = null;
+      return res || { ok: true, fehler: [] };
+    },
 
     exportPocketProfile: (payload) => api.exportPocketProfile(payload),
     importPocketFile: () => api.importPocketFile(),

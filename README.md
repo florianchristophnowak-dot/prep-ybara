@@ -43,6 +43,26 @@ npm run dist:portable
   - **Backup exportieren** → JSON-Datei speichern
   - **Backup importieren** → JSON-Datei wiederherstellen
 
+## Alle Daten löschen (Zurücksetzen auf null)
+- **Einstellungen → Alle Daten löschen** setzt die App auf den Stand einer frischen
+  Einrichtung zurück. Der Weg ist absichtlich mehrstufig – er ist unumkehrbar.
+- Vier Sicherungen, damit es nicht versehentlich geschieht: Der Dialog **zählt** auf, was
+  verloren geht (Stunden, Wochen, Lerngruppen, Sequenzen, Vorlagen, Balken, To-dos,
+  Kalendereinträge, archivierte Schuljahre); er nennt das **Datum des letzten Backups** und
+  bietet an, sofort eines zu exportieren; ein **Kontrollkästchen** muss gesetzt und das Wort
+  **ALLES LÖSCHEN** abgetippt werden. Der Fokus liegt auf *Abbrechen*.
+- Geleert werden alle Ablagen der App – Desktop: `prepybara`, die frühere Ablage `lehrerplan`
+  und `prepybara-verlauf`; Browser: die IndexedDB-Datenbanken `prepybara`,
+  `prepybara-verlauf` und `prepybara-dateien` sowie der alte `localStorage`-Eintrag. Danach
+  startet die App neu.
+- **Nicht** angetastet werden Dateien ausserhalb der App: exportierte Backups und Vorlagen,
+  PDF-/Word-Ausgaben sowie sämtliche angehängten Materialien – von ihnen verschwinden nur die
+  Verweise. Desktop-App und Browser-Version bleiben getrennt; gelöscht wird nur die Fassung,
+  in der man sich befindet.
+- Die Regeln dafür stehen rein und geprüft in `renderer/src/zuruecksetzen.js`
+  (`tests/zuruecksetzen.test.mjs`); das Löschen selbst je Plattform in
+  `renderer/src/platform/*` bzw. im IPC-Kanal `data:reset`.
+
 ## Meine Unterrichtszeiten (Stundenplanvorlagen)
 - Eine **Wochenvorlage** (`timetableTemplates`) beschreibt die wiederkehrende Struktur:
   Wochentag, Stundenplatz, Klasse/Kurs, Fach, Raum, Einzel- oder Doppelstunde. Planungsinhalte
@@ -156,6 +176,8 @@ renderer/          Desktop-App (Electron + Browser-Fassung)   – unverändert
   src/onboarding-ansicht.jsx  Willkommensansicht, Coachmark, Checkliste
   src/stundenplan.js        Wochenvorlagen, Stundenplanmodelle, A-/B-Rhythmus, Anwenden
   src/stundenplan-ansicht.jsx  Verwaltung, Vorlageneditor, Assistent, Vorschau-Dialoge
+  src/kontextmenue.js       wohin ein aufgeklapptes ⋯-Menü gehört (bleibt immer im Fenster)
+  src/zuruecksetzen.js      alle Daten löschen: Umfang, Bestätigungswort, Freigabe
 electron/          Hauptprozess, Preload, Menü
 pocket/            Prép-ybara Pocket (PWA)
   src/views/       mobile Ansichten
@@ -166,7 +188,7 @@ shared/            von beiden benutzt
   datum.js         Datumsrechnung
 tests/             node:test – Format, Import, Pocket-Modell, Doppelstunden,
                    Versionsverlauf, Jahresbalken, Verschieben, Suche, Onboarding,
-                   Stundenplanvorlagen, Reihenübersicht
+                   Stundenplanvorlagen, Reihenübersicht, Kontextmenü, Zurücksetzen
 ```
 
 Geteilt werden **Format, Kennungen und Prüfung** – keine Oberflächenbausteine.

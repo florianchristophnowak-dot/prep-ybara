@@ -529,6 +529,48 @@ ipcMain.handle('history:set', async (_evt, daten) => {
   }
 });
 
+/* ---- Alle Daten löschen -----------------------------------------------
+
+   Der Gegenstück-Aufruf zu "Einstellungen → Alle Daten löschen". Er
+   tut genau das, was er heisst, und er tut es vollständig:
+
+     prepybara          die Unterrichtsdaten samt Einstellungen
+     lehrerplan         die Ablage aus der Zeit vor der Umbenennung
+     prepybara-verlauf  der Versionsverlauf
+
+   Die alte `lehrerplan`-Ablage ist der Grund, warum das hier stehen
+   muss und nicht im Renderer: readStoredDb() holt von dort, wenn
+   `prepybara` leer ist. Bliebe sie liegen, wäre die gelöschte Planung
+   nach dem nächsten Start zurück – aus einer Ablage, von der die
+   Lehrkraft nie etwas gehört hat.
+
+   Der Zwischenspeicher wird mitgeleert und der noch ausstehende
+   Schreibvorgang abgeblasen: Sonst schriebe der Timer die gerade
+   gelöschten Daten Sekundenbruchteile später wieder hin.
+
+   Was NICHT passiert: exportierte Backups, Vorlagen und die Dateiablage
+   (`files:library-root`) werden nicht angerührt. Das sind Dateien der
+   Lehrkraft, keine Daten der App. */
+ipcMain.handle('data:reset', async () => {
+  const fehler = [];
+
+  // Zuerst den ausstehenden Schreibvorgang abbestellen.
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  dirty = false;
+  cachedDb = defaultDB();
+
+  for (const [name, s] of [['Planung', store], ['frühere Ablage', legacyStore], ['Versionsverlauf', historyStore]]) {
+    try { s.clear(); }
+    catch (e) { fehler.push(`${name}: ${String(e?.message || e)}`); }
+  }
+
+  // Die Grundform gleich festschreiben, damit die Datei nicht fehlt.
+  try { store.set('db', cachedDb); }
+  catch (e) { fehler.push(`Grundform: ${String(e?.message || e)}`); }
+
+  return { ok: fehler.length === 0, fehler };
+});
+
 ipcMain.handle('backup:export', async () => {
   try { flushDB(); } catch {}
   const db = getDB();

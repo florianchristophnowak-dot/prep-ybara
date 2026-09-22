@@ -249,6 +249,10 @@ Verknüpfung verhalten sich genau wie bisher.
   wird aus der Sequenz gelesen: Wird sie umbenannt, steht der neue Name sofort am Balken.
 - Das **⋯‑Menü des Balkens** bietet zusätzlich: **Sequenz öffnen**, **Zeitraum aus Sequenz
   übernehmen**, **Verknüpfung lösen** – dazu wie bisher **Bearbeiten** und **Löschen**.
+  Das Menü erscheint beim Zeigen auf den Balken; auf einem Gerät ohne Maus steht es dauerhaft
+  da. Bei sehr schmalen Balken (ein bis zwei Wochen) sitzt der ⋯‑Knopf **rechts neben** dem
+  Balken – sonst läge er auf den Griffen zum Verlängern. **Doppelklick** auf den Balken
+  öffnet denselben Bearbeiten‑Dialog, der ebenfalls **Löschen** anbietet.
 
 Was dabei ausdrücklich **nicht** passiert:
 
@@ -414,6 +418,32 @@ Wo er liegt und wie lange:
   insgesamt **400 Einträge**. Ältere fallen von selbst weg, ohne die Planung anzutasten.
 - **Einstellungen → Versionsverlauf → Versionsverlauf leeren** räumt ihn von Hand.
 - In der Archivansicht lässt sich der Verlauf ansehen, aber nichts wiederherstellen.
+
+### Alle Daten löschen (die App auf null setzen)
+
+**Einstellungen → Alle Daten löschen** setzt Prép-ybara auf den Stand einer frisch
+eingerichteten App zurück. Gedacht für ein Gerät, das weitergegeben wird, oder für einen
+Neuanfang nach einer Probephase.
+
+**Das lässt sich nicht rückgängig machen** – weder mit Strg+Z noch über den
+Versionsverlauf, denn der wird mitgelöscht. Versehentlich passiert es trotzdem nicht:
+
+1. Der Dialog **zählt auf**, was verschwindet – Stunden, Wochen, Lerngruppen, Sequenzen,
+   Vorlagen, Balken, To-dos, Kalendereinträge und archivierte Schuljahre, jeweils mit Anzahl.
+2. Er sagt, **wann zuletzt ein Backup** exportiert wurde – und bietet an, sofort eines
+   anzulegen. Gab es noch nie eines, steht das als Warnung dort.
+3. Ein **Kontrollkästchen** muss gesetzt werden.
+4. Das Wort **ALLES LÖSCHEN** muss abgetippt werden. Erst dann wird der Löschknopf frei;
+   auf **Abbrechen** liegt der Fokus, nicht auf dem Löschen.
+
+Gelöscht wird alles, was zur App gehört: Wochenplanung, Sequenzen, Vorlagen, Stundenplan,
+Schulkalender, Jahresgrobplanung, archivierte Schuljahre, Einstellungen, der Stand der
+Einführung und der Versionsverlauf. Anschliessend startet Prép-ybara neu und beginnt bei null.
+
+**Nicht** gelöscht werden Dateien ausserhalb der App: exportierte Backups, Vorlagen und
+PDF-/Word-Dateien bleiben liegen, ebenso alle angehängten Unterrichtsmaterialien – von ihnen
+verschwinden nur die Verweise. Auch die jeweils andere Fassung (Desktop-App bzw.
+Browser-Version) ist nicht betroffen; beide teilen ihre Daten ohnehin nicht.
 
 ---
 

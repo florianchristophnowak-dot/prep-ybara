@@ -25,7 +25,7 @@ import {
   createExecutionBridge, requestSnapshotOverChannel, hasDocumentPip,
 } from './web-execution.js';
 import {
-  pickAndStoreFiles, openStoredFile, pruneUnusedHandles, isFileRef,
+  pickAndStoreFiles, openStoredFile, pruneUnusedHandles, isFileRef, leereAlleHandles,
 } from './web-handles.js';
 import { speichereText, waehleTextdatei } from './pocket-files.js';
 
@@ -190,6 +190,48 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
     return parsed;
   };
 
+  /* Alles löschen: die App wieder auf null.
+
+     Angefasst wird jede Ablage, die Prép-ybara im Browser je benutzt
+     hat – und zwar ausdrücklich alle drei, nicht nur die Planung:
+
+       prepybara          die Unterrichtsdaten samt Einstellungen
+       prepybara-verlauf  der Versionsverlauf
+       prepybara-dateien  die Verweise auf angehängte Dateien
+
+     Dazu der alte localStorage-Eintrag aus der Zeit vor IndexedDB. Er
+     wird sonst nirgends mehr gelesen, ausser beim allerersten Start –
+     bliebe er liegen, käme die gelöschte Planung nach dem Zurücksetzen
+     wieder hoch. Das wäre der schlimmste vorstellbare Fehler an dieser
+     Stelle.
+
+     Die Dateien selbst bleiben unberührt: gespeichert waren nur
+     Verweise.
+
+     Fehlschläge werden gesammelt und gemeldet, nicht verschluckt. Wer
+     ein Gerät weitergibt, muss wissen, ob wirklich alles weg ist. */
+  const resetAll = async () => {
+    const fehler = [];
+
+    try {
+      for (const k of await keys(store)) await del(k, store);
+      lastWeeks = new Map();
+      lastMeta = null;
+    } catch (e) { fehler.push(`Planung: ${String(e?.message || e)}`); }
+
+    try { await del(VERLAUF_KEY, verlaufStore); }
+    catch (e) { fehler.push(`Versionsverlauf: ${String(e?.message || e)}`); }
+
+    if (!(await leereAlleHandles())) fehler.push('Verweise auf angehängte Dateien');
+
+    try {
+      localStorage.removeItem(LEGACY_KEY);
+      localStorage.removeItem(`${LEGACY_KEY}__migriert`);
+    } catch { /* Kein localStorage – dann gab es dort auch nichts. */ }
+
+    return { ok: fehler.length === 0, fehler };
+  };
+
   const exportTemplates = async () => {
     const db = await loadDB();
     const templates = db?.sequenceTemplates || {};
@@ -241,6 +283,8 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
       pocketFiles: true,
       // Eigene IndexedDB-Ablage, getrennt von den Unterrichtsdaten.
       versionHistory: true,
+      // Alle Ablagen dieser Anwendung lassen sich leeren.
+      datenLoeschen: true,
     },
 
     loadDB,
@@ -254,6 +298,7 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
     importBackup,
     exportTemplates,
     importTemplates,
+    resetAll,
 
     /* Austausch mit Prép-ybara Pocket. Der Inhalt wird im Renderer
        erzeugt und geprüft; hier geht es nur um Datei rein, Datei raus. */

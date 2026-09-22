@@ -1,4 +1,5 @@
-import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import logo from './assets/logo.webp';
 import eastereggImg from './assets/easteregg.webp';
 import helpMd from './assets/HELP.md?raw';
@@ -73,6 +74,16 @@ import {
   geaenderteFelder, eintraegeFuer, aktuellerStand, wendeAn as wendeVerlaufAn,
 } from './versionsverlauf.js';
 import { erstelleVerlaufSpeicher } from './verlauf-speicher.js';
+/* Wohin ein aufgeklapptes ⋯-Menü gehört. Reine Rechnung, damit die
+   Regel prüfbar bleibt – die Oberfläche setzt sie nur um. */
+import { menuePosition } from './kontextmenue.js';
+/* Die App wieder auf null setzen. Die Bedingungen dafür und die
+   Aufzählung dessen, was verloren geht, stehen im Modul – hier steht
+   nur, wie gefragt wird. */
+import {
+  BESTAETIGUNGSWORT, BLEIBT_ERHALTEN, WEITERE_BEREICHE,
+  darfLoeschen, istLeer, ruecksetzUmfang, umfangZeilen,
+} from './zuruecksetzen.js';
 /* Die optionale Verbindung von Jahresbalken und Sequenzen. Der Balken
    speichert nur die Kennung – alles Weitere wird hieraus gerechnet. */
 import {
@@ -1958,25 +1969,72 @@ function OeffnenKnopf({ onClick, disabled = false, className = 'btn', title, chi
    Abstände und Farben wie die übrigen Bedienelemente und schliesst sich
    bei Klick nach aussen und mit Escape. Einträge sind einfache Objekte
    – `{ label, onSelect }`, `{ trenner: true }` oder ein Eintrag mit
-   `unter: [...]` für eine Untergruppe (z. B. "Exportieren"). */
+   `unter: [...]` für eine Untergruppe (z. B. "Exportieren").
+
+   Das aufgeklappte Menü liegt NICHT im Knopf, sondern als Portal am
+   Seitenende. Der Grund steht in der Jahresgrobplanung: Dort sitzt der
+   Knopf in einem waagerecht scrollenden Band (`overflow-x: auto`,
+   `overflow-y: hidden`) und in einer 48 px hohen Zeile. Ein Menü darin
+   wurde abgeschnitten – bis hin zum Eintrag "Löschen", der dadurch
+   unerreichbar war. Über CSS ist das nicht zu lösen: Ein scrollender
+   Kasten muss seinen Inhalt beschneiden, sonst scrollt er nicht mehr.
+
+   Deshalb wird die Position gemessen statt vererbt: einmal beim
+   Aufklappen und danach bei Rollen und Grössenänderung. Passt das Menü
+   nach unten nicht mehr, klappt es nach oben; reicht auch das nicht,
+   bekommt es eine Höhe und rollt in sich selbst. Weiter als bis an den
+   Fensterrand kommt es nie. */
 function KebabMenu({ eintraege, titel = 'Weitere Aktionen', ausrichtung = 'rechts', knopfKlasse = 'iconBtn' }){
   const [offen, setOffen] = useState(false);
   const wrapRef = useRef(null);
+  const knopfRef = useRef(null);
+  const menuRef = useRef(null);
+  /* null heisst: noch nicht gemessen. Bis dahin bleibt das Menü
+     unsichtbar – es soll nicht erst an der falschen Stelle aufblitzen. */
+  const [pos, setPos] = useState(null);
+
+  const messen = useCallback(()=>{
+    const knopf = knopfRef.current;
+    if (!knopf) return;
+    const r = knopf.getBoundingClientRect();
+    const m = menuRef.current;
+    setPos(menuePosition(
+      { top: r.top, bottom: r.bottom, left: r.left, right: r.right },
+      m ? { breite: m.offsetWidth, hoehe: m.scrollHeight } : null,
+      ausrichtung,
+      { breite: window.innerWidth, hoehe: window.innerHeight },
+    ));
+  }, [ausrichtung]);
+
+  /* Vor dem ersten Bild messen: sonst steht das Menü einen Wimpernschlag
+     lang an der Stelle von vorhin. */
+  useLayoutEffect(()=>{
+    if (!offen) { setPos(null); return; }
+    messen();
+  }, [offen, messen]);
 
   useEffect(()=>{
     if (!offen) return;
     const beiKlick = (e)=>{
-      if (!wrapRef.current) return;
-      if (!wrapRef.current.contains(e.target)) setOffen(false);
+      const imKnopf = wrapRef.current?.contains(e.target);
+      const imMenue = menuRef.current?.contains(e.target);
+      if (!imKnopf && !imMenue) setOffen(false);
     };
     const beiTaste = (e)=>{ if (e.key === 'Escape') setOffen(false); };
+    /* Rollen irgendwo im Baum verschiebt den Knopf – das Menü geht mit.
+       `true` erfasst auch Kästen, die selbst rollen (Jahresplanung). */
+    const beiBewegung = ()=>messen();
     window.addEventListener('mousedown', beiKlick);
     window.addEventListener('keydown', beiTaste);
+    window.addEventListener('resize', beiBewegung);
+    window.addEventListener('scroll', beiBewegung, true);
     return ()=>{
       window.removeEventListener('mousedown', beiKlick);
       window.removeEventListener('keydown', beiTaste);
+      window.removeEventListener('resize', beiBewegung);
+      window.removeEventListener('scroll', beiBewegung, true);
     };
-  }, [offen]);
+  }, [offen, messen]);
 
   const liste = (Array.isArray(eintraege) ? eintraege : []).filter(Boolean);
   if (!liste.length) return null;
@@ -2012,9 +2070,33 @@ function KebabMenu({ eintraege, titel = 'Weitere Aktionen', ausrichtung = 'recht
     );
   };
 
+  /* Das Menü hängt am Seitenende, gehört im React-Baum aber weiter
+     hierher. Dadurch laufen seine Ereignisse wie bisher durch die
+     Umgebung – etwa durch das `stopPropagation` des Balkens, das
+     verhindert, dass ein Klick ins Menü den Balken verschiebt. */
+  const menue = offen ? createPortal(
+    <div
+      ref={menuRef}
+      className="kebabMenu"
+      role="menu"
+      style={{
+        left: pos ? pos.links : 0,
+        top: pos ? pos.oben : 0,
+        maxHeight: pos ? pos.maxHoehe : undefined,
+        visibility: pos ? 'visible' : 'hidden',
+      }}
+      onClick={(e)=>e.stopPropagation()}
+      onMouseDown={(e)=>e.stopPropagation()}
+    >
+      {liste.map(zeile)}
+    </div>,
+    document.body,
+  ) : null;
+
   return (
     <div className={`kebabWrap${offen ? ' is-open' : ''}`} ref={wrapRef} onClick={(e)=>e.stopPropagation()}>
       <button
+        ref={knopfRef}
         type="button"
         className={knopfKlasse}
         aria-haspopup="menu"
@@ -2023,11 +2105,7 @@ function KebabMenu({ eintraege, titel = 'Weitere Aktionen', ausrichtung = 'recht
         aria-label={titel}
         onClick={(e)=>{ e.stopPropagation(); setOffen(v => !v); }}
       ><MoreHorizontal {...ICON_SM} /></button>
-      {offen ? (
-        <div className={`kebabMenu kebabMenu--${ausrichtung}`} role="menu">
-          {liste.map(zeile)}
-        </div>
-      ) : null}
+      {menue}
     </div>
   );
 }
@@ -2403,6 +2481,144 @@ function SpeechActManager({ eigene, onRename, onDelete }){
   );
 }
 
+/* ============================================================
+   Alle Daten löschen
+
+   Der einzige Weg in dieser App, der etwas endgültig vernichtet. Es
+   gibt dafür gute Gründe – ein Gerät wird weitergegeben, eine
+   Probephase ist vorbei, ein verunglückter Import soll weg –, aber es
+   gibt keinen Weg zurück: kein Strg+Z, kein Versionsverlauf, denn der
+   geht mit.
+
+   Die Gestaltung nimmt das ernst, ohne den Weg zu verbauen. Vier
+   Sicherungen, jede mit einem eigenen Zweck:
+
+     1. Der Dialog SAGT, was verschwindet – gezählt, nicht behauptet.
+        "214 Stunden, 9 Sequenzen, 1 archiviertes Schuljahr" liest sich
+        anders als "alle Daten".
+     2. Er bietet das Backup an Ort und Stelle an und sagt, wann zuletzt
+        eines gemacht wurde. Wer nie eines hatte, liest das hier zuerst.
+     3. Ein Kontrollkästchen. Es ist schnell angeklickt – deshalb ist es
+        nicht die letzte Sicherung, sondern die vorletzte.
+     4. Ein Wort, das abgetippt werden muss. Kein zweiter Klick auf
+        "Ja", sondern ein zweiter Gedanke.
+
+   Der Löschknopf bleibt bis dahin gesperrt, und er ist nicht der
+   Knopf, auf dem der Fokus liegt: Wer den Dialog öffnet und Enter
+   drückt, bricht ab. */
+function DatenLoeschenDialog({
+  umfang, letztesBackup, kannBackup, laeuft, fehler, fertig,
+  onExportBackup, onLoeschen, onClose,
+}){
+  const [eingabe, setEingabe] = useState('');
+  const [verstanden, setVerstanden] = useState(false);
+  const abbrechenRef = useRef(null);
+  useEffect(()=>{ abbrechenRef.current?.focus(); }, []);
+
+  const zeilen = useMemo(()=> umfangZeilen(umfang), [umfang]);
+  const leer = istLeer(umfang);
+  const freigegeben = darfLoeschen({ eingabe, verstanden }) && !laeuft;
+
+  /* Nach dem Löschen bleibt nur noch eine Mitteilung stehen. Ein
+     Dialog, der jetzt wieder Felder zeigte, lüde zum Weitermachen ein –
+     es gibt aber nichts mehr zu tun als neu zu starten. */
+  if (fertig) {
+    return (
+      <div className="modalOverlay">
+        <div className="modalCard" role="alertdialog" aria-modal="true" aria-label="Alle Daten gelöscht">
+          <h3 className="dialogTitle">Alle Daten wurden gelöscht</h3>
+          <p className="dialogBody">
+            Prép-ybara startet jetzt neu und beginnt bei null. Exportierte Backups
+            und Dateien sind davon nicht betroffen – sie liegen ausserhalb der App.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="modalOverlay" onMouseDown={(e)=>{ if (e.target === e.currentTarget && !laeuft) onClose?.(); }}>
+      <div className="modalCard modalCard--breit" role="alertdialog" aria-modal="true"
+           aria-label="Alle Daten löschen"
+           onKeyDown={(e)=>{ if (e.key === 'Escape' && !laeuft) onClose?.(); }}>
+        <h3 className="dialogTitle">Alle Daten löschen</h3>
+        <p className="dialogBody">
+          Damit wird Prép-ybara auf den Stand einer frisch eingerichteten App
+          zurückgesetzt. <b>Das lässt sich nicht rückgängig machen</b> – weder mit
+          Strg+Z noch über den Versionsverlauf, denn der wird mitgelöscht.
+        </p>
+
+        <div className="loeschKasten loeschKasten--weg">
+          <h4 className="loeschKastenTitel">Das verschwindet</h4>
+          {leer ? (
+            <p className="muted small" style={{margin:0}}>
+              In dieser App ist noch nichts geplant. Es geht also nichts verloren –
+              das Zurücksetzen räumt nur die Einstellungen auf.
+            </p>
+          ) : (
+            <ul className="loeschListe">
+              {zeilen.map((z)=> <li key={z}>{z}</li>)}
+            </ul>
+          )}
+          <p className="muted small" style={{margin:'8px 0 0'}}>
+            Dazu {WEITERE_BEREICHE.join(', ')}.
+          </p>
+        </div>
+
+        <div className="loeschKasten loeschKasten--bleibt">
+          <h4 className="loeschKastenTitel">Das bleibt</h4>
+          <ul className="loeschListe">
+            {BLEIBT_ERHALTEN.map((z)=> <li key={z}>{z}</li>)}
+          </ul>
+        </div>
+
+        {kannBackup ? (
+          <div className={`inlineNotice${letztesBackup ? '' : ' inlineNotice--warning'}`}>
+            {letztesBackup
+              ? <>Letztes Backup aus dieser App: <b>{formatDateDE(String(letztesBackup).slice(0, 10))}</b>. Liegt es länger zurück, lohnt sich vorher ein frisches.</>
+              : <>Aus dieser App wurde <b>noch nie ein Backup exportiert</b>. Danach gibt es keine Möglichkeit mehr, die Planung zurückzuholen.</>}
+            <div className="row" style={{gap:8, marginTop:8}}>
+              <button type="button" className="btn" disabled={laeuft} onClick={onExportBackup}>
+                Jetzt Backup exportieren
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        <label className="loeschHaken">
+          <input type="checkbox" checked={verstanden} disabled={laeuft}
+                 onChange={(e)=>setVerstanden(e.target.checked)} />
+          <span>Mir ist klar, dass alle oben genannten Daten endgültig verloren gehen.</span>
+        </label>
+
+        <div style={{marginTop:12}}>
+          <label className="small muted" htmlFor="loeschWort">
+            Zum Bestätigen <b>{BESTAETIGUNGSWORT}</b> eintippen
+          </label>
+          <input id="loeschWort" className="input" value={eingabe} disabled={laeuft}
+                 autoComplete="off" spellCheck={false}
+                 placeholder={BESTAETIGUNGSWORT}
+                 onChange={(e)=>setEingabe(e.target.value)} />
+        </div>
+
+        {fehler ? (
+          <div className="inlineNotice inlineNotice--warning" style={{marginTop:12}}>{fehler}</div>
+        ) : null}
+
+        <div className="dialogActions">
+          <button ref={abbrechenRef} type="button" className="btn" disabled={laeuft} onClick={onClose}>
+            Abbrechen
+          </button>
+          <button type="button" className="btn danger" disabled={!freigegeben}
+                  onClick={()=>onLoeschen?.()}>
+            {laeuft ? 'Wird gelöscht…' : 'Alle Daten endgültig löschen'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onImportBackup,
                         onExportPocketProfile, onOpenPocketImport,
                         weekReview, onChangeWeekReview,
@@ -2413,8 +2629,16 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
                         onSetCompetencyHidden, onSetCompetencyArea, onRenameCompetency,
                         onDeleteCompetency, onAddCompetencyArea, onRenameCompetencyArea,
                         onDeleteCompetencyArea, onLeereVerlauf,
-                        onSchnellstartNeu, onHinweiseZuruecksetzen }){
+                        onSchnellstartNeu, onHinweiseZuruecksetzen,
+                        loeschUmfang, letztesBackup, onAllesLoeschen }){
   const istBrowser = platformName === 'browser';
+  /* Der Löschdialog gehört hierher und nicht in die App: Er ist die
+     Fortsetzung dieses Bereichs, nicht ein Vorgang der ganzen
+     Anwendung. Erst sein "Ja" reicht nach oben. */
+  const [loeschDialog, setLoeschDialog] = useState(false);
+  const [loeschLaeuft, setLoeschLaeuft] = useState(false);
+  const [loeschFehler, setLoeschFehler] = useState('');
+  const [loeschFertig, setLoeschFertig] = useState(false);
   return (
     <div className="card" style={{display:'flex', flexDirection:'column', gap:18}}>
       <div>
@@ -2635,6 +2859,60 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
           Prép-ybara {APP_VERSION} · {istBrowser ? 'Browser-Version' : 'Desktop-App'} · © Florian Nowak
         </p>
       </section>
+
+      {/* Ganz unten und deutlich abgesetzt: Hier endet die Planung.
+          Der Abstand ist Absicht – man soll nicht im Vorbeiscrollen
+          daraufstossen. */}
+      {capabilities.datenLoeschen && typeof onAllesLoeschen === 'function' ? (
+        <section className="gefahrenZone">
+          <h3 className="settingsHeading settingsHeading--gefahr">Alle Daten löschen</h3>
+          <p className="settingsText">
+            Setzt Prép-ybara auf den Stand einer frisch eingerichteten App zurück:
+            Wochenplanung, Sequenzen, Vorlagen, Stundenplan, Schulkalender,
+            Jahresgrobplanung, archivierte Schuljahre, Einstellungen und
+            Versionsverlauf. Gedacht für ein Gerät, das weitergegeben wird –
+            oder für einen Neuanfang.
+          </p>
+          <p className="settingsText">
+            <b>Das lässt sich nicht rückgängig machen.</b> Vorher fragt Prép-ybara
+            nach, zählt auf, was verloren geht, und bietet ein Backup an. Löschen
+            lässt sich erst, wenn du das Bestätigungswort eingetippt hast –
+            ein Klick allein genügt nicht.
+          </p>
+          <div className="row" style={{gap:8, marginTop:10}}>
+            <button type="button" className="btn btn--gefahr"
+                    onClick={()=>{ setLoeschFehler(''); setLoeschDialog(true); }}>
+              Alle Daten löschen…
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {loeschDialog ? (
+        <DatenLoeschenDialog
+          umfang={loeschUmfang}
+          letztesBackup={letztesBackup}
+          kannBackup={capabilities.backupFiles}
+          laeuft={loeschLaeuft}
+          fehler={loeschFehler}
+          fertig={loeschFertig}
+          onExportBackup={onExportBackup}
+          onClose={()=>setLoeschDialog(false)}
+          onLoeschen={async ()=>{
+            setLoeschLaeuft(true);
+            setLoeschFehler('');
+            const ergebnis = await onAllesLoeschen();
+            if (ergebnis?.ok) {
+              // Der Dialog bleibt stehen und sagt, was jetzt geschieht.
+              setLoeschFertig(true);
+              return;
+            }
+            setLoeschLaeuft(false);
+            setLoeschFehler(ergebnis?.meldung
+              || 'Es konnte nicht alles gelöscht werden. Bitte versuch es noch einmal.');
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -4551,11 +4829,21 @@ function useDB(){
     }, 250);
   };
 
-  return { db, persist, saveError };
+  /* Einen noch nicht ausgeführten Schreibvorgang abbestellen.
+
+     Gebraucht wird das an genau einer Stelle: beim vollständigen
+     Löschen. Ohne diesen Abbruch schriebe der Zeitgeber die gerade
+     gelöschte Planung 250 ms später wieder in die Ablage – und der
+     Löschvorgang wäre eine Täuschung. */
+  const verwirfAusstehendeSpeicherung = useCallback(()=>{
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+  }, []);
+
+  return { db, persist, saveError, verwirfAusstehendeSpeicherung };
 }
 
 export default function App(){
-  const { db: liveDb, persist: persistLive, saveError } = useDB();
+  const { db: liveDb, persist: persistLive, saveError, verwirfAusstehendeSpeicherung } = useDB();
 
   /* --- Aktuelles Schuljahr oder Archiv ------------------------------
 
@@ -7058,6 +7346,56 @@ const updateLessonFromEditor = (weekStart, dayIndex, slotIndex, nextLesson) => {
   /* Die Willkommensansicht benutzt denselben Import – kein zweiter Weg. */
   importBackupRef.current = importBackup;
 
+  /* --- Alle Daten löschen ------------------------------------------
+
+     Die Rückfragen stehen im Dialog (DatenLoeschenDialog), die
+     Bedingungen im Modul (zuruecksetzen.js). Hier passiert nur noch
+     das, was danach kommt – und die Reihenfolge ist dabei wichtig:
+
+       1. Den ausstehenden Schreibvorgang abbestellen. Sonst schriebe
+          der Zeitgeber 250 ms später die gerade gelöschte Planung
+          zurück in die Ablage.
+       2. Löschen lassen (jede Plattform kennt ihre eigenen Ablagen).
+       3. Neu starten. Nicht aus Bequemlichkeit: In dieser Sitzung
+          hängen noch Rückgängig-Stapel, Entwürfe, ein Suchindex und
+          der Zustand der Einführung im Speicher. Sie alle zeigten auf
+          Daten, die es nicht mehr gibt. Ein Neustart ist der einzige
+          Weg, der wirklich bei null anfängt.
+
+     Rückgabe an den Dialog: `{ ok }` und im Fehlerfall eine Meldung,
+     die benennt, was übrig geblieben ist. Wer ein Gerät weitergibt,
+     darf sich nicht auf ein stummes "fertig" verlassen müssen. */
+  /* Bewusst kein useCallback: Diese Stelle liegt hinter dem frühen
+     `if (!db)` weiter oben, und ein Hook dahinter wäre beim ersten
+     Bild noch nicht gelaufen – React zählt die Hooks, nicht ihre
+     Namen. Eine gewöhnliche Funktion hat das Problem nicht; sie wird
+     ohnehin nur an die Einstellungen weitergereicht. */
+  const alleDatenLoeschen = async ()=>{
+    if (typeof platform.resetAll !== 'function') {
+      return { ok: false, meldung: 'Diese Fassung kann die Daten nicht selbst löschen.' };
+    }
+    verwirfAusstehendeSpeicherung();
+    let ergebnis = null;
+    try {
+      ergebnis = await platform.resetAll();
+    } catch (err) {
+      return { ok: false, meldung: `Löschen fehlgeschlagen: ${String(err?.message || err)}` };
+    }
+    if (ergebnis && ergebnis.ok === false) {
+      const rest = (Array.isArray(ergebnis.fehler) ? ergebnis.fehler : []).join(', ');
+      return {
+        ok: false,
+        meldung: rest
+          ? `Nicht alles liess sich löschen: ${rest}. Die übrigen Daten sind entfernt.`
+          : 'Es konnte nicht alles gelöscht werden.',
+      };
+    }
+    /* Kurz stehen lassen, damit die Mitteilung im Dialog gelesen werden
+       kann – danach startet die App bei null. */
+    setTimeout(()=>{ try { window.location.reload(); } catch {} }, 1400);
+    return { ok: true };
+  };
+
   const createSequence = (name) => {
     // If user cancelled a prompt, keep quiet.
     if (name == null) return null;
@@ -8463,6 +8801,11 @@ const doExportDocx = async (html, suggestedName) => {
             onboardingSitzung.current = { gezeigt: false, vertagt: [] };
             showToast('Hinweise zurückgesetzt. Sie erscheinen wieder, wenn ihre Situation entsteht.');
           }}
+          /* Was ein Zurücksetzen kosten würde – gezählt aus den echten
+             Daten, nicht aus einer Archivansicht. */
+          loeschUmfang={ruecksetzUmfang(liveDb)}
+          letztesBackup={onboarding?.letztesBackup || ''}
+          onAllesLoeschen={alleDatenLoeschen}
         />
       );
     }
@@ -12271,10 +12614,15 @@ function YearPlanView({
                       verwaist ? 'Die verknüpfte Sequenz gibt es nicht mehr.' : '',
                       '(Doppelklick zum Bearbeiten)',
                     ].filter(Boolean).join('\n');
+                    /* Ein Balken von ein bis zwei Wochen ist 28 bis 56 px
+                       breit. Sein ⋯-Knopf passt da nicht hinein, ohne die
+                       Griffe zum Verlängern zu verdecken – er tritt
+                       deshalb nach rechts aus dem Balken heraus. */
+                    const schmal = breiteInWochen <= 2;
                     return (
                       <div
                         key={b.id}
-                        className={`yearPlanBar${verknuepft ? ' yearPlanBar--verknuepft' : ''}`}
+                        className={`yearPlanBar${verknuepft ? ' yearPlanBar--verknuepft' : ''}${schmal ? ' yearPlanBar--schmal' : ''}`}
                         style={{left, width, background: hexToRgba(surfaceColor(b.color), bgAlpha), borderColor: lineColor(b.color)}}
                         onDoubleClick={()=>startEdit(b)}
                         onMouseDown={(e)=>onMouseDownBar(e, b, 'move')}
@@ -12316,9 +12664,11 @@ function YearPlanView({
                             <span className="yearPlanBarSeqName">Sequenz nicht mehr vorhanden</span>
                           </div>
                         ) : null}
-                        {/* Das Menü des Balkens. Es liegt IM Balken, darf
-                            aber nicht mitziehen – deshalb hält es die
-                            Maustaste bei sich. */}
+                        {/* Das Menü des Balkens. Es gehört zum Balken, darf
+                            ihn aber nicht mitziehen – deshalb hält es die
+                            Maustaste bei sich. Das aufgeklappte Menü selbst
+                            hängt am Seitenende (siehe KebabMenu) und wird
+                            vom rollenden Band nicht mehr abgeschnitten. */}
                         <div className="yearPlanBarMenu" onMouseDown={(e)=>e.stopPropagation()} onDoubleClick={(e)=>e.stopPropagation()}>
                           <KebabMenu
                             titel={`Aktionen für „${b.title || 'Balken'}“`}

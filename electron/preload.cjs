@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld('api', {
   exportTemplates: () => ipcRenderer.invoke('templates:export'),
   importTemplates: () => ipcRenderer.invoke('templates:import'),
 
+  /* Alle Daten löschen: Planung, frühere Ablage und Versionsverlauf.
+     Unwiderruflich – die Rückfragen dazu stehen im Renderer. */
+  resetAll: () => ipcRenderer.invoke('data:reset'),
+
   /* Versionsverlauf. Eigene Ablage, eigene Kanäle: er gehört nicht in
      die Unterrichtsdatenbank und wandert deshalb auch nicht durch
      db:get / db:set. */

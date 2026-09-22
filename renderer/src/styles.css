@@ -1977,22 +1977,28 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
    auf Klick.
    ============================================================ */
 .kebabWrap { position: relative; display: inline-flex; }
+/* Das Menü hängt am Seitenende (Portal) und wird über `left`/`top`
+   gesetzt – gerechnet in kontextmenue.js. Nur so entkommt es dem
+   rollenden Band der Jahresgrobplanung, das seinen Inhalt beschneiden
+   muss. `max-height` kommt von dort mit: reicht der Platz nicht, rollt
+   das Menü in sich selbst, statt über den Fensterrand zu treten. */
 .kebabMenu {
-  position: absolute;
-  top: calc(100% + 6px);
+  position: fixed;
   min-width: 236px;
+  max-width: calc(100vw - 16px);
   padding: 6px;
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg, 10px);
   box-shadow: var(--shadow-lg, 0 10px 30px rgba(0,0,0,0.18));
-  z-index: 210;
+  /* Über allem, auch über Dialogen (.modalOverlay liegt bei 80). */
+  z-index: 2000;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
-.kebabMenu--rechts { right: 0; }
-.kebabMenu--links { left: 0; }
 .kebabEintrag {
   display: flex;
   align-items: center;
@@ -2092,15 +2098,82 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .pill--primary { border-color: var(--primary); color: var(--primary); font-weight: var(--fw-bold); }
 .tplFilter > div { min-width: 150px; }
 
-/* Jahresplanung: die Zeilenüberschrift trägt jetzt ein Kontextmenü.
-   Ist es offen, muss die Zeile über den folgenden Zeilen liegen –
-   sonst verschwände das Menü unter der nächsten Lerngruppe. */
+/* Jahresplanung: die Zeilenüberschrift trägt ein Kontextmenü.
+
+   Die frühere Notlösung – Umrandung durchlässig machen, Zeilen
+   hochziehen – ist entfallen: Das aufgeklappte Menü liegt jetzt als
+   Portal am Seitenende und kann von keinem Kasten mehr beschnitten
+   werden. Hier bleibt allein die Stelle, an der der Knopf sitzt. */
 .yearPlanSticky .kebabWrap { position: absolute; top: 8px; right: 8px; }
-.yearPlanSticky:has(.kebabWrap.is-open) { z-index: 40; }
-.yearPlanRow:has(.kebabWrap.is-open) { position: relative; z-index: 40; }
-/* Die Umrandung schneidet sonst das aufgeklappte Menü ab. Sie wird nur
-   so lange durchlässig, wie ein Menü offen ist. */
-.yearPlanWrap:has(.kebabWrap.is-open) { overflow: visible; }
+
+/* ============================================================
+   Alle Daten löschen
+
+   Der eine Bereich dieser App, der etwas endgültig vernichtet. Er
+   sieht deshalb anders aus als alles andere: abgesetzt durch eine
+   Linie, getragen von der Warnfarbe, ganz am Ende der Einstellungen.
+   Man soll nicht im Vorbeiscrollen darauf stossen – und wenn man ihn
+   sucht, soll man ihn finden.
+   ============================================================ */
+.gefahrenZone {
+  margin-top: 10px;
+  padding: 16px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-lg);
+  background: var(--danger-soft);
+}
+.settingsHeading--gefahr { color: var(--danger); }
+/* Nicht dieselbe Fläche wie .btn.danger: Der Knopf HIER öffnet nur die
+   Rückfrage. Voll gefärbt ist erst der Knopf im Dialog, der wirklich
+   löscht – der Unterschied gehört sichtbar gemacht. */
+.btn--gefahr {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--card);
+  font-weight: var(--fw-bold);
+}
+.btn--gefahr:hover { background: var(--danger); border-color: var(--danger); color: var(--on-primary); }
+
+/* Die beiden Kästen im Löschdialog: was geht, was bleibt. Sie stehen
+   bewusst nebeneinander in derselben Form – die Gegenüberstellung ist
+   die eigentliche Auskunft. */
+.loeschKasten {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+}
+.loeschKasten--weg { border-left-color: var(--danger); }
+.loeschKasten--bleibt { border-left-color: var(--success, var(--primary)); }
+.loeschKastenTitel {
+  margin: 0 0 6px;
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.loeschListe {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+.loeschHaken {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  cursor: pointer;
+}
+.loeschHaken input { margin-top: 2px; flex: 0 0 auto; }
 
 /* ============================================================
    Archivansicht
@@ -2237,7 +2310,23 @@ a.btn.is-disabled { opacity: 0.5; pointer-events: none; }
   opacity: 0; transition: opacity var(--transition-fast);
 }
 .yearPlanBar:hover .yearPlanBarMenu,
-.yearPlanBarMenu:focus-within { opacity: 1; }
+.yearPlanBarMenu:focus-within,
+.yearPlanBarMenu:has(.kebabWrap.is-open) { opacity: 1; }
+/* Ohne Zeigegerät gibt es kein "Zeigen". Der Knopf muss dort von
+   vornherein da sein – sonst käme man an "Löschen" gar nicht heran. */
+@media (hover: none) {
+  .yearPlanBarMenu { opacity: 1; }
+}
+/* Schmale Balken (ein bis zwei Wochen) sind 28 bis 56 px breit. Innen
+   ist für den Knopf kein Platz: Er läge auf den 10 px breiten Griffen
+   zum Verlängern. Er tritt deshalb nach rechts aus dem Balken heraus –
+   in die freie Rasterfläche daneben. */
+.yearPlanBar--schmal { padding: 0 6px; }
+.yearPlanBar--schmal .yearPlanBarMenu { right: -30px; }
+/* Damit der herausgetretene Knopf über einem Nachbarbalken liegt und
+   nicht unter ihm. */
+.yearPlanBar:hover,
+.yearPlanBar:focus-within { z-index: 3; }
 
 /* ============================================================
    Sequenz verschieben

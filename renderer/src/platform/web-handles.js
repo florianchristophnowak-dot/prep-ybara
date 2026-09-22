@@ -155,3 +155,19 @@ export async function pruneUnusedHandles(db){
     return 0;
   }
 }
+
+/* Alles wegwerfen: für das vollständige Zurücksetzen der App.
+
+   Gelöscht werden hier ausschliesslich die VERWEISE. Die Dateien selbst
+   liegen dort, wo die Lehrkraft sie abgelegt hat, und werden nicht
+   angerührt – Prép-ybara hatte nie mehr als einen Zeiger darauf. Wer
+   die App zurücksetzt, verliert deshalb keine Unterrichtsmaterialien,
+   sondern nur die Zuordnung zu einer Stunde. */
+export async function leereAlleHandles(){
+  try {
+    for (const id of await keys(handleStore)) await del(id, handleStore);
+    return true;
+  } catch {
+    return false;
+  }
+}

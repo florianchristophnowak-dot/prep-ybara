@@ -17,7 +17,7 @@
    an, statt nach dem Klick zu melden.
    ============================================================ */
 
-import { createStore, get, set, del, keys, getMany, setMany } from 'idb-keyval';
+import { createStore, get, set, del, clear, keys, getMany, setMany } from 'idb-keyval';
 import {
   exportDocxInBrowser, printHtmlAsPdf, readTextFile, saveBlob, hasFileSystemAccess,
 } from './web-files.js';
@@ -28,6 +28,7 @@ import {
   pickAndStoreFiles, openStoredFile, pruneUnusedHandles, isFileRef, leereAlleHandles,
 } from './web-handles.js';
 import { speichereText, waehleTextdatei } from './pocket-files.js';
+import { istSicherung, FEHLER_NUR_VERSCHLUESSELT } from '../beobachtung-sicherung.js';
 
 const LEGACY_KEY = 'lehrerplan_db';
 const META_KEY = 'meta';
@@ -42,6 +43,14 @@ const store = createStore('prepybara', 'db');
    App fasst sie nicht an. */
 const verlaufStore = createStore('prepybara-verlauf', 'verlauf');
 const VERLAUF_KEY = 'eintraege';
+
+/* Die Beobachtungen zu Lernenden ebenso: eine EIGENE Datenbank. Hier
+   geht es nicht um Grösse, sondern um den Inhalt – Namen und
+   Einschätzungen sollen in keinem Backup der Planung auftauchen. Ein
+   einziger Eintrag, aus demselben Grund wie beim Verlauf: Eine
+   Änderung wird ganz oder gar nicht geschrieben. */
+const beobachtungStore = createStore('prepybara-beobachtung', 'beobachtung');
+const BEOBACHTUNG_KEY = 'daten';
 
 function splitDb(db){
   const { weeks, ...meta } = (db && typeof db === 'object') ? db : {};
@@ -152,6 +161,32 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
     await set(VERLAUF_KEY, (daten && typeof daten === 'object') ? daten : { schema: 1, eintraege: [] }, verlaufStore);
   };
 
+  /* Beobachtungen. Anders als beim Verlauf wird ein Lesefehler NICHT
+     zu `null` geglättet: `null` heisst "noch nie gespeichert", und der
+     Speicher legte dann Startdaten an, die beim ersten Antippen die
+     unlesbaren, aber womöglich vorhandenen Daten überschrieben. */
+  const loadBeobachtung = async () => {
+    const d = await get(BEOBACHTUNG_KEY, beobachtungStore);
+    return d === undefined ? null : d;
+  };
+
+  const saveBeobachtung = async (daten) => {
+    if (!daten || typeof daten !== 'object' || Array.isArray(daten)) {
+      return { ok: false, error: 'Keine gültigen Beobachtungsdaten.' };
+    }
+    await set(BEOBACHTUNG_KEY, daten, beobachtungStore);
+    return { ok: true };
+  };
+
+  /* Die Sicherungsdatei geht über Download und Dateifeld, nicht über
+     die File System Access API: ".prepybara-beobachtung" ist länger als
+     die 16 Zeichen, die jene für Endungen zulässt (siehe
+     pocket-files.js). Geschrieben wird nur, was verschlüsselt ist. */
+  const exportBeobachtungDatei = async ({ content, fileName } = {}) => {
+    if (!istSicherung(content)) throw new Error(FEHLER_NUR_VERSCHLUESSELT);
+    return speichereText(content, String(fileName || '').trim() || 'Prepybara-Beobachtungen.prepybara-beobachtung');
+  };
+
   const notAvailable = async () => null;
 
   const BACKUP_TYPE = { description: 'Prép-ybara Backup', accept: { 'application/json': ['.json'] } };
@@ -193,11 +228,16 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
   /* Alles löschen: die App wieder auf null.
 
      Angefasst wird jede Ablage, die Prép-ybara im Browser je benutzt
-     hat – und zwar ausdrücklich alle drei, nicht nur die Planung:
+     hat – und zwar ausdrücklich alle vier, nicht nur die Planung:
 
-       prepybara          die Unterrichtsdaten samt Einstellungen
-       prepybara-verlauf  der Versionsverlauf
-       prepybara-dateien  die Verweise auf angehängte Dateien
+       prepybara              die Unterrichtsdaten samt Einstellungen
+       prepybara-verlauf      der Versionsverlauf
+       prepybara-beobachtung  die Beobachtungen zu Lernenden samt Fragen
+       prepybara-dateien      die Verweise auf angehängte Dateien
+
+     Die Beobachtungen werden geleert, nicht nur ihr Schlüssel gelöscht:
+     Was dort je stand, sind Namen und Einschätzungen von Lernenden, und
+     davon soll nach dem Zurücksetzen nichts übrig sein.
 
      Dazu der alte localStorage-Eintrag aus der Zeit vor IndexedDB. Er
      wird sonst nirgends mehr gelesen, ausser beim allerersten Start –
@@ -221,6 +261,9 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
 
     try { await del(VERLAUF_KEY, verlaufStore); }
     catch (e) { fehler.push(`Versionsverlauf: ${String(e?.message || e)}`); }
+
+    try { await clear(beobachtungStore); }
+    catch (e) { fehler.push(`Beobachtungen: ${String(e?.message || e)}`); }
 
     if (!(await leereAlleHandles())) fehler.push('Verweise auf angehängte Dateien');
 
@@ -283,6 +326,8 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
       pocketFiles: true,
       // Eigene IndexedDB-Ablage, getrennt von den Unterrichtsdaten.
       versionHistory: true,
+      // Beobachtungen zu Lernenden: ebenfalls eine eigene IndexedDB-Ablage.
+      beobachtung: true,
       // Alle Ablagen dieser Anwendung lassen sich leeren.
       datenLoeschen: true,
     },
@@ -291,6 +336,8 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
     saveDB,
     loadHistory,
     saveHistory,
+    loadBeobachtung,
+    saveBeobachtung,
     requestPersistence,
 
     exportBackup,
@@ -304,6 +351,10 @@ export function createWebPlatform({ appVersion = '', mountExecution = null } = {
        erzeugt und geprüft; hier geht es nur um Datei rein, Datei raus. */
     exportPocketProfile: async ({ content, fileName }) => speichereText(content, fileName),
     importPocketFile: async () => waehleTextdatei(),
+    /* Sicherung der Beobachtungen und Export aus Capy-scope. Was die
+       gewählte Datei ist, entscheidet der Renderer am Inhalt. */
+    exportBeobachtungDatei,
+    importBeobachtungDatei: async () => waehleTextdatei(),
     exportPdf: ({ html }) => printHtmlAsPdf({ html, appVersion }),
     exportDocx: (payload) => exportDocxInBrowser(payload),
     /* Dateianhänge: Der Handle wandert in eine eigene IndexedDB-Ablage,

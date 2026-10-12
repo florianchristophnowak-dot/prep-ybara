@@ -1755,6 +1755,17 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.6; }
 .todayMain { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
 .todayTopic { font-weight: var(--fw-medium); font-size: var(--fs-base); }
 .todayMeta { font-size: var(--fs-sm); color: var(--muted); }
+/* Eine Stunde und ihr Knopf „Beobachten“ stehen nebeneinander, nicht
+   ineinander. Die Stundenzeile behält ihr Aussehen und nimmt den Rest
+   der Breite; der Knopf ist so hoch wie sie. Auf schmalen Fenstern
+   rutscht er darunter, statt das Thema zusammenzudrücken. */
+.todayZeile { display: flex; align-items: stretch; gap: 8px; }
+.todayZeile > .todayLesson { flex: 1 1 auto; width: auto; min-width: 0; }
+.todayBeobachten { flex-shrink: 0; white-space: nowrap; }
+@media (max-width: 560px) {
+  .todayZeile { flex-direction: column; gap: 4px; }
+  .todayBeobachten { align-self: flex-end; }
+}
 
 /* ============================================================
    Kompetenz-Wärmekarte
@@ -2629,4 +2640,190 @@ a.btn.is-disabled { opacity: 0.5; pointer-events: none; }
 .vorlagenFormular {
   margin-top: 10px; padding: 10px 12px;
   background: var(--card); border: 1px solid var(--primary);
+}
+
+/* ============================================================
+   Beobachtung
+
+   Kurze Einschätzungen zu Lernenden, in fünf Reitern. Die Gestaltung
+   folgt der Lineatur der übrigen App: Linien und Kästchen, keine
+   schwebenden Karten.
+
+   Bewusst ohne Wertungsfarben. Die vier Stufen der Skala sehen gleich
+   aus, die Zahlen der Auswertung stehen in neutraler Schrift – Rot für
+   „eher negativ" oder Grün für „eher positiv" wäre bereits ein Urteil,
+   und das gehört der Lehrperson, nicht der Oberfläche. Farbe trägt hier
+   nur, was sie überall trägt: Handlung und Fokus.
+   ============================================================ */
+.beobAnsicht { display: flex; flex-direction: column; gap: 14px; }
+.beobKontext { margin: 6px 0 0; font-size: var(--fs-sm); }
+
+/* Reiter: eine Leiste mit Unterstrich, wie eine Registerkarte im
+   Ordner. Der aktive Reiter trägt die Leitfarbe als Linie, nicht als
+   Fläche – die Flächen bleiben den Knöpfen. */
+.beobReiter {
+  display: flex; flex-wrap: wrap; gap: 2px;
+  margin-top: 14px; border-bottom: 1px solid var(--border);
+}
+.beobReiterKnopf {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: none; border-bottom: 2px solid transparent; margin-bottom: -1px;
+  background: none; cursor: pointer;
+  padding: 8px 12px; font: inherit; font-size: var(--fs-md);
+  font-weight: var(--fw-medium); color: var(--text-secondary);
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+.beobReiterKnopf:hover { color: var(--text); border-bottom-color: var(--border-strong); }
+.beobReiterKnopf.is-active { color: var(--text); border-bottom-color: var(--primary); font-weight: var(--fw-bold); }
+.beobReiterMarke {
+  font-size: var(--fs-2xs); font-variant-numeric: tabular-nums;
+  border: 1px solid var(--primary); color: var(--primary-ink); background: var(--primary-soft);
+  padding: 1px 6px;
+}
+
+/* Felder nebeneinander, auf schmalen Fenstern untereinander. */
+.beobBereich { display: flex; flex-direction: column; gap: 14px; }
+.beobFelder { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.beobFeld { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+/* Die Breite gilt nur in einer Zeile. In einer Spalte wäre dieselbe
+   Basis eine Höhe – und das Feld stünde in einem leeren Kasten. */
+.beobFelder > .beobFeld { flex: 1 1 220px; }
+.beobFelder > .beobFeld--schmal { flex: 0 0 140px; }
+.beobCapyKlasse > .beobFeld { min-width: 0; }
+.beobAbschnitt { border-top: 1px solid var(--border-light); padding-top: 14px; }
+.beobFormular {
+  display: flex; flex-direction: column; gap: 10px;
+  border: 1px dashed var(--border-strong); background: var(--bg-subtle); padding: 12px;
+}
+.beobKasten {
+  display: flex; flex-direction: column; gap: 10px;
+  border: 1px solid var(--border); background: var(--card); padding: 14px;
+}
+.beobHaken { display: flex; align-items: flex-start; gap: 8px; font-size: var(--fs-md); cursor: pointer; }
+.beobHaken input { margin-top: 3px; }
+.beobHakenHinweis { display: block; margin-top: 2px; }
+
+/* ---- Runde ---------------------------------------------------------- */
+.beobRunde { display: flex; flex-direction: column; gap: 12px; }
+.beobRundeKopf { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 10px; }
+.beobFortschrittText { font-size: var(--fs-sm); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.beobFortschritt { height: 6px; background: var(--border-light); overflow: hidden; }
+.beobFortschrittFuellung { height: 100%; background: var(--primary); transition: width var(--transition); }
+.beobRundeKarte {
+  display: flex; flex-direction: column; gap: 12px;
+  border: 1px solid var(--border); border-left: 4px solid var(--primary);
+  background: var(--card); padding: 18px;
+}
+/* Der Name ist das Erste, was man vom Pult aus lesen muss. */
+.beobName {
+  font-size: var(--fs-2xl); font-weight: var(--fw-bold);
+  line-height: var(--lh-tight); letter-spacing: -0.01em; overflow-wrap: anywhere;
+}
+/* Diese Ziele bekommen den Fokus nur vom Programm, nie über die
+   Tastatur – ein Ring um die Überschrift wäre dort nur Unruhe. */
+.beobFokusZiel:focus { outline: none; }
+.beobFrageText { margin: 0; font-size: var(--fs-lg); line-height: var(--lh-normal); }
+.beobNotiz { min-height: 56px; }
+
+.beobSkala { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.beobSkalaKnopf {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  min-height: 84px; padding: 10px 12px; text-align: left; cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--card); color: var(--text);
+  font: inherit;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+.beobSkalaKnopf:hover:not(:disabled) { border-color: var(--primary); background: var(--primary-soft); }
+.beobSkalaKnopf:active:not(:disabled) { background: var(--border-light); }
+.beobSkalaKnopf:disabled { opacity: 0.5; cursor: not-allowed; }
+.beobSkalaTaste {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 22px; padding: 0 4px;
+  border: 1px solid var(--border); background: var(--bg-subtle);
+  font-size: var(--fs-xs); color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.beobSkalaTitel { font-weight: var(--fw-bold); font-size: var(--fs-base); }
+.beobSkalaText { font-size: var(--fs-sm); color: var(--text-secondary); }
+@media (max-width: 720px) {
+  .beobSkala { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ---- Lernende --------------------------------------------------------- */
+.beobListe { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.beobZeile {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px;
+  padding: 7px 0; border-bottom: 1px solid var(--border-light);
+}
+.beobZeile:last-child { border-bottom: none; }
+.beobNummer { min-width: 28px; color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.beobZeileText { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1 1 200px; min-width: 0; }
+.beobZeileName { font-weight: var(--fw-medium); overflow-wrap: anywhere; }
+/* Ausgeblendet heisst nicht gelöscht – gedämpft, nicht durchgestrichen. */
+.beobZeile.is-aus .beobZeileName { color: var(--muted); }
+.beobZeileAktionen { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.beobZeileAktionen .iconBtn { width: 28px; height: 28px; }
+.beobZeileAktionen .iconBtn:disabled { opacity: 0.35; cursor: not-allowed; background: var(--card); border-color: var(--border); color: inherit; }
+.beobInline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 1 260px; }
+.beobInline .input { flex: 1 1 160px; width: auto; padding: 6px 10px; }
+.beobNamenFeld { min-height: 110px; }
+
+/* ---- Fragen ----------------------------------------------------------- */
+.beobFragen { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.beobFrage {
+  display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid var(--border); background: var(--card); padding: 10px 12px;
+}
+.beobFrage.is-aus { background: var(--bg-subtle); }
+.beobFrage.is-aus .beobFrageTitel { color: var(--muted); }
+.beobFrageKopf { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.beobFrageTitel { font-size: var(--fs-base); line-height: var(--lh-normal); overflow-wrap: anywhere; }
+.beobFrageFeld { min-height: 64px; }
+.beobSchalter { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; font-size: var(--fs-sm); color: var(--text-secondary); cursor: pointer; }
+.beobPlaketten { gap: 6px; }
+
+/* ---- Auswertung --------------------------------------------------------
+   Kennzahlen und Tabellen in einer Farbe. Kein Wert wird hervorgehoben,
+   auch nicht der niedrigste oder der höchste. */
+.beobKennzahlen { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.beobKennzahl { border: 1px solid var(--border); background: var(--bg-subtle); padding: 10px 12px; }
+.beobKennzahlWert { font-size: var(--fs-xl); font-weight: var(--fw-bold); font-variant-numeric: tabular-nums; }
+.beobKennzahlName { font-size: var(--fs-sm); color: var(--text-secondary); }
+.beobTabelleWrap { overflow-x: auto; }
+.beobTabelle { border-collapse: collapse; width: 100%; min-width: 560px; }
+.beobTabelle th, .beobTabelle td {
+  border: 1px solid var(--border-light);
+  padding: 6px 9px; vertical-align: top; text-align: left;
+  font-size: var(--fs-sm); font-weight: var(--fw-normal);
+}
+.beobTabelle thead th {
+  background: var(--bg-subtle); font-weight: var(--fw-medium);
+  font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+.beobTabelle .beobZahl { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.beobTabelle tr.is-aus th, .beobTabelle tr.is-aus td { color: var(--muted); }
+.beobNameKnopf {
+  border: none; background: none; padding: 0; cursor: pointer;
+  font: inherit; color: var(--primary-ink); text-align: left;
+  text-decoration: underline; text-decoration-color: var(--border-strong); text-underline-offset: 2px;
+}
+.beobNameKnopf:hover { text-decoration-color: currentColor; }
+.beobNameKnopf.is-active { font-weight: var(--fw-bold); text-decoration-color: currentColor; }
+.beobVerlauf { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.beobVerlaufEintrag {
+  display: flex; flex-direction: column; gap: 2px;
+  border-left: 3px solid var(--border); padding: 4px 0 4px 10px;
+}
+.beobVerlaufKopf { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: var(--fs-sm); color: var(--muted); }
+.beobVerlaufWert { color: var(--text); font-weight: var(--fw-medium); }
+.beobVerlaufNotiz { font-size: var(--fs-sm); color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---- Daten -------------------------------------------------------------- */
+.beobCapyListe { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.beobCapyKlasse {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 320px); gap: 10px 16px; align-items: end;
+  border: 1px solid var(--border-light); background: var(--bg-subtle); padding: 10px 12px;
+}
+@media (max-width: 720px) {
+  .beobCapyKlasse { grid-template-columns: minmax(0, 1fr); }
 }

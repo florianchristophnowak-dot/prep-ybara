@@ -42,21 +42,28 @@ npm run dist:portable
 - In der Wochenansicht:
   - **Backup exportieren** → JSON-Datei speichern
   - **Backup importieren** → JSON-Datei wiederherstellen
+- Die Beobachtungen zu Lernenden sind **nicht** Teil dieses Backups; sie haben eine eigene,
+  verschlüsselte Sicherung (siehe *Beobachtung (Lernende)*).
 
 ## Alle Daten löschen (Zurücksetzen auf null)
 - **Einstellungen → Alle Daten löschen** setzt die App auf den Stand einer frischen
   Einrichtung zurück. Der Weg ist absichtlich mehrstufig – er ist unumkehrbar.
 - Vier Sicherungen, damit es nicht versehentlich geschieht: Der Dialog **zählt** auf, was
-  verloren geht (Stunden, Wochen, Lerngruppen, Sequenzen, Vorlagen, Balken, To-dos,
-  Kalendereinträge, archivierte Schuljahre); er nennt das **Datum des letzten Backups** und
+  verloren geht (Stunden, Wochen, Lerngruppen, Lernende und Beobachtungen, eigene
+  Beobachtungsfragen, Sequenzen, Vorlagen, Balken, To-dos, Kalendereinträge, archivierte
+  Schuljahre); er nennt das **Datum des letzten Backups** und
   bietet an, sofort eines zu exportieren; ein **Kontrollkästchen** muss gesetzt und das Wort
   **ALLES LÖSCHEN** abgetippt werden. Der Fokus liegt auf *Abbrechen*.
-- Geleert werden alle Ablagen der App – Desktop: `prepybara`, die frühere Ablage `lehrerplan`
-  und `prepybara-verlauf`; Browser: die IndexedDB-Datenbanken `prepybara`,
-  `prepybara-verlauf` und `prepybara-dateien` sowie der alte `localStorage`-Eintrag. Danach
-  startet die App neu.
+- Das angebotene Backup enthält nur die Planung. Gibt es Lernende oder Beobachtungen, sagt der
+  Dialog das ausdrücklich: Sie müssen vorher über **Beobachtung → Daten → Beobachtungen
+  sichern** gesichert werden, sonst sind sie danach verloren.
+- Geleert werden alle Ablagen der App – Desktop: `prepybara`, die frühere Ablage `lehrerplan`,
+  `prepybara-verlauf` und `prepybara-beobachtung`; Browser: die IndexedDB-Datenbanken
+  `prepybara`, `prepybara-verlauf`, `prepybara-beobachtung` und `prepybara-dateien` sowie der
+  alte `localStorage`-Eintrag. Danach startet die App neu.
 - **Nicht** angetastet werden Dateien ausserhalb der App: exportierte Backups und Vorlagen,
-  PDF-/Word-Ausgaben sowie sämtliche angehängten Materialien – von ihnen verschwinden nur die
+  Sicherungen der Beobachtungen, PDF-/Word-Ausgaben sowie sämtliche angehängten Materialien –
+  von ihnen verschwinden nur die
   Verweise. Desktop-App und Browser-Version bleiben getrennt; gelöscht wird nur die Fassung,
   in der man sich befindet.
 - Die Regeln dafür stehen rein und geprüft in `renderer/src/zuruecksetzen.js`
@@ -108,6 +115,42 @@ npm run dist:portable
   insgesamt. Binärkopien angehängter Dateien werden nie gespeichert, nur Verweise.
 - Zu finden über **Versionsverlauf** in der Stunde und im ⋯-Menü einer Sequenz;
   leeren lässt er sich in den **Einstellungen**.
+
+## Beobachtung (Lernende)
+- Ein eigener Bereich **Beobachtung** (Seitenleiste, Befehlspalette „Beobachtung öffnen“) für
+  kurze, regelmässige Einschätzungen zu Lernenden – übernommen aus dem Ablauf von Capy-scope:
+  eine **Runde** nach der Stunde schlägt Paare aus Lernenden und Fragen vor (selten
+  Beobachtetes zuerst; Paare, die heute schon dran waren, erst, wenn alle anderen durch sind),
+  jede Antwort wird sofort gespeichert.
+- Der Start aus einer Stunde: **Heute → Beobachten** neben der Stunde oder **Beobachtungsrunde**
+  in der Nachbereitung. Die Beobachtungen tragen dann Datum und Referenz der Stunde
+  (`stundenRef`). Eine Notiz lässt sich als offener Punkt dieser Stunde vormerken – nur der
+  Text, ohne Namen; das ist die einzige Stelle, an der etwas aus der Beobachtung in die
+  Planung gelangt.
+- Feste vierstufige Skala **ohne Mitte** (eher negativ · leicht negativ · leicht positiv ·
+  eher positiv). Ein gemeinsamer Fragenpool mit acht mitgelieferten Fragen; dazu auf Wunsch
+  Fragen, die nur für eine Lerngruppe gelten. Lerngruppe = Klasse und Fach wie in der Planung.
+- Die Auswertung beschreibt und bewertet nicht: Anzahl, Abdeckung, Mittelwerte je Lernende und
+  je Kategorie, Einzelverlauf (auch als PDF). Keine Ampelfarben, keine Sollwerte.
+- **Ablage:** eigene Ablage, getrennt von der Planung – Desktop: Store-Datei
+  `prepybara-beobachtung`; Browser: IndexedDB-Datenbank `prepybara-beobachtung`. Gelesen wird
+  erst, wenn der Bereich oder die Einstellungen (für die Zahlen beim Zurücksetzen) geöffnet
+  werden; geschrieben erst mit der ersten echten Änderung.
+- **Was NICHT dorthin wandert, wohin die Planung wandert:** nicht ins Backup, nicht ins
+  Pocket-Profil, nicht in Vorlagen, nicht in den Versionsverlauf, nicht in die Suche, nicht
+  ins Schuljahresarchiv. Pocket bleibt frei von Schülerdaten.
+- **Sicherung:** ausschliesslich verschlüsselt, als Datei `.prepybara-beobachtung`
+  (AES-GCM, Schlüssel per PBKDF2-SHA-256 aus einem Passwort mit mindestens 8 Zeichen,
+  WebCrypto, keine zusätzliche Abhängigkeit). Ohne Passwort ist die Datei nicht lesbar – es
+  gibt keine Wiederherstellung. Beide Plattformadapter verweigern das Schreiben einer
+  unverschlüsselten Datei. Einlesen führt zusammen, statt zu ersetzen; doppeltes Einlesen legt
+  nichts doppelt an. Die Ablage auf dem Gerät selbst ist (noch) nicht verschlüsselt.
+- **Capy-scope-Import:** der JSON-Export von Capy-scope (`classes`, `questions`,
+  `observations`) wird mit Vorschau übernommen. Je Capy-Klasse wird eine Lerngruppe gewählt
+  (mit Vorschlag); gleichnamige Lernende und gleichlautende Fragen werden zusammengeführt,
+  vorhandene Beobachtungen nie überschrieben, ein zweiter Import ändert nichts. Die
+  Capy-Einstellungen (Tageslimit, Skala) werden nicht übernommen.
+- Version 1.1.0 der Desktop-App führt den Bereich ein.
 
 ## Reihen- und Lernfeldplanung (zweite Darstellung)
 - Eine geöffnete Sequenz kennt **zwei Darstellungen** derselben Stunden. Die Wahl steht in der
@@ -178,6 +221,12 @@ renderer/          Desktop-App (Electron + Browser-Fassung)   – unverändert
   src/stundenplan-ansicht.jsx  Verwaltung, Vorlageneditor, Assistent, Vorschau-Dialoge
   src/kontextmenue.js       wohin ein aufgeklapptes ⋯-Menü gehört (bleibt immer im Fenster)
   src/zuruecksetzen.js      alle Daten löschen: Umfang, Bestätigungswort, Freigabe
+  src/beobachtung.js        Beobachtung: Datenmodell, Lernende, Fragen, Runde, Auswertung,
+                            Zusammenführen
+  src/beobachtung-speicher.js  deren Ablage (lädt erst bei Bedarf, schreibt der Reihe nach)
+  src/beobachtung-sicherung.js verschlüsselte Sicherungsdatei (WebCrypto)
+  src/capy-import.js        Übernahme aus Capy-scope: Prüfung, Vorschlag, Vorschau, Übernahme
+  src/beobachtung-ansicht.jsx  Runde, Lernende, Fragen, Auswertung, Daten
 electron/          Hauptprozess, Preload, Menü
 pocket/            Prép-ybara Pocket (PWA)
   src/views/       mobile Ansichten
@@ -188,7 +237,8 @@ shared/            von beiden benutzt
   datum.js         Datumsrechnung
 tests/             node:test – Format, Import, Pocket-Modell, Doppelstunden,
                    Versionsverlauf, Jahresbalken, Verschieben, Suche, Onboarding,
-                   Stundenplanvorlagen, Reihenübersicht, Kontextmenü, Zurücksetzen
+                   Stundenplanvorlagen, Reihenübersicht, Kontextmenü, Zurücksetzen,
+                   Beobachtung, deren Ablage und Sicherung, Capy-scope-Import
 ```
 
 Geteilt werden **Format, Kennungen und Prüfung** – keine Oberflächenbausteine.

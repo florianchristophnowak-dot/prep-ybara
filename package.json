@@ -1,7 +1,7 @@
 {
   "name": "prepybara-desktop",
   "private": true,
-  "version": "1.0.9",
+  "version": "1.1.0",
   "description": "Prép-ybara – Unterrichtsplanung & Sequenz-/Kompetenz-Übersicht als Desktop-App",
   "author": "Florian Nowak",
   "main": "electron/main.cjs",

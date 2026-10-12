@@ -12,8 +12,9 @@ contextBridge.exposeInMainWorld('api', {
   exportTemplates: () => ipcRenderer.invoke('templates:export'),
   importTemplates: () => ipcRenderer.invoke('templates:import'),
 
-  /* Alle Daten löschen: Planung, frühere Ablage und Versionsverlauf.
-     Unwiderruflich – die Rückfragen dazu stehen im Renderer. */
+  /* Alle Daten löschen: Planung, frühere Ablage, Versionsverlauf und
+     Beobachtungen. Unwiderruflich – die Rückfragen dazu stehen im
+     Renderer. */
   resetAll: () => ipcRenderer.invoke('data:reset'),
 
   /* Versionsverlauf. Eigene Ablage, eigene Kanäle: er gehört nicht in
@@ -21,6 +22,15 @@ contextBridge.exposeInMainWorld('api', {
      db:get / db:set. */
   getHistory: () => ipcRenderer.invoke('history:get'),
   setHistory: (daten) => ipcRenderer.invoke('history:set', daten),
+
+  /* Beobachtungen zu Lernenden. Ebenfalls eigene Ablage und eigene
+     Kanäle – Namen und Einschätzungen gehören weder in die Planung noch
+     in ein Backup. Die Sicherungsdatei verschlüsselt der Renderer; über
+     die Prozessgrenze geht nur fertiger Text. */
+  getBeobachtung: () => ipcRenderer.invoke('beobachtung:get'),
+  setBeobachtung: (daten) => ipcRenderer.invoke('beobachtung:set', daten),
+  exportBeobachtungDatei: (payload) => ipcRenderer.invoke('beobachtung:export-file', payload),
+  importBeobachtungDatei: () => ipcRenderer.invoke('beobachtung:import-file'),
 
   // Austausch mit Prép-ybara Pocket (dateibasiert, keine Verbindung)
   exportPocketProfile: (payload) => ipcRenderer.invoke('pocket:export-profile', payload),

@@ -21,6 +21,14 @@
      3. DARF gelöscht werden? (`darfLoeschen`) – Kontrollkästchen UND
         Wort, beides zusammen. Eines allein genügt nicht.
 
+   Die Beobachtungen zu Lernenden gehören dazu, obwohl sie in einer
+   eigenen Ablage liegen und mit der Planung sonst nichts teilen. Sie
+   werden mitgezählt, sobald die Oberfläche ihre Zahlen kennt
+   (`beobachtungsUmfang` aus beobachtung.js): Namen und Einschätzungen
+   von Lernenden sind das, was beim Weitergeben eines Geräts am
+   wenigsten zurückbleiben darf – und das, was man am ehesten vergisst,
+   wenn im Dialog nur von "Planung" die Rede ist.
+
    Was hier bewusst NICHT steht: das Löschen selbst. Das gehört in den
    Plattformadapter, weil es auf dem Desktop andere Ablagen sind als im
    Browser. Diese Datei ist rein.
@@ -75,10 +83,17 @@ const liste = (v)=> (Array.isArray(v) ? v : []);
    in einer eigenen Ablage und taucht hier deshalb nicht als Zahl auf;
    dass er mitgeht, sagt die Oberfläche in Worten.
 
+   Die Beobachtungen liegen ebenfalls in einer eigenen Ablage, lassen
+   sich aber zählen. Ihre Zahlen kommen als zweites Argument dazu – so,
+   wie `beobachtungsUmfang` sie liefert. Fehlt es, enthält das Ergebnis
+   die Felder gar nicht, statt Nullen zu behaupten: Eine Oberfläche,
+   die beide Teile selbst zusammenlegt, soll keine echten Zahlen mit
+   erfundenen überschreiben.
+
    Archivierte Schuljahre sind ausdrücklich dabei: Sie liegen in
    derselben Datenbank und wären sonst die eine Sache, die jemand
    übersieht. */
-export function ruecksetzUmfang(db){
+export function ruecksetzUmfang(db, beobachtung){
   const d = objekt(db);
   const weeks = objekt(d.weeks);
 
@@ -105,7 +120,16 @@ export function ruecksetzUmfang(db){
 
   const kalender = objekt(d.schoolCalendar);
 
+  const b = objekt(beobachtung);
+  const beobachtungsZahlen = b === beobachtung ? {
+    beobachtungsLerngruppen: zahl(b.beobachtungsLerngruppen),
+    lernende: zahl(b.lernende),
+    beobachtungen: zahl(b.beobachtungen),
+    eigeneFragen: zahl(b.eigeneFragen),
+  } : {};
+
   return {
+    ...beobachtungsZahlen,
     wochen: Object.keys(weeks).length,
     stunden,
     mitThema,
@@ -125,7 +149,10 @@ export function ruecksetzUmfang(db){
 
    Eine frisch eingerichtete App auf null zu setzen ist kein Vorgang,
    vor dem gewarnt werden müsste – die Oberfläche kann den Hinweis dann
-   knapper halten. */
+   knapper halten. Wer aber auch nur eine einzige Lernende eingetragen
+   hat, bekommt den vollen Hinweis, selbst ohne jede geplante Stunde.
+   Die mitgelieferten Standardfragen zählen nicht: Sie kämen beim
+   nächsten Öffnen von selbst wieder. */
 export function istLeer(umfang){
   const u = objekt(umfang);
   return zahl(u.stunden) === 0
@@ -135,7 +162,11 @@ export function istLeer(umfang){
     && zahl(u.todos) === 0
     && zahl(u.archive) === 0
     && zahl(u.stundenplaene) === 0
-    && zahl(u.ferien) === 0;
+    && zahl(u.ferien) === 0
+    && zahl(u.lernende) === 0
+    && zahl(u.beobachtungen) === 0
+    && zahl(u.beobachtungsLerngruppen) === 0
+    && zahl(u.eigeneFragen) === 0;
 }
 
 const mehrzahl = (n, eins, viele)=> `${n} ${n === 1 ? eins : viele}`;
@@ -156,6 +187,23 @@ export function umfangZeilen(umfang){
     if (zahl(u.lerngruppen)) teile.push(`aus ${mehrzahl(zahl(u.lerngruppen), 'Lerngruppe', 'Lerngruppen')}`);
     zeilen.push(teile.join(' '));
   }
+  /* Gleich nach den Stunden: Was hier steht, sind Menschen, nicht
+     Material. Eine Zeile, damit Lernende, Gruppen und Beobachtungen
+     als ein Bestand gelesen werden. Gibt es Beobachtungen ohne
+     Lernende (etwa aus einer halb eingelesenen Sicherung), führen die
+     Beobachtungen die Zeile an. */
+  const lernende = zahl(u.lernende);
+  const beobachtungen = zahl(u.beobachtungen);
+  const gruppen = zahl(u.beobachtungsLerngruppen);
+  if (lernende || beobachtungen) {
+    const teile = lernende
+      ? [mehrzahl(lernende, 'Lernende', 'Lernende')]
+      : [`${mehrzahl(beobachtungen, 'Beobachtung', 'Beobachtungen')} zu Lernenden`];
+    if (gruppen) teile.push(`in ${mehrzahl(gruppen, 'Lerngruppe', 'Lerngruppen')}`);
+    if (lernende && beobachtungen) teile.push(`mit ${mehrzahl(beobachtungen, 'Beobachtung', 'Beobachtungen')}`);
+    zeilen.push(teile.join(' '));
+  }
+  if (zahl(u.eigeneFragen)) zeilen.push(mehrzahl(zahl(u.eigeneFragen), 'eigene Beobachtungsfrage', 'eigene Beobachtungsfragen'));
   if (zahl(u.sequenzen)) zeilen.push(mehrzahl(zahl(u.sequenzen), 'Sequenz', 'Sequenzen'));
   if (zahl(u.vorlagen)) zeilen.push(mehrzahl(zahl(u.vorlagen), 'Sequenz-Vorlage', 'Sequenz-Vorlagen'));
   if (zahl(u.stundenplaene)) zeilen.push(mehrzahl(zahl(u.stundenplaene), 'Wochenvorlage der Unterrichtszeiten', 'Wochenvorlagen der Unterrichtszeiten'));
@@ -171,18 +219,25 @@ export function umfangZeilen(umfang){
 
 /* Was ausserdem verschwindet, ohne dass es sich zählen liesse: die
    Einstellungen und die Einführung (beide liegen in derselben
-   Datenbank) und der Versionsverlauf (eigene Ablage, geht trotzdem
-   mit – sonst bliebe die Geschichte einer gelöschten Planung übrig). */
+   Datenbank), der Versionsverlauf (eigene Ablage, geht trotzdem
+   mit – sonst bliebe die Geschichte einer gelöschten Planung übrig)
+   und der Fragenpool der Beobachtung samt ihren Einstellungen. Die
+   eigenen Fragen werden oben gezählt, die mitgelieferten nicht – dass
+   auch sie samt allen Änderungen daran gehen, steht hier. (Die
+   Oberfläche reiht diese Einträge mit Kommas aneinander. Der erste ist
+   selbst eine Aufzählung; jeder weitere kommt deshalb ohne Komma aus,
+   sonst verschwimmen die Grenzen.) */
 export const WEITERE_BEREICHE = [
   'alle Einstellungen, Farben, Kompetenzen und Vorschlagslisten',
   'der Stand der Einführung',
   'der gesamte Versionsverlauf',
+  'der Fragenpool und die Einstellungen der Beobachtung',
 ];
 
 /* Und was ausdrücklich BLEIBT. Dieser Satz gehört in den Dialog: Er
    ist der Unterschied zwischen einem Schreck und einem Schaden. */
 export const BLEIBT_ERHALTEN = [
-  'Exportierte Backups, Vorlagen und PDF-/Word-Dateien – sie liegen als Dateien ausserhalb der App.',
+  'Exportierte Backups, Vorlagen, schon gespeicherte Sicherungen der Beobachtungen und PDF-/Word-Dateien – sie liegen als Dateien ausserhalb der App.',
   'Angehängte Dateien: Prép-ybara löscht keine einzige davon. Es verschwinden nur die Verweise – auch Kopien im Dateiordner der App bleiben stehen.',
   'Die jeweils andere Fassung (Desktop-App bzw. Browser-Version) – beide teilen ihre Daten nicht.',
 ];

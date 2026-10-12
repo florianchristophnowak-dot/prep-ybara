@@ -6,6 +6,13 @@
    schieben, wird nur die tatsächlich geänderte Woche übertragen.
    ============================================================ */
 
+/* Der Weg für Beobachtungsdateien schreibt nur, was verschlüsselt ist.
+   Die Oberfläche erzeugt den Inhalt zwar ohnehin über
+   erstelleSicherung(); geprüft wird trotzdem hier, am letzten Punkt vor
+   der Platte. Ein Fehler weiter oben soll laut scheitern, statt Namen
+   und Einschätzungen im Klartext in eine Datei zu schreiben. */
+import { istSicherung, FEHLER_NUR_VERSCHLUESSELT } from '../beobachtung-sicherung.js';
+
 /* Zerlegt die Datenbank in Wochen und den Rest ("meta"). Der Schlüssel
    der Wochen ist bereits der Wochenanfang – das Datenmodell gibt die
    Aufteilung her, es muss nichts umbenannt werden. */
@@ -106,6 +113,9 @@ export function createElectronPlatform(api){
          Oberfläche ihn gar nicht erst an – statt nach dem Klick zu
          melden, dass nichts gespeichert wurde. */
       versionHistory: typeof api.getHistory === 'function' && typeof api.setHistory === 'function',
+      /* Beobachtungen zu Lernenden: ebenfalls eine eigene Ablage, mit
+         derselben Überlegung wie beim Versionsverlauf. */
+      beobachtung: typeof api.getBeobachtung === 'function' && typeof api.setBeobachtung === 'function',
       /* Das vollständige Löschen braucht den Hauptprozess: Nur dort
          sind die Store-Dateien zu erreichen. Ältere Preload-Brücken
          kennen den Weg nicht – dann bietet die Oberfläche ihn erst gar
@@ -121,6 +131,20 @@ export function createElectronPlatform(api){
        Unterrichtsdatenbank und deshalb auch nicht Teil eines Backups. */
     loadHistory: () => api.getHistory(),
     saveHistory: (daten) => api.setHistory(daten),
+
+    /* Beobachtungen: eigene Datei im Hauptprozess. Ein Lesefehler kommt
+       als Fehler an und nicht als `null` – siehe beobachtung:get in
+       main.cjs und beobachtung-speicher.js. */
+    loadBeobachtung: () => api.getBeobachtung(),
+    saveBeobachtung: (daten) => api.setBeobachtung(daten),
+    exportBeobachtungDatei: async ({ content, fileName } = {}) => {
+      if (typeof api.exportBeobachtungDatei !== 'function') return null;
+      if (!istSicherung(content)) throw new Error(FEHLER_NUR_VERSCHLUESSELT);
+      return api.exportBeobachtungDatei({ content, fileName });
+    },
+    importBeobachtungDatei: async () => (
+      typeof api.importBeobachtungDatei === 'function' ? api.importBeobachtungDatei() : null
+    ),
 
     exportBackup: () => api.exportBackup(),
     importBackup: () => api.importBackup(),

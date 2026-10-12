@@ -84,6 +84,15 @@ import {
   BESTAETIGUNGSWORT, BLEIBT_ERHALTEN, WEITERE_BEREICHE,
   darfLoeschen, istLeer, ruecksetzUmfang, umfangZeilen,
 } from './zuruecksetzen.js';
+/* Beobachtung: kurze Einschätzungen zu Lernenden. Modell, Ablage und
+   Ansicht stehen in eigenen Modulen; hier wird nur verbunden – der
+   Speicher, der Weg aus einer Stunde in eine Runde und der Weg einer
+   Notiz zurück in die Nachbereitung dieser Stunde. */
+import {
+  lerngruppenSchluessel, lerngruppenName, lerngruppenAusPlanung, beobachtungsUmfang,
+} from './beobachtung.js';
+import { erstelleBeobachtungSpeicher, NICHT_GELESEN, NICHT_GESPEICHERT } from './beobachtung-speicher.js';
+import { BeobachtungView } from './beobachtung-ansicht.jsx';
 /* Die optionale Verbindung von Jahresbalken und Sequenzen. Der Balken
    speichert nur die Kennung – alles Weitere wird hieraus gerechnet. */
 import {
@@ -138,7 +147,7 @@ import {
 import { VersionsverlaufDialog } from './verlauf-ansicht.jsx';
 // Einzelimporte, damit nur die tatsächlich benutzten Symbole im Bündel landen.
 import {
-  ArrowDown, ArrowLeft, ArrowRight, Ban, CalendarClock, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
+  ArrowDown, ArrowLeft, ArrowRight, Ban, Binoculars, CalendarClock, CalendarDays, ChevronDown, ChevronLeft, ChevronRight,
   Archive, CalendarCheck, CalendarRange, Check, CircleHelp, ClipboardCheck, ClipboardPaste, Copy, Download, Eraser, Eye,
   FileClock, FileDown, FileText, Grid3x3, Library, Link2, ListTree, Maximize2, MoreHorizontal, NotebookPen, Palmtree,
   GraduationCap, Pencil, Play, Plus, Rows3, Scissors, Search, Settings,
@@ -2518,6 +2527,14 @@ function DatenLoeschenDialog({
   const zeilen = useMemo(()=> umfangZeilen(umfang), [umfang]);
   const leer = istLeer(umfang);
   const freigegeben = darfLoeschen({ eingabe, verstanden }) && !laeuft;
+  /* Das Backup, das der Dialog anbietet, enthält nur die Planung. Wer
+     hier Lernende und Beobachtungen aufgezählt sieht und dann auf
+     "Jetzt Backup exportieren" klickt, hielte sich sonst für gesichert. */
+  const mitBeobachtungen = (Number(umfang?.lernende) || 0) + (Number(umfang?.beobachtungen) || 0) > 0;
+  const beobachtungsHinweis = mitBeobachtungen ? (
+    <>Die <b>Beobachtungen zu Lernenden sind nicht im Backup.</b> Wer sie behalten will, sichert
+      sie vorher unter Beobachtung → Daten → „Beobachtungen sichern“.</>
+  ) : null;
 
   /* Nach dem Löschen bleibt nur noch eine Mitteilung stehen. Ein
      Dialog, der jetzt wieder Felder zeigte, lüde zum Weitermachen ein –
@@ -2577,12 +2594,15 @@ function DatenLoeschenDialog({
             {letztesBackup
               ? <>Letztes Backup aus dieser App: <b>{formatDateDE(String(letztesBackup).slice(0, 10))}</b>. Liegt es länger zurück, lohnt sich vorher ein frisches.</>
               : <>Aus dieser App wurde <b>noch nie ein Backup exportiert</b>. Danach gibt es keine Möglichkeit mehr, die Planung zurückzuholen.</>}
+            {beobachtungsHinweis ? <div style={{marginTop:8}}>{beobachtungsHinweis}</div> : null}
             <div className="row" style={{gap:8, marginTop:8}}>
               <button type="button" className="btn" disabled={laeuft} onClick={onExportBackup}>
                 Jetzt Backup exportieren
               </button>
             </div>
           </div>
+        ) : beobachtungsHinweis ? (
+          <div className="inlineNotice">{beobachtungsHinweis}</div>
         ) : null}
 
         <label className="loeschHaken">
@@ -2628,7 +2648,7 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
                         competencyModel, benutzteKompetenzen,
                         onSetCompetencyHidden, onSetCompetencyArea, onRenameCompetency,
                         onDeleteCompetency, onAddCompetencyArea, onRenameCompetencyArea,
-                        onDeleteCompetencyArea, onLeereVerlauf,
+                        onDeleteCompetencyArea, onLeereVerlauf, onOpenBeobachtung,
                         onSchnellstartNeu, onHinweiseZuruecksetzen,
                         loeschUmfang, letztesBackup, onAllesLoeschen }){
   const istBrowser = platformName === 'browser';
@@ -2817,6 +2837,24 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
         ) : null}
       </section>
 
+      {/* Hier steht es, weil hier nach dem Backup gesucht wird: Wer sich
+          auf „Backup exportieren“ verlässt, muss wissen, dass die
+          Beobachtungen darin fehlen – mit Absicht. */}
+      <section>
+        <h3 className="settingsHeading">Beobachtungen</h3>
+        <p className="settingsText">
+          Die Einschätzungen zu Lernenden liegen {istBrowser ? 'in einer eigenen Browser-Datenbank' : 'in einer eigenen Datei'} neben
+          der Planung. Sie gehören <b>nicht</b> zum Backup, wandern nicht nach Pocket, nicht in
+          Vorlagen, nicht in den Versionsverlauf und nicht ins Schuljahresarchiv. Gesichert
+          werden sie unter <strong>Beobachtung → Daten</strong>, immer mit einem Passwort.
+        </p>
+        {typeof onOpenBeobachtung === 'function' ? (
+          <div className="row" style={{gap:8, marginTop:10}}>
+            <button className="btn" onClick={onOpenBeobachtung}>Beobachtung öffnen</button>
+          </div>
+        ) : null}
+      </section>
+
       <section>
         <h3 className="settingsHeading">Desktop-App und Browser-Version</h3>
         <div className="inlineNotice inlineNotice--warning">
@@ -2869,9 +2907,9 @@ function SettingsView({ theme, onChangeTheme, storageState, onExportBackup, onIm
           <p className="settingsText">
             Setzt Prép-ybara auf den Stand einer frisch eingerichteten App zurück:
             Wochenplanung, Sequenzen, Vorlagen, Stundenplan, Schulkalender,
-            Jahresgrobplanung, archivierte Schuljahre, Einstellungen und
-            Versionsverlauf. Gedacht für ein Gerät, das weitergegeben wird –
-            oder für einen Neuanfang.
+            Jahresgrobplanung, archivierte Schuljahre, Einstellungen,
+            Versionsverlauf und die Beobachtungen zu Lernenden. Gedacht für
+            ein Gerät, das weitergegeben wird – oder für einen Neuanfang.
           </p>
           <p className="settingsText">
             <b>Das lässt sich nicht rückgängig machen.</b> Vorher fragt Prép-ybara
@@ -2956,8 +2994,14 @@ function SequenceProgress({ progress, kompakt = false }){
    hier nur die ANZAHL. Der Inhalt erscheint erst, wenn die Liste
    geöffnet wird – wer mit dem Rechner am Pult steht, soll nicht
    versehentlich Namen und Vermerke zeigen.
+
+   Neben jeder Stunde mit Klasse steht „Beobachten“: der kürzeste Weg
+   von der gerade gehaltenen Stunde in eine Beobachtungsrunde. Der
+   Knopf steht NEBEN der Stundenzeile, nicht in ihr – ein Knopf in
+   einem Knopf ist kein gültiges HTML, und Tastatur wie Bildschirmleser
+   könnten die beiden Ziele nicht auseinanderhalten.
    ============================================================ */
-function TodayView({ heute, todayISO, getSeqProgress, onOpenLesson, onOpenTodos, onOpenWeek }){
+function TodayView({ heute, todayISO, getSeqProgress, onOpenLesson, onOpenTodos, onOpenWeek, onBeobachten = null }){
   const datum = new Date(`${todayISO}T00:00:00`);
   const wochentag = Number.isNaN(datum.getTime())
     ? '' : datum.toLocaleDateString('de-DE', { weekday: 'long' });
@@ -2989,25 +3033,40 @@ function TodayView({ heute, todayISO, getSeqProgress, onOpenLesson, onOpenTodos,
             {heute.stunden.map((s)=>{
               const l = s.lesson || {};
               const p = l.sequenceId ? getSeqProgress?.(l.sequenceId, s.dayIndex, s.slotIndex) : null;
-              const farbe = l.classGroup && l.subject ? null : null;
+              const thema = String(l.topic || '').trim();
+              /* Beobachten setzt eine Klasse voraus – ohne sie gibt es
+                 keine Lerngruppe, zu der Lernende gehören könnten. */
+              const kannBeobachten = typeof onBeobachten === 'function' && Boolean(String(l.classGroup || '').trim());
               return (
-                <button
-                  key={s.key}
-                  type="button"
-                  className="todayLesson"
-                  onClick={()=>onOpenLesson?.(s.dayIndex, s.slotIndex)}
-                >
-                  <span className="todaySlot" title={blockSpanOf(l) > 1 ? `${blockName(blockSpanOf(l))} · ${stundenBereichLabel(s.slotIndex, blockSpanOf(l))}` : ''}>
-                    {blockSpanOf(l) > 1 ? `${s.slotIndex + 1}.–${s.slotIndex + blockSpanOf(l)}.` : `${s.slotIndex + 1}.`}
-                  </span>
-                  <span className="todayMain">
-                    <span className="todayTopic">{String(l.topic || '').trim() || 'Noch kein Thema'}</span>
-                    <span className="todayMeta">
-                      {[l.classGroup, l.subject, l.room].filter(Boolean).join(' · ') || 'Ohne Lerngruppe'}
+                <div key={s.key} className="todayZeile">
+                  <button
+                    type="button"
+                    className="todayLesson"
+                    onClick={()=>onOpenLesson?.(s.dayIndex, s.slotIndex)}
+                  >
+                    <span className="todaySlot" title={blockSpanOf(l) > 1 ? `${blockName(blockSpanOf(l))} · ${stundenBereichLabel(s.slotIndex, blockSpanOf(l))}` : ''}>
+                      {blockSpanOf(l) > 1 ? `${s.slotIndex + 1}.–${s.slotIndex + blockSpanOf(l)}.` : `${s.slotIndex + 1}.`}
                     </span>
-                    {p ? <SequenceProgress progress={p} kompakt /> : null}
-                  </span>
-                </button>
+                    <span className="todayMain">
+                      <span className="todayTopic">{thema || 'Noch kein Thema'}</span>
+                      <span className="todayMeta">
+                        {[l.classGroup, l.subject, l.room].filter(Boolean).join(' · ') || 'Ohne Lerngruppe'}
+                      </span>
+                      {p ? <SequenceProgress progress={p} kompakt /> : null}
+                    </span>
+                  </button>
+                  {kannBeobachten ? (
+                    <button
+                      type="button"
+                      className="btn todayBeobachten"
+                      onClick={()=>onBeobachten(s.dayIndex, s.slotIndex, l)}
+                      title="Beobachtungsrunde zu dieser Stunde"
+                      aria-label={`Beobachten: ${thema || [l.classGroup, l.subject].filter(Boolean).join(' · ')}, ${s.slotIndex + 1}. Stunde`}
+                    >
+                      <Binoculars {...ICON_SM} /> Beobachten
+                    </button>
+                  ) : null}
+                </div>
               );
             })}
           </div>
@@ -3284,9 +3343,13 @@ function CarryOverPanel({ punkte, onUebernehmenAlsPhase, onUebernehmenAlsNotiz, 
    Fehlerfarbe, keine Warnung und keine Wertung – eine Planung ist eine
    Annahme über den Verlauf, kein Versprechen.
    ============================================================ */
+/* „Beobachtungsrunde“ führt von hier in den Bereich Beobachtung, mit
+   dieser Stunde als Bezug. Die Nachbereitung bleibt dabei, was sie ist:
+   Aus einer Runde kommt höchstens eine Notiz als offener Punkt zurück,
+   ohne Namen – Einschätzungen zu Lernenden stehen nie in der Stunde. */
 function LessonReviewView({
   lesson, dateISO, dayIndex, slotIndex, languageMode,
-  onChangeReview, onOpenLesson,
+  onChangeReview, onOpenLesson, onBeobachten = null,
 }){
   const l = normalizeLesson(lesson);
   const review = normalisiereReview(l.review);
@@ -3341,7 +3404,15 @@ function LessonReviewView({
             {Number.isFinite(slotIndex) ? ` · ${slotIndex + 1}. Stunde` : ''}
           </p>
         </div>
-        <button className="btn" onClick={onOpenLesson}>Zur Planung</button>
+        <div className="row wrap" style={{gap:8}}>
+          {typeof onBeobachten === 'function' && (l.classGroup || '').trim() ? (
+            <button type="button" className="btn" onClick={onBeobachten}
+                    title="Beobachtungsrunde zu dieser Stunde">
+              <Binoculars {...ICON_SM} /> Beobachtungsrunde
+            </button>
+          ) : null}
+          <button className="btn" onClick={onOpenLesson}>Zur Planung</button>
+        </div>
       </div>
 
       {(zusammenfassung.length || kompetenzListe.length || (languageMode && aufgabe.text)) ? (
@@ -4059,6 +4130,11 @@ const NAV_EBENEN = [
   { id: 'macro',        label: 'Makro',       Icon: Rows3 },
   { id: 'year',         label: 'Jahr',        Icon: CalendarRange },
   { id: 'competencies', label: 'Kompetenzen', Icon: Grid3x3 },
+  /* Die Beobachtung steht neben den Kompetenzen: Dort geht es um das,
+     was unterrichtet wurde, hier um die, die dabei waren. Ins Archiv
+     gehört sie nicht – sie hat eine eigene Ablage und keinen Bezug zu
+     einem Schuljahr (siehe NAV_ARCHIV). */
+  { id: 'beobachtung',  label: 'Beobachtung', Icon: Binoculars },
   { id: 'library',      label: 'Bibliothek',  Icon: Library },
   { id: 'calendar',     label: 'Kalender',    Icon: CalendarCheck },
 ];
@@ -4073,6 +4149,9 @@ const NAV_FUSS = [
    verwirrend. */
 /* Die Suche gehört dazu: sie findet auch im Archiv, und ihre Treffer
    führen von dort aus zurück ins laufende Schuljahr. */
+/* Die Beobachtung gehört nicht dazu: Ihre Daten liegen ausserhalb der
+   Planung und werden mit einem Schuljahr nicht archiviert. Im Archiv
+   zeigte sie den heutigen Stand – als gehörte er zu jenem Jahr. */
 const NAV_ARCHIV = ['week', 'macro', 'year', 'competencies', 'calendar', 'search'];
 
 function Sidebar({ aktiv, onNavigate, imArchiv = false }){
@@ -5774,6 +5853,77 @@ const classGroupSuggestions = useMemo(()=>{
     setReviewWeek(vorher);
   }, [view.name]);
 
+  /* ---- Beobachtung ----------------------------------------------------
+
+     Einschätzungen zu Lernenden. Sie liegen – wie der Versionsverlauf –
+     in einer EIGENEN Ablage (siehe beobachtung-speicher.js) und werden
+     erst gelesen, wenn jemand den Bereich öffnet oder die Einstellungen
+     (für die Zahlen im Dialog "Alle Daten löschen"). In die Planung, in
+     ein Backup, nach Pocket, in eine Vorlage, in den Versionsverlauf, in
+     die Suche oder in ein Schuljahresarchiv geraten sie nie.
+
+     Ein Unterschied zum Verlauf: Dessen Fehler landen in der Konsole,
+     diese nicht. Scheitert hier ein Schreibvorgang, fehlt eine
+     Einschätzung – und das muss die Person merken, solange sie die
+     Situation noch vor Augen hat. Die Meldungen des Speichers sind
+     bereits Sätze; alles andere bekommt einen Vorsatz, damit klar ist,
+     woher es kommt.
+
+     showToast bleibt über die ganze Sitzung dieselbe Funktion; der
+     Speicher entsteht also genau einmal und mit ihm seine Schreibkette. */
+  const beobachtungSpeicher = useMemo(()=> erstelleBeobachtungSpeicher(platform, {
+    beiFehler: (err)=>{
+      try { console.warn('[Beobachtung]', err); } catch {}
+      const text = String(err?.message || '').trim();
+      const eigen = text.startsWith(NICHT_GELESEN) || text.startsWith(NICHT_GESPEICHERT);
+      showToast(eigen ? text : `Beobachtungen: ${text || 'Unbekannter Fehler.'}`, { tone: 'warning', ttl: 9000 });
+    },
+  }), [showToast]);
+
+  /* Die Datei-Wege der Beobachtung kamen mit derselben Preload-Brücke
+     wie ihre Ablage. Wo die Ablage fehlt (ältere Brücke), fehlen auch
+     sie – der Plattformadapter gäbe dann still `null` zurück, und ein
+     Klick auf „Sichern“ sähe aus wie ein abgebrochener Dialog. */
+  const kannBeobachtungsDateien = Boolean(capabilities.beobachtung)
+    && typeof platform.exportBeobachtungDatei === 'function'
+    && typeof platform.importBeobachtungDatei === 'function';
+
+  /* Was die Ansicht aus der Planung braucht, wird nur gerechnet, solange
+     sie offen ist: Die Lerngruppen gehen über alle Wochen. Immer aus den
+     echten Daten – die Beobachtung gehört dem laufenden Schuljahr. */
+  const beobachtungOffen = view.name === 'beobachtung' && !imArchiv;
+  const beobachtungsLerngruppen = useMemo(
+    ()=> (beobachtungOffen ? lerngruppenAusPlanung(liveDb) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [beobachtungOffen, liveDb?.weeks]
+  );
+  /* Für die optionale Kompetenz einer Frage: der Katalog, wie ihn auch
+     die Stunde anbietet – mit dem Fremdsprachenmodus samt Bereichen,
+     ohne ihn die selbst benutzten Kompetenzen. Ausgeblendetes nicht. */
+  const beobachtungsKompetenzen = useMemo(()=>{
+    if (!beobachtungOffen) return [];
+    if (!languageMode) return sichtbareKompetenzVorschlaege;
+    return katalogNachBereichen({ modell: competencyModel, benutzte: competencySuggestions })
+      .flatMap(b => b.kompetenzen.map(k => k.label));
+  }, [beobachtungOffen, languageMode, competencyModel, competencySuggestions, sichtbareKompetenzVorschlaege]);
+
+  /* Die Zahlen für den Löschdialog in den Einstellungen. Gelesen wird,
+     wenn die Einstellungen offen sind, nicht beim Start. Liess sich die
+     Ablage nicht lesen, bleibt es bei `null`: Dann nennt der Dialog
+     keine Zahlen statt erfundener Nullen. */
+  const [beobachtungsZahlen, setBeobachtungsZahlen] = useState(null);
+  useEffect(()=>{
+    if (view.name !== 'settings') return undefined;
+    let aktiv = true;
+    beobachtungSpeicher.laden()
+      .then((d)=>{
+        if (!aktiv) return;
+        setBeobachtungsZahlen(beobachtungSpeicher.zwischenstand() ? beobachtungsUmfang(d) : null);
+      })
+      .catch(()=>{});
+    return ()=>{ aktiv = false; };
+  }, [view.name, beobachtungSpeicher]);
+
   /* ---- Befehlspalette ------------------------------------------------- */
   const [paletteOpen, setPaletteOpen] = useState(false);
   useEffect(()=>{
@@ -5796,6 +5946,7 @@ const classGroupSuggestions = useMemo(()=>{
       { id:'v-macro',    group:'Ansicht', label:'Makro-Plan',          run: go({ name:'macro', weekStart: ws, startISO: ws, rangeDays: 28 }) },
       { id:'v-year',     group:'Ansicht', label:'Jahresgrobplanung',   run: go({ name:'year', weekStart: ws, focusISO: ws }) },
       { id:'v-comp',     group:'Ansicht', label:'Kompetenzen im Jahr', run: go({ name:'competencies', weekStart: ws }) },
+      { id:'v-beob',     group:'Ansicht', label:'Beobachtung öffnen',  run: go({ name:'beobachtung', weekStart: ws }) },
       { id:'v-library',  group:'Ansicht', label:'Bibliothek',          run: go({ name:'library', weekStart: ws }) },
       { id:'v-calendar', group:'Ansicht', label:'Schulkalender',       run: go({ name:'calendar', weekStart: ws }) },
       { id:'v-archives', group:'Ansicht', label:'Archivierte Schuljahre', run: go({ name:'archives', weekStart: ws }) },
@@ -5830,6 +5981,8 @@ const classGroupSuggestions = useMemo(()=>{
     const nurAnsehen = new Set([
       'a-undo', 'a-seq', 'a-copy', 'a-expback', 'a-impback', 'a-pocketexp', 'v-pocket',
       'v-settings', 'v-library', 'v-today', 'w-today',
+      /* Die Beobachtung gehört keinem Schuljahr – siehe NAV_ARCHIV. */
+      'v-beob',
     ]);
     /* Die Suche bleibt: sie ändert nichts und führt aus dem Archiv
        wieder heraus. */
@@ -6485,6 +6638,7 @@ const classGroupSuggestions = useMemo(()=>{
       case 'archives': return 'Archivierte Schuljahre';
       case 'today':    return 'Heute';
       case 'competencies': return 'Kompetenzen';
+      case 'beobachtung':  return 'Beobachtung';
       case 'progression':  return 'Progression';
       case 'review':       return 'Nachbereitung';
       case 'search':   return 'Suche';
@@ -7380,6 +7534,16 @@ const updateLessonFromEditor = (weekStart, dayIndex, slotIndex, nextLesson) => {
       ergebnis = await platform.resetAll();
     } catch (err) {
       return { ok: false, meldung: `Löschen fehlgeschlagen: ${String(err?.message || err)}` };
+    } finally {
+      /* Gleich wie es ausging: Die Beobachtungen im Speicher sind jetzt
+         womöglich gelöscht. Beim Öffnen der Einstellungen wurden sie für
+         die Zahlen im Dialog gelesen. Blieben sie dort liegen, zeigte die
+         Ansicht nach einem Teilfehler (kein Neustart) die Namen weiter
+         an, und die nächste Antwort schriebe alles zurück. Verworfen
+         wird nur der Zwischenstand; gelesen wird beim nächsten Zugriff
+         neu – was dann noch da ist, ist wirklich noch da. */
+      beobachtungSpeicher.verwerfen();
+      setBeobachtungsZahlen(null);
     }
     if (ergebnis && ergebnis.ok === false) {
       const rest = (Array.isArray(ergebnis.fehler) ? ergebnis.fehler : []).join(', ');
@@ -8469,6 +8633,65 @@ const doExportDocx = async (html, suggestedName) => {
     } catch {}
   };
 
+  /* --- Beobachtung: Wege hinein und zurück --------------------------
+
+     Hinein: aus „Heute“ oder aus der Nachbereitung, mit der Stunde als
+     Bezug. Die Lerngruppe ist dieselbe Kennung wie überall in der App
+     (Klasse und Fach), die Stunde wird über ihre Referenz adressiert –
+     eine Stunde hat keine id (siehe nachbereitung.js). */
+  const oeffneBeobachtung = (weekStart, dayIndex, slotIndex, lesson) => {
+    if (imArchiv) { archivHinweisRef.current?.(); return; }
+    const l = lesson || {};
+    const lerngruppe = lerngruppenSchluessel(l.classGroup, l.subject);
+    if (!lerngruppe) return;
+    setView({
+      name: 'beobachtung',
+      weekStart,
+      kontext: {
+        lerngruppe,
+        stundenRef: stundenRef({ weekStart, dayIndex, slotIndex }),
+        datum: addDaysISO(weekStart, Number(dayIndex) || 0),
+        titel: String(l.topic || '').trim() || lerngruppenName(lerngruppe),
+      },
+    });
+  };
+
+  /* Zurück: Eine Notiz aus der Runde wird auf Wunsch zum offenen Punkt
+     der Stunde, aus der die Runde kam – genau so, als wäre sie in deren
+     Nachbereitung vorgemerkt worden. Derselbe Weg wie dort
+     (updateLessonFromEditor), damit Speichern und Versionsverlauf
+     gleich arbeiten; dazu ein Stand für Strg+Z.
+
+     Übernommen wird nur der Text, den die Ansicht übergibt – kein Name,
+     kein Wert. Die Bestätigung zeigt die Ansicht selbst; deshalb hier
+     keine zweite Meldung, nur der Rückgängig-Stand. Eine schon
+     abgeschlossene Nachbereitung bleibt abgeschlossen: Der neue Punkt
+     ist eine Ergänzung, kein Grund, sie wieder zu öffnen.
+
+     Fehler werden geworfen; die Ansicht zeigt sie an. */
+  const vormerkenAusBeobachtung = (ref, text) => {
+    if (imArchiv) throw new Error('In der Archivansicht lässt sich nichts vormerken.');
+    const ort = parseStundenRef(ref);
+    const roh = ort ? liveDb?.weeks?.[ort.weekStart]?.lessons?.[keyOf(ort.dayIndex, ort.slotIndex)] : null;
+    if (!roh) throw new Error('Die Stunde dieser Runde gibt es nicht mehr. Die Notiz steht weiterhin bei der Beobachtung.');
+    const punkt = carryOverAusNotiz(text, { type: 'review_note', neueId: uid });
+    if (!punkt) return;
+    const stunde = normalizeLesson(roh);
+    const review = normalisiereReview(stunde.review);
+    captureUndo('Vormerkung aus der Beobachtung', liveDb);
+    updateLessonFromEditor(ort.weekStart, ort.dayIndex, ort.slotIndex, {
+      ...stunde,
+      review: {
+        ...review,
+        carryOverItems: [...review.carryOverItems, punkt],
+        status: review.status === 'not_reviewed' ? 'in_progress' : review.status,
+      },
+    });
+  };
+
+  /* Der Einzelverlauf als PDF: derselbe Weg wie jeder andere Export. */
+  const exportiereBeobachtungPdf = ({ html, fileName } = {}) => doExportPdf(html, fileName);
+
   // Render main content in a readable way (avoids a very long nested ternary inside JSX,
   // which is easy to break and hard to maintain).
   const mainContent = (() => {
@@ -8677,6 +8900,9 @@ const doExportDocx = async (html, suggestedName) => {
           })}
           onOpenTodos={()=> setView({ name:'todos', weekStart: view.weekStart })}
           onOpenWeek={()=> setView({ name:'week', weekStart: toISODate(startOfWeekMonday(fromISODate(todayISO))) })}
+          onBeobachten={imArchiv ? null : ((dayIndex, slotIndex, lesson)=> oeffneBeobachtung(
+            toISODate(startOfWeekMonday(fromISODate(todayISO))), dayIndex, slotIndex, lesson,
+          ))}
         />
       );
     }
@@ -8697,6 +8923,39 @@ const doExportDocx = async (html, suggestedName) => {
           onOpenLesson={()=>setView({
             name:'lesson', weekStart: view.weekStart, dayIndex: view.dayIndex, slotIndex: view.slotIndex,
           })}
+          onBeobachten={imArchiv ? null : (()=>oeffneBeobachtung(view.weekStart, view.dayIndex, view.slotIndex, l))}
+        />
+      );
+    }
+    if (view.name === 'beobachtung') {
+      /* Im Archiv nicht erreichbar (siehe NAV_ARCHIV). Führt ein Weg
+         trotzdem hierher, steht da, warum – statt des heutigen Stands
+         unter dem Namen eines vergangenen Schuljahres. */
+      if (imArchiv) {
+        return (
+          <div className="card">
+            <EmptyState
+              text="Die Beobachtungen gehören zu keinem Schuljahr und werden nicht archiviert. Zu sehen sind sie im aktuellen Schuljahr."
+              actionLabel="Zurück zum aktuellen Schuljahr"
+              onAction={verlasseArchiv}
+            />
+          </div>
+        );
+      }
+      return (
+        <BeobachtungView
+          speicher={beobachtungSpeicher}
+          lerngruppen={beobachtungsLerngruppen}
+          kontext={view.kontext || null}
+          heuteISO={todayISO}
+          kompetenzVorschlaege={beobachtungsKompetenzen}
+          kannDateien={kannBeobachtungsDateien}
+          exportiereDatei={(payload)=>platform.exportBeobachtungDatei(payload)}
+          importiereDatei={()=>platform.importBeobachtungDatei()}
+          exportierePdf={exportiereBeobachtungPdf}
+          onVormerken={vormerkenAusBeobachtung}
+          onToast={showToast}
+          appVersion={APP_VERSION}
         />
       );
     }
@@ -8791,6 +9050,7 @@ const doExportDocx = async (html, suggestedName) => {
           onRenameCompetencyArea={renameCompetencyArea}
           onDeleteCompetencyArea={deleteCompetencyArea}
           onLeereVerlauf={verlaufSpeicher.verfuegbar ? leereVerlauf : null}
+          onOpenBeobachtung={imArchiv ? null : (()=>setView({ name:'beobachtung', weekStart: view.weekStart }))}
           onSchnellstartNeu={()=>{
             setzeOnboarding(starteSchnellstartNeu(onboarding));
             setView(v => ({ name: 'week', weekStart: v.weekStart }));
@@ -8802,8 +9062,10 @@ const doExportDocx = async (html, suggestedName) => {
             showToast('Hinweise zurückgesetzt. Sie erscheinen wieder, wenn ihre Situation entsteht.');
           }}
           /* Was ein Zurücksetzen kosten würde – gezählt aus den echten
-             Daten, nicht aus einer Archivansicht. */
-          loeschUmfang={ruecksetzUmfang(liveDb)}
+             Daten, nicht aus einer Archivansicht. Die Beobachtungen
+             kommen aus ihrer eigenen Ablage dazu, sobald sie gelesen
+             sind. */
+          loeschUmfang={ruecksetzUmfang(liveDb, beobachtungsZahlen || undefined)}
           letztesBackup={onboarding?.letztesBackup || ''}
           onAllesLoeschen={alleDatenLoeschen}
         />

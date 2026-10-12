@@ -388,6 +388,8 @@ Nach dem Einfügen bleibt alles flexibel: Stunden können gelöscht, hinzugefüg
 
 - **Backup exportieren** sichert alles (Wochen, Sequenzen, Vorlagen, Schulkalender, Farben, To‑dos).
 - **Backup importieren** stellt den Stand wieder her.
+- Die **Beobachtungen** zu Lernenden sind **nicht** im Backup. Sie haben eine eigene Sicherung
+  mit Passwort (siehe **10) Beobachtung**).
 
 ### Versionsverlauf (lokal)
 
@@ -428,21 +430,26 @@ Neuanfang nach einer Probephase.
 **Das lässt sich nicht rückgängig machen** – weder mit Strg+Z noch über den
 Versionsverlauf, denn der wird mitgelöscht. Versehentlich passiert es trotzdem nicht:
 
-1. Der Dialog **zählt auf**, was verschwindet – Stunden, Wochen, Lerngruppen, Sequenzen,
-   Vorlagen, Balken, To-dos, Kalendereinträge und archivierte Schuljahre, jeweils mit Anzahl.
+1. Der Dialog **zählt auf**, was verschwindet – Stunden, Wochen, Lerngruppen, Lernende und
+   Beobachtungen, eigene Beobachtungsfragen, Sequenzen, Vorlagen, Balken, To-dos,
+   Kalendereinträge und archivierte Schuljahre, jeweils mit Anzahl.
 2. Er sagt, **wann zuletzt ein Backup** exportiert wurde – und bietet an, sofort eines
-   anzulegen. Gab es noch nie eines, steht das als Warnung dort.
+   anzulegen. Gab es noch nie eines, steht das als Warnung dort. Die **Beobachtungen sind nicht
+   im Backup**: Wer sie behalten will, sichert sie vorher unter **Beobachtung → Daten →
+   Beobachtungen sichern**. Der Dialog erinnert daran, sobald es Lernende oder Beobachtungen gibt.
 3. Ein **Kontrollkästchen** muss gesetzt werden.
 4. Das Wort **ALLES LÖSCHEN** muss abgetippt werden. Erst dann wird der Löschknopf frei;
    auf **Abbrechen** liegt der Fokus, nicht auf dem Löschen.
 
 Gelöscht wird alles, was zur App gehört: Wochenplanung, Sequenzen, Vorlagen, Stundenplan,
 Schulkalender, Jahresgrobplanung, archivierte Schuljahre, Einstellungen, der Stand der
-Einführung und der Versionsverlauf. Anschliessend startet Prép-ybara neu und beginnt bei null.
+Einführung, der Versionsverlauf und die **Beobachtungen** – Lernende, Einschätzungen, Notizen,
+der Fragenpool und seine Einstellungen. Anschliessend startet Prép-ybara neu und beginnt bei
+null.
 
-**Nicht** gelöscht werden Dateien ausserhalb der App: exportierte Backups, Vorlagen und
-PDF-/Word-Dateien bleiben liegen, ebenso alle angehängten Unterrichtsmaterialien – von ihnen
-verschwinden nur die Verweise. Auch die jeweils andere Fassung (Desktop-App bzw.
+**Nicht** gelöscht werden Dateien ausserhalb der App: exportierte Backups, Vorlagen,
+Sicherungen der Beobachtungen und PDF-/Word-Dateien bleiben liegen, ebenso alle angehängten
+Unterrichtsmaterialien – von ihnen verschwinden nur die Verweise. Auch die jeweils andere Fassung (Desktop-App bzw.
 Browser-Version) ist nicht betroffen; beide teilen ihre Daten ohnehin nicht.
 
 ---
@@ -461,7 +468,7 @@ Gesucht wird lokal, im laufenden **und** in archivierten Schuljahren:
 - **Sequenzen und Vorlagen**: Name, Beschreibung, Lerngruppe, Fach, Zielaufgabe, Zielprodukt,
   Kompetenzen, Themen der Einheiten, Voraussetzungen und Lehrwerksbezug.
 - **Jahresplanung** (samt verknüpfter Sequenz) und **To‑dos**.
-- Der **Versionsverlauf** wird nicht durchsucht.
+- Der **Versionsverlauf** und die **Beobachtungen** werden nicht durchsucht.
 
 Eigenschaften: Gross‑ und Kleinschreibung spielen keine Rolle, Akzente werden zusammengeführt
 („Quebec" findet „Québec"), mehrere Begriffe werden **und**‑verknüpft, Anführungszeichen fassen
@@ -511,6 +518,111 @@ Jeder Import lässt sich mit **Strg+Z** zurücknehmen.
 Wurde unterwegs eine Kompetenz oder Sprechabsicht frei eingegeben, fragt die
 Vorschau, ob sie **dauerhaft in die Bibliothek** soll. Ohne Häkchen steht sie
 nur in dieser einen Stunde.
+
+---
+
+## 10) Beobachtung (Lernende)
+
+Kurze, regelmässige Einschätzungen zu einzelnen Lernenden – gedacht für die zwei Minuten
+nach der Stunde, nicht als Notenbuch. **Beobachtung** in der Seitenleiste hat fünf Reiter:
+**Runde**, **Lernende**, **Fragen**, **Auswertung** und **Daten**.
+
+Die Skala hat vier Stufen und bewusst **keine Mitte**:
+
+1. **eher negativ** – trifft kaum zu
+2. **leicht negativ** – trifft eher nicht zu
+3. **leicht positiv** – trifft eher zu
+4. **eher positiv** – trifft deutlich zu
+
+### Runde nach der Stunde
+
+- Am schnellsten über **Heute → Beobachten** neben einer Stunde oder über
+  **Beobachtungsrunde** in der Nachbereitung. Lerngruppe und Datum der Stunde sind dann
+  schon gesetzt. Beides setzt eine Klasse in der Stunde voraus.
+- Sonst: **Beobachtung → Runde**, Lerngruppe und Anzahl der Einschätzungen (1 bis 10)
+  wählen, **Runde starten**. Die gewählte Anzahl gilt beim nächsten Mal als Vorgabe.
+- Die Runde schlägt Paare aus Lernenden und Fragen vor – zuerst die, die bisher selten dran
+  waren. **Paare, die heute schon dran waren, kommen erst, wenn alle anderen durch sind.** Bei
+  kleinen Gruppen oder mehreren Runden am selben Tag kann ein Paar deshalb zweimal kommen.
+- Je Paar eine Stufe antippen oder die Tasten **1** bis **4** drücken (solange kein
+  Eingabefeld aktiv ist). Jede Antwort wird **sofort gespeichert**; eine abgebrochene Runde
+  verliert nichts.
+- Die **Notiz** ist freiwillig und gehört vor die Stufe. Kommt die Runde aus einer Stunde,
+  lässt sie sich **für die nächste Stunde vormerken**: Sie erscheint dort als offener Punkt
+  der Nachbereitung – **nur der Text, ohne Namen**. Formuliere sie so, dass sie auch ohne
+  Namen verständlich ist. **Strg+Z** nimmt die Vormerkung zurück.
+- **Überspringen** lässt ein Paar aus, **Runde beenden** hört auf. Zum Schluss steht, wie
+  viele beantwortet und wie viele übersprungen wurden.
+
+### Lernende
+
+- Lernende gehören zu einer **Lerngruppe** – Klasse und Fach, wie in der Planung. Zur Wahl
+  stehen die Lerngruppen aus der Planung; **Andere Lerngruppe …** legt eine eigene an, etwa
+  die Klasse ohne Fach.
+- **Namen einfügen**: ein Name je Zeile, auch aus einer kopierten Liste. Ein Name, der schon
+  in der Liste steht, wird nicht doppelt angelegt.
+- **Vornamen oder Kürzel genügen.** Je weniger in der Liste steht, desto weniger steht auch
+  in einer Sicherung.
+- **Liste aus anderer Lerngruppe übernehmen** kopiert die Namen, etwa von Deutsch nach
+  Französisch derselben Klasse. Beobachtungen werden nicht mitkopiert.
+- Jeder Name lässt sich **umbenennen**, **verschieben**, **ausblenden** und **löschen**.
+  Ausblenden ist für alle, die die Klasse verlassen haben: Die Beobachtungen bleiben, der Name
+  kommt in keiner Runde mehr vor. Löschen entfernt den Namen **samt seinen Beobachtungen** –
+  die Rückfrage nennt, wie viele es sind.
+
+### Fragen
+
+- Mitgeliefert sind acht Fragen für alle Lerngruppen, in den Kategorien **Mitarbeit**,
+  **Verhalten** und **Kompetenzentwicklung**. Sie lassen sich bearbeiten, ausschalten und
+  löschen wie eigene.
+- Eine neue Frage hat einen Text, eine Kategorie, auf Wunsch ein **Stichwort** und eine
+  **Kompetenz** aus deinem Katalog.
+- **Gilt für**: alle Lerngruppen oder nur eine. Eine Runde mischt die allgemeinen Fragen
+  mit denen der Lerngruppe.
+- **Ausschalten** behält alle Beobachtungen zur Frage; sie kommt nur in keiner Runde mehr
+  vor. **Löschen** entfernt die Frage samt ihren Beobachtungen in allen Lerngruppen.
+
+### Auswertung
+
+- Je Lerngruppe: wie viele Lernende, wie viele Beobachtungen und wie viele der möglichen
+  Paare aus Lernenden und Fragen schon mindestens einmal beobachtet wurden (**Abdeckung**).
+- Eine Tabelle **je Lernende** mit Anzahl, Mittelwert der Stufen (eine Nachkommastelle), dem
+  Mittel je Kategorie und dem Datum der letzten Beobachtung; dazu eine Übersicht **je Frage**.
+- Der **Einzelverlauf** zeigt alle Beobachtungen einer Person, die neueste zuerst, mit Datum,
+  Frage, Stufe und Notiz. **Als PDF** gibt ihn aus – etwa für ein Elterngespräch.
+- Die Auswertung **beschreibt, sie bewertet nicht**: keine Ampelfarben, keine Sollwerte, kein
+  Hinweis auf „zu wenig". Was die Zahlen bedeuten, entscheidest du.
+
+### Sicherung und Datenschutz
+
+- Die Beobachtungen liegen **nur auf diesem Gerät**, in einer **eigenen Ablage neben der
+  Planung** (Desktop: eigene Datei; Browser: eigene Datenbank). Sie gehören **nicht** zum
+  Backup, wandern nicht nach Pocket, nicht in Vorlagen, nicht in den Versionsverlauf, nicht
+  in die Suche und nicht ins Schuljahresarchiv.
+- **Beobachtung → Daten → Beobachtungen sichern** schreibt eine Datei
+  `.prepybara-beobachtung`. Sie ist **immer mit einem Passwort verschlüsselt** (mindestens
+  8 Zeichen). **Ohne das Passwort ist die Datei verloren** – es gibt keine Hintertür und keine
+  Wiederherstellung. Bewahre das Passwort getrennt von der Datei auf.
+- **Sicherung einlesen** fragt nach dem Passwort und **führt zusammen**: Was schon da ist,
+  bleibt, Neues kommt dazu. Dieselbe Sicherung zweimal einzulesen, legt nichts doppelt an.
+- Einen Export ohne Passwort gibt es nicht. Das PDF eines Einzelverlaufs ist die einzige
+  Ausgabe im Klartext – und enthält nur diese eine Person.
+- **Einstellungen → Alle Daten löschen** entfernt auch alle Beobachtungen.
+
+### Übernahme aus Capy-scope
+
+1. In Capy-scope die Daten als JSON exportieren.
+2. Hier: **Beobachtung → Daten → Capy-Export wählen …**
+3. In der **Vorschau** für jede Capy-Klasse die passende Lerngruppe wählen. Prép-ybara
+   schlägt eine vor, wenn Klasse und Fach zu einer vorhandenen Lerngruppe passen; ohne
+   Zuordnung wird die Klasse nicht übernommen.
+4. **Übernehmen** – eine Meldung nennt, was dazugekommen ist.
+
+Übernommen werden Lernende, Fragen und Beobachtungen. **Nichts wird überschrieben**:
+Gleichnamige Lernende werden zusammengeführt, gleichlautende Fragen ebenso, und ein zweiter
+Import derselben Datei ändert nichts mehr. Werte ausserhalb der vierstufigen Skala werden
+übersprungen und gezählt. Die Einstellungen aus Capy-scope (Tageslimit, Skala) bleiben aussen
+vor.
 
 ---
 

@@ -23,6 +23,32 @@ const legacyStore = new Store({ name: 'lehrerplan' });
    angelegt, wenn der erste Sicherungspunkt entsteht. */
 const historyStore = new Store({ name: 'prepybara-verlauf' });
 
+/* Die Beobachtungen zu Lernenden liegen ebenfalls in einer EIGENEN Datei.
+
+   Hier entscheidet nicht die Grösse, sondern der Inhalt: Namen und
+   Einschätzungen von Lernenden sind personenbezogen. Sie sollen nicht
+   in einem Backup der Planung, einer Vorlage, einem Pocket-Profil oder
+   einem archivierten Schuljahr landen, nur weil sie in derselben Datei
+   stünden. Wer sie weitergeben oder sichern will, nimmt die eigene,
+   passwortgeschützte Sicherung. Die Datei wird erst angelegt, wenn zum
+   ersten Mal etwas erfasst wird.
+
+   Anders als die übrigen Ablagen entsteht diese erst beim ersten
+   Zugriff: Der Store liest seine Datei schon im Konstruktor und wirft,
+   wenn sie beschädigt ist. Auf dieser Ebene hiesse das, dass die ganze
+   App nicht mehr startet – samt Planung und "Alle Daten löschen" –,
+   nur weil die Nebendatei mit den Beobachtungen unlesbar ist. So trifft
+   der Fehler nur den Bereich Beobachtung, und der Renderer schreibt
+   nach seiner Regel nichts über die Datei. */
+let beobachtungStore = null;
+function holeBeobachtungStore() {
+  if (!beobachtungStore) beobachtungStore = new Store({ name: 'prepybara-beobachtung' });
+  return beobachtungStore;
+}
+function beobachtungDatei() {
+  return path.join(app.getPath('userData'), 'prepybara-beobachtung.json');
+}
+
 // Einzige Quelle für die Schema-Kennzeichnung. Muss mit SCHEMA_VERSION in
 // renderer/src/app.jsx übereinstimmen: ensureDbShape() dort hebt jede geladene
 // Datenbank auf genau diesen Wert an.
@@ -529,14 +555,89 @@ ipcMain.handle('history:set', async (_evt, daten) => {
   }
 });
 
+/* ---- Beobachtungen ----------------------------------------------------
+
+   Wie beim Versionsverlauf verwahrt der Hauptprozess nur. Normalisieren,
+   Zusammenführen und Verschlüsseln geschehen im Renderer
+   (beobachtung.js, beobachtung-speicher.js, beobachtung-sicherung.js),
+   weil sie dort prüfbar sind.
+
+   Eine Abweichung vom Verlauf ist Absicht: Ein Lesefehler wird NICHT
+   als `null` gemeldet. `null` heisst für den Renderer "hier wurde noch
+   nie etwas gespeichert" – er legte dann die Startdaten an und
+   schriebe sie beim ersten Antippen über die Datei, die er gerade nur
+   nicht lesen konnte. Ein Fehler dagegen lässt ihn die Finger davon
+   lassen. */
+ipcMain.handle('beobachtung:get', async () => {
+  try { return holeBeobachtungStore().get('daten') || null; }
+  catch (e) {
+    console.error('[beobachtung] Lesen fehlgeschlagen:', e?.message || e);
+    throw e;
+  }
+});
+
+/* Ohne gültigen Inhalt wird nichts geschrieben – auch keine leere Form.
+   Ein versehentliches `undefined` darf die Beobachtungen eines halben
+   Jahres nicht ersetzen. Leeren geht ausdrücklich über die Startdaten,
+   die der Renderer schickt, oder über "Alle Daten löschen". */
+ipcMain.handle('beobachtung:set', async (_evt, daten) => {
+  if (!daten || typeof daten !== 'object' || Array.isArray(daten)) {
+    return { ok: false, error: 'Keine gültigen Beobachtungsdaten.' };
+  }
+  try { holeBeobachtungStore().set('daten', daten); return { ok: true }; }
+  catch (e) {
+    console.error('[beobachtung] Schreiben fehlgeschlagen:', e?.message || e);
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+/* Sicherungsdatei: Der Inhalt kommt fertig verschlüsselt aus dem
+   Renderer; hier wird er nur noch an den gewählten Ort geschrieben. */
+const BEOBACHTUNG_FILTER = { name: 'Beobachtungs-Sicherung', extensions: ['prepybara-beobachtung'] };
+
+ipcMain.handle('beobachtung:export-file', async (_evt, payload) => {
+  const p = (payload && typeof payload === 'object') ? payload : {};
+  const content = String(p.content || '');
+  if (!content) return null;
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    defaultPath: String(p.fileName || 'Prepybara-Beobachtungen.prepybara-beobachtung'),
+    filters: [BEOBACHTUNG_FILTER, { name: 'Alle Dateien', extensions: ['*'] }]
+  });
+  if (canceled || !filePath) return null;
+  fs.writeFileSync(filePath, content, 'utf-8');
+  return filePath;
+});
+
+/* Eingelesen werden zwei Arten von Dateien: die eigene Sicherung und
+   der JSON-Export aus Capy-scope. Welche es ist, entscheidet der
+   Renderer am Inhalt – hier wird nur Text zurückgegeben. */
+ipcMain.handle('beobachtung:import-file', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    properties: ['openFile'],
+    filters: [
+      BEOBACHTUNG_FILTER,
+      { name: 'JSON (Capy-scope-Export)', extensions: ['json'] },
+      { name: 'Alle Dateien', extensions: ['*'] }
+    ]
+  });
+  if (canceled || !filePaths?.[0]) return null;
+  const content = fs.readFileSync(filePaths[0], 'utf-8');
+  return { name: path.basename(filePaths[0]), content };
+});
+
 /* ---- Alle Daten löschen -----------------------------------------------
 
    Der Gegenstück-Aufruf zu "Einstellungen → Alle Daten löschen". Er
    tut genau das, was er heisst, und er tut es vollständig:
 
-     prepybara          die Unterrichtsdaten samt Einstellungen
-     lehrerplan         die Ablage aus der Zeit vor der Umbenennung
-     prepybara-verlauf  der Versionsverlauf
+     prepybara              die Unterrichtsdaten samt Einstellungen
+     lehrerplan             die Ablage aus der Zeit vor der Umbenennung
+     prepybara-verlauf      der Versionsverlauf
+     prepybara-beobachtung  die Beobachtungen zu Lernenden samt Fragen
+
+   Die Beobachtungen gehören ausdrücklich dazu, obwohl sie mit der
+   Planung sonst nichts teilen: Wer ein Gerät weitergibt, will gerade
+   die Namen und Einschätzungen von Lernenden nicht zurücklassen.
 
    Die alte `lehrerplan`-Ablage ist der Grund, warum das hier stehen
    muss und nicht im Renderer: readStoredDb() holt von dort, wenn
@@ -559,9 +660,27 @@ ipcMain.handle('data:reset', async () => {
   dirty = false;
   cachedDb = defaultDB();
 
-  for (const [name, s] of [['Planung', store], ['frühere Ablage', legacyStore], ['Versionsverlauf', historyStore]]) {
+  for (const [name, s] of [
+    ['Planung', store],
+    ['frühere Ablage', legacyStore],
+    ['Versionsverlauf', historyStore],
+  ]) {
     try { s.clear(); }
     catch (e) { fehler.push(`${name}: ${String(e?.message || e)}`); }
+  }
+
+  /* Die Beobachtungen: Lässt sich ihre Datei nicht einmal öffnen
+     (beschädigt), wird sie als Ganzes entfernt. Gerade dann muss das
+     Löschen sie sicher treffen – zurückbleiben dürfen Namen und
+     Einschätzungen von Lernenden nicht. */
+  try { holeBeobachtungStore().clear(); }
+  catch (e) {
+    try {
+      fs.rmSync(beobachtungDatei(), { force: true });
+      beobachtungStore = null;
+    } catch (e2) {
+      fehler.push(`Beobachtungen: ${String(e2?.message || e?.message || e2 || e)}`);
+    }
   }
 
   // Die Grundform gleich festschreiben, damit die Datei nicht fehlt.

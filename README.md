@@ -2,6 +2,8 @@
 
 Lokale PC-App (Electron + React) für **Wochenstundenplan**, **Unterrichtssequenzen** und **Einzelstundenplanung** mit **45‑Minuten‑Zeitstrahl** (Phasen per Drag), **Sozialformen‑Autocomplete**, **Kompetenzen**, **Schulkalender (ICS‑Import)**, **PDF‑Export**, **Woche duplizieren**, **Backup/Restore**.
 
+> **Neu hier?** Die [Kurzanleitung zum Bauen](ANLEITUNG.md) erklärt Schritt für Schritt und ohne Vorkenntnisse, wie man Prép-ybara herunterlädt, startet und als Installer baut.
+
 ## Voraussetzungen
 - Windows 10/11
 - Node.js (LTS) installiert (damit `npm`/`npx` funktionieren)
@@ -30,7 +32,7 @@ npm run dist
 ```
 
 Danach findest du die Installer/EXE unter:
-- `dist/` (im Projektordner)
+- `release/` (im Projektordner)
 
 ### Portable EXE (ohne Installation)
 ```powershell
